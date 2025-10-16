@@ -1,14 +1,18 @@
 import os
 from datetime import timedelta
 
-from flask import Flask
+from flask import Flask, abort, send_from_directory
 from flask_cors import CORS
 
 from extensions import db, jwt
 
 
 def create_app() -> Flask:
-    app = Flask(__name__)
+    frontend_dist_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+    )
+
+    app = Flask(__name__, static_folder=frontend_dist_path, static_url_path="/")
 
     database_path = os.path.join(os.path.dirname(__file__), "task_manager.db")
     uploads_path = os.path.join(os.path.dirname(__file__), "uploads")
@@ -34,6 +38,26 @@ def create_app() -> Flask:
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(tasks_bp, url_prefix="/api/tasks")
+
+    @app.route("/", defaults={"path": ""})
+    @app.route("/<path:path>")
+    def serve_frontend(path: str):
+        if path.startswith("api/"):
+            # Allow API blueprints to handle these routes.
+            abort(404)
+
+        static_folder = app.static_folder
+        if static_folder:
+            requested_path = os.path.join(static_folder, path)
+
+            if path and os.path.exists(requested_path):
+                return send_from_directory(static_folder, path)
+
+            index_path = os.path.join(static_folder, "index.html")
+            if os.path.exists(index_path):
+                return send_from_directory(static_folder, "index.html")
+
+        return ("Frontend build not found", 404)
 
     with app.app_context():
         from models import Attachment, Task, TaskUpdate, User  # noqa: F401
