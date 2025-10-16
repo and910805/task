@@ -6,6 +6,14 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from extensions import db
 
 
+ROLE_LABEL_DEFAULTS = {
+    "worker": "工人",
+    "site_supervisor": "現場主管",
+    "hq_staff": "總部人員",
+    "admin": "管理員",
+}
+
+
 class User(db.Model):
     __tablename__ = "user"
 
@@ -32,11 +40,16 @@ class User(db.Model):
         return check_password_hash(self.password_hash, password)
 
     def to_dict(self) -> dict:
+        try:
+            role_label = RoleLabel.get_labels().get(self.role, self.role)
+        except Exception:
+            role_label = ROLE_LABEL_DEFAULTS.get(self.role, self.role)
         return {
             "id": self.id,
             "username": self.username,
             "role": self.role,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "role_label": role_label,
         }
 
 
@@ -185,4 +198,61 @@ class Attachment(db.Model):
             "transcript": self.transcript,
             "uploaded_by": self.uploader.username if self.uploader else None,
             "uploaded_by_id": self.uploaded_by_id,
+        }
+
+
+class RoleLabel(db.Model):
+    __tablename__ = "role_label"
+
+    id = db.Column(db.Integer, primary_key=True)
+    role = db.Column(db.String(32), unique=True, nullable=False)
+    label = db.Column(db.String(80), nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @staticmethod
+    def _cache_store():
+        try:
+            return current_app.extensions.setdefault("role_labels_cache", {})
+        except RuntimeError:
+            return None
+
+    @classmethod
+    def get_overrides(cls) -> dict:
+        cache = cls._cache_store()
+        overrides = cache.get("overrides") if cache else None
+        if overrides is not None:
+            return overrides
+        try:
+            records = cls.query.all()
+            overrides = {item.role: item.label for item in records}
+        except Exception:
+            overrides = {}
+        if cache is not None:
+            cache["overrides"] = overrides
+        return overrides
+
+    @classmethod
+    def get_labels(cls) -> dict:
+        cache = cls._cache_store()
+        combined = cache.get("combined") if cache else None
+        if combined is not None:
+            return combined
+        overrides = cls.get_overrides()
+        combined = {**ROLE_LABEL_DEFAULTS, **overrides}
+        if cache is not None:
+            cache["combined"] = combined
+        return combined
+
+    @classmethod
+    def clear_cache(cls) -> None:
+        cache = cls._cache_store()
+        if cache is not None:
+            cache.pop("combined", None)
+            cache.pop("overrides", None)
+
+    def to_dict(self) -> dict:
+        return {
+            "role": self.role,
+            "label": self.label,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

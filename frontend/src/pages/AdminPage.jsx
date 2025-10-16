@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react';
 
 import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
-import { roleLabels, roleOptions } from '../constants/roles.js';
+import { defaultRoleLabels } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useRoleLabels } from '../context/RoleLabelContext.jsx';
 
 const AdminPage = () => {
   const { user, token, logout } = useAuth();
+  const { labels, options, overrides, updateRoleLabel, resetRoleLabel } = useRoleLabels();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -22,6 +24,15 @@ const AdminPage = () => {
     password: '',
     role: 'worker',
   });
+  const [roleNameEdits, setRoleNameEdits] = useState({ ...labels });
+  const [roleLabelMessages, setRoleLabelMessages] = useState({});
+  const [roleLabelBusy, setRoleLabelBusy] = useState({});
+
+  useEffect(() => {
+    setRoleNameEdits({ ...labels });
+  }, [labels]);
+
+  const workerLabel = labels.worker || defaultRoleLabels.worker;
 
   const loadUsers = async () => {
     setLoading(true);
@@ -107,6 +118,66 @@ const AdminPage = () => {
     }
   };
 
+  const handleRoleNameChange = (role, value) => {
+    setRoleNameEdits((prev) => ({ ...prev, [role]: value }));
+    setRoleLabelMessages((prev) => ({ ...prev, [role]: null }));
+  };
+
+  const handleRoleLabelSave = async (role) => {
+    const value = (roleNameEdits[role] || '').trim();
+    if (!value) {
+      setRoleLabelMessages((prev) => ({
+        ...prev,
+        [role]: { type: 'error', text: '請輸入顯示名稱' },
+      }));
+      return;
+    }
+
+    setRoleLabelBusy((prev) => ({ ...prev, [role]: true }));
+    setRoleLabelMessages((prev) => ({ ...prev, [role]: null }));
+    try {
+      await updateRoleLabel(role, value);
+      setRoleLabelMessages((prev) => ({
+        ...prev,
+        [role]: { type: 'success', text: '已更新角色名稱。' },
+      }));
+    } catch (err) {
+      const message = err.response?.data?.msg || '更新失敗，請稍後再試。';
+      setRoleLabelMessages((prev) => ({
+        ...prev,
+        [role]: { type: 'error', text: message },
+      }));
+    } finally {
+      setRoleLabelBusy((prev) => ({ ...prev, [role]: false }));
+    }
+  };
+
+  const handleRoleLabelReset = async (role) => {
+    setRoleLabelMessages((prev) => ({ ...prev, [role]: null }));
+
+    if (!overrides[role]) {
+      setRoleNameEdits((prev) => ({ ...prev, [role]: defaultRoleLabels[role] }));
+      return;
+    }
+
+    setRoleLabelBusy((prev) => ({ ...prev, [role]: true }));
+    try {
+      await resetRoleLabel(role);
+      setRoleLabelMessages((prev) => ({
+        ...prev,
+        [role]: { type: 'success', text: '已恢復預設名稱。' },
+      }));
+    } catch (err) {
+      const message = err.response?.data?.msg || '恢復失敗，請稍後再試。';
+      setRoleLabelMessages((prev) => ({
+        ...prev,
+        [role]: { type: 'error', text: message },
+      }));
+    } finally {
+      setRoleLabelBusy((prev) => ({ ...prev, [role]: false }));
+    }
+  };
+
   const handleDelete = async (targetUser) => {
     if (targetUser.id === user?.id) {
       setError('無法刪除目前登入的帳號。');
@@ -157,10 +228,17 @@ const AdminPage = () => {
             className="secondary-button"
             onClick={() => setForm((prev) => ({ ...prev, role: 'worker' }))}
           >
-            新增工人
+            新增
+            {workerLabel}
           </button>
         </div>
-        <p className="panel-hint">快速建立工人帳號時預設角色為工人，其餘角色請自行選擇。</p>
+        <p className="panel-hint">
+          快速建立
+          {workerLabel}
+          帳號時預設角色為
+          {workerLabel}
+          ，其餘角色請自行選擇。
+        </p>
         {formError && <p className="error-text">{formError}</p>}
         {formSuccess && <p className="success-text">{formSuccess}</p>}
         <form className="stack" onSubmit={handleSubmit}>
@@ -197,7 +275,7 @@ const AdminPage = () => {
           <label>
             角色
             <select name="role" value={form.role} onChange={handleFormChange}>
-              {roleOptions.map((option) => (
+              {options.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
@@ -206,6 +284,58 @@ const AdminPage = () => {
           </label>
           <button type="submit">建立帳號</button>
         </form>
+      </section>
+      <section className="panel">
+        <h2>角色顯示名稱</h2>
+        <p className="panel-hint">自訂角色在系統中顯示的名稱，例如將「工人」改為「水電工」。</p>
+        <div className="role-label-list">
+          {options.map((option) => {
+            const role = option.value;
+            const busy = Boolean(roleLabelBusy[role]);
+            const feedback = roleLabelMessages[role];
+            const currentValue = roleNameEdits[role] ?? '';
+            const isCustomized = Boolean(overrides[role]);
+
+            return (
+              <div key={role} className="role-label-item">
+                <div className="role-label-item__meta">
+                  <span>
+                    預設名稱：
+                    <strong>{defaultRoleLabels[role]}</strong>
+                  </span>
+                  {isCustomized ? <span className="role-label-tag">已自訂</span> : null}
+                </div>
+                <label>
+                  顯示名稱
+                  <input
+                    value={currentValue}
+                    onChange={(event) => handleRoleNameChange(role, event.target.value)}
+                    placeholder="輸入顯示名稱"
+                    disabled={busy}
+                  />
+                </label>
+                {feedback ? (
+                  <p className={feedback.type === 'error' ? 'error-text' : 'success-text'}>
+                    {feedback.text}
+                  </p>
+                ) : null}
+                <div className="role-label-item__actions">
+                  <button type="button" onClick={() => handleRoleLabelSave(role)} disabled={busy}>
+                    {busy ? '儲存中…' : '儲存變更'}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => handleRoleLabelReset(role)}
+                    disabled={busy || (!isCustomized && currentValue === defaultRoleLabels[role])}
+                  >
+                    恢復預設
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </section>
       <section className="panel">
         <h2>使用者清單（{userCount}）</h2>
@@ -231,7 +361,7 @@ const AdminPage = () => {
                   <tr key={item.id}>
                     <td>{item.id}</td>
                     <td>{item.username}</td>
-                    <td>{roleLabels[item.role] || item.role}</td>
+                    <td>{labels[item.role] || item.role}</td>
                     <td>{assignedTasksText(item.assigned_tasks)}</td>
                     <td>
                       <button

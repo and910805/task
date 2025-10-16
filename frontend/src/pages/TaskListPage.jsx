@@ -3,8 +3,9 @@ import { Link } from 'react-router-dom';
 
 import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
-import { managerRoles, roleLabels } from '../constants/roles.js';
+import { managerRoles } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useRoleLabels } from '../context/RoleLabelContext.jsx';
 
 const statusOptions = [
   { value: '尚未接單', label: '尚未接單' },
@@ -28,6 +29,7 @@ const statusFilterOptions = [
 
 const TaskListPage = () => {
   const { user } = useAuth();
+  const { labels } = useRoleLabels();
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
   const [form, setForm] = useState(initialForm);
@@ -292,7 +294,7 @@ const TaskListPage = () => {
                   <option value="">未指派</option>
                   {users.map((option) => (
                     <option key={option.id} value={option.id}>
-                      {option.username}（{roleLabels[option.role] || option.role}）
+                      {option.username}（{labels[option.role] || option.role}）
                     </option>
                   ))}
                 </select>
@@ -375,7 +377,7 @@ const TaskListPage = () => {
                             ) : null}
                             {users.map((option) => (
                               <option key={option.id} value={option.id}>
-                                {option.username}（{roleLabels[option.role] || option.role}）
+                                {option.username}（{labels[option.role] || option.role}）
                               </option>
                             ))}
                           </select>

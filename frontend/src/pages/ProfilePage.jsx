@@ -2,11 +2,12 @@ import { useState } from 'react';
 
 import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
-import { roleLabels } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useRoleLabels } from '../context/RoleLabelContext.jsx';
 
 const ProfilePage = () => {
   const { user, refreshUser } = useAuth();
+  const { labels } = useRoleLabels();
   const [form, setForm] = useState({
     current_password: '',
     new_password: '',
@@ -54,7 +55,8 @@ const ProfilePage = () => {
           帳號：<strong>{user?.username}</strong>
         </p>
         <p>
-          角色：<strong>{roleLabels[user?.role] || user?.role}</strong>
+          角色：
+          <strong>{labels[user?.role] || user?.role}</strong>
         </p>
       </section>
       <section className="panel">

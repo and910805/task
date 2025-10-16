@@ -85,6 +85,7 @@ def create_app() -> Flask:
 
     from routes.auth import auth_bp
     from routes.export import export_bp
+    from routes.settings import settings_bp
     from routes.tasks import tasks_bp
     from routes.uploads import upload_bp
 
@@ -92,6 +93,7 @@ def create_app() -> Flask:
     app.register_blueprint(tasks_bp, url_prefix="/api/tasks")
     app.register_blueprint(upload_bp, url_prefix="/api/upload")
     app.register_blueprint(export_bp, url_prefix="/api/export")
+    app.register_blueprint(settings_bp, url_prefix="/api/settings")
 
     @app.route("/LOGIN")
     def _redirect_upper_login():
@@ -126,7 +128,7 @@ def create_app() -> Flask:
         raise error
 
     with app.app_context():
-        from models import Attachment, Task, TaskUpdate, User  # noqa: F401
+        from models import Attachment, RoleLabel, Task, TaskUpdate, User  # noqa: F401
 
         db.create_all()
 

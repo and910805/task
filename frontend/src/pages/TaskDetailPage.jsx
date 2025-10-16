@@ -5,8 +5,9 @@ import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
 import AudioRecorder from '../components/task/AudioRecorder.jsx';
 import SignaturePad from '../components/task/SignaturePad.jsx';
-import { managerRoles, roleLabels } from '../constants/roles.js';
+import { managerRoles } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useRoleLabels } from '../context/RoleLabelContext.jsx';
 
 const statusOptions = [
   { value: '尚未接單', label: '尚未接單' },
@@ -45,6 +46,7 @@ const TaskDetailPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { token, user } = useAuth();
+  const { labels } = useRoleLabels();
   const [task, setTask] = useState(null);
   const [error, setError] = useState('');
   const [assignmentError, setAssignmentError] = useState('');
@@ -439,7 +441,7 @@ const TaskDetailPage = () => {
                     <option value="">未指派</option>
                     {assignableUsers.map((option) => (
                       <option key={option.id} value={option.id}>
-                        {option.username}（{roleLabels[option.role] || option.role}）
+                        {option.username}（{labels[option.role] || option.role}）
                       </option>
                     ))}
                   </select>

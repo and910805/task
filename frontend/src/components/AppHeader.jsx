@@ -1,10 +1,11 @@
 import { Link } from 'react-router-dom';
 
 import { useAuth } from '../context/AuthContext.jsx';
-import { roleLabels } from '../constants/roles.js';
+import { useRoleLabels } from '../context/RoleLabelContext.jsx';
 
 const AppHeader = ({ title, subtitle, actions = null, children }) => {
   const { user, logout } = useAuth();
+  const { labels } = useRoleLabels();
   const isAdmin = user?.role === 'admin';
 
   return (
@@ -22,7 +23,9 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
           <Link to="/profile">個人資料</Link>
         </nav>
         <span>
-          目前登入：{user?.username}（{roleLabels[user?.role] || user?.role}）
+          目前登入：
+          {user?.username}
+          （{labels[user?.role] || user?.role}）
         </span>
         <button type="button" onClick={logout}>
           登出
