@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 const AudioRecorder = ({ onRecordingComplete, disabled }) => {
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
+  const streamRef = useRef(null);
   const [recording, setRecording] = useState(false);
   const [supported, setSupported] = useState(true);
   const [error, setError] = useState('');
@@ -11,6 +12,15 @@ const AudioRecorder = ({ onRecordingComplete, disabled }) => {
     if (typeof window === 'undefined' || !window.MediaRecorder) {
       setSupported(false);
     }
+    return () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+    };
   }, []);
 
   const startRecording = async () => {
@@ -23,6 +33,7 @@ const AudioRecorder = ({ onRecordingComplete, disabled }) => {
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
       const mediaRecorder = new MediaRecorder(stream);
       chunksRef.current = [];
       mediaRecorder.ondataavailable = (event) => {
@@ -31,10 +42,24 @@ const AudioRecorder = ({ onRecordingComplete, disabled }) => {
         }
       };
       mediaRecorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-        onRecordingComplete?.(blob);
+        const hasAudio = chunksRef.current.some((item) => item.size > 0);
+        if (!hasAudio) {
+          setError('沒有錄到聲音，請重新嘗試。');
+        } else {
+          const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+          onRecordingComplete?.(blob);
+        }
         stream.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
         setRecording(false);
+      };
+      mediaRecorder.onerror = (event) => {
+        console.error('錄音發生錯誤', event.error);
+        setError('錄音過程發生錯誤，請重新嘗試。');
+        setRecording(false);
+        if (mediaRecorder.state !== 'inactive') {
+          mediaRecorder.stop();
+        }
       };
       mediaRecorderRef.current = mediaRecorder;
       mediaRecorder.start();

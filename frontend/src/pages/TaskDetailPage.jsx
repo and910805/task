@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import api from '../api/client.js';
@@ -66,6 +66,8 @@ const TaskDetailPage = () => {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [uploadingAudio, setUploadingAudio] = useState(false);
   const [uploadingSignature, setUploadingSignature] = useState(false);
+  const [audioPreviewUrl, setAudioPreviewUrl] = useState('');
+  const audioFileInputRef = useRef(null);
 
   const isManager = useMemo(() => managerRoles.has(user?.role), [user?.role]);
 
@@ -228,8 +230,29 @@ const TaskDetailPage = () => {
     }
   };
 
+  useEffect(
+    () => () => {
+      if (audioPreviewUrl) {
+        URL.revokeObjectURL(audioPreviewUrl);
+      }
+    },
+    [audioPreviewUrl],
+  );
+
+  const clearAudioPreview = useCallback(() => {
+    if (audioPreviewUrl) {
+      URL.revokeObjectURL(audioPreviewUrl);
+    }
+    setAudioPreviewUrl('');
+  }, [audioPreviewUrl]);
+
   const handleAudioFileChange = (event) => {
     const file = event.target.files?.[0] || null;
+    clearAudioPreview();
+    if (file) {
+      const previewUrl = URL.createObjectURL(file);
+      setAudioPreviewUrl(previewUrl);
+    }
     setAudioForm((prev) => ({ ...prev, file }));
   };
 
@@ -250,6 +273,10 @@ const TaskDetailPage = () => {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setAudioForm({ file: null, note: '', transcript: '' });
+      if (audioFileInputRef.current) {
+        audioFileInputRef.current.value = '';
+      }
+      clearAudioPreview();
       await loadTask();
     } catch (err) {
       const message = err.response?.data?.msg || '上傳語音失敗。';
@@ -261,9 +288,33 @@ const TaskDetailPage = () => {
 
   const handleRecordedAudio = (blob) => {
     if (!blob) return;
-    const filename = `recording-${Date.now()}.webm`;
-    const file = new File([blob], filename, { type: blob.type });
-    setAudioForm({ file, note: '', transcript: '' });
+    const type = blob.type || 'audio/webm';
+    const extension =
+      type.includes('mp3')
+        ? 'mp3'
+        : type.includes('ogg')
+        ? 'ogg'
+        : type.includes('wav')
+        ? 'wav'
+        : type.includes('m4a')
+        ? 'm4a'
+        : 'webm';
+    const file = new File([blob], `recording-${Date.now()}.${extension}`, { type });
+    if (audioFileInputRef.current) {
+      audioFileInputRef.current.value = '';
+    }
+    clearAudioPreview();
+    const previewUrl = URL.createObjectURL(blob);
+    setAudioPreviewUrl(previewUrl);
+    setAudioForm((prev) => ({ ...prev, file }));
+  };
+
+  const handleClearRecordedAudio = () => {
+    if (audioFileInputRef.current) {
+      audioFileInputRef.current.value = '';
+    }
+    clearAudioPreview();
+    setAudioForm((prev) => ({ ...prev, file: null }));
   };
 
   const handleSignatureSubmit = async (dataUrl) => {
@@ -544,9 +595,37 @@ const TaskDetailPage = () => {
             </label>
             <label>
               選擇語音檔
-              <input type="file" accept="audio/*" onChange={handleAudioFileChange} />
+              <input
+                ref={audioFileInputRef}
+                type="file"
+                accept="audio/*"
+                onChange={handleAudioFileChange}
+              />
             </label>
             <AudioRecorder onRecordingComplete={handleRecordedAudio} disabled={uploadingAudio} />
+            {audioForm.file && (
+              <div className="attachment-preview">
+                <p>
+                  已準備檔案：
+                  <strong>{audioForm.file.name}</strong>
+                  <span>
+                    （
+                    {audioForm.file.size
+                      ? `${(audioForm.file.size / 1024).toFixed(1)} KB`
+                      : '大小未知'}
+                    ）
+                  </span>
+                </p>
+                {audioPreviewUrl && <audio controls src={audioPreviewUrl} />}
+                <button
+                  type="button"
+                  onClick={handleClearRecordedAudio}
+                  disabled={uploadingAudio}
+                >
+                  清除錄音
+                </button>
+              </div>
+            )}
             <button type="submit" disabled={!audioForm.file || uploadingAudio}>
               {uploadingAudio ? '上傳中…' : '上傳語音'}
             </button>
