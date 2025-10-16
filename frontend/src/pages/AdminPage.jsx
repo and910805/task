@@ -12,6 +12,7 @@ const AdminPage = () => {
   const [error, setError] = useState('');
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
+  const [userCount, setUserCount] = useState(0);
   const [form, setForm] = useState({
     name: '',
     username: '',
@@ -24,7 +25,10 @@ const AdminPage = () => {
     setError('');
     try {
       const { data } = await api.get('/auth/users');
-      setUsers(data);
+      const list = Array.isArray(data) ? data : data?.users ?? [];
+      const total = Array.isArray(data) ? data.length : data?.total;
+      setUsers(list);
+      setUserCount(typeof total === 'number' ? total : list.length);
     } catch (err) {
       const status = err.response?.status;
       if (status === 401) {
@@ -166,7 +170,7 @@ const AdminPage = () => {
         </form>
       </section>
       <section className="panel">
-        <h2>使用者清單</h2>
+        <h2>使用者清單（{userCount}）</h2>
         {error && <p className="error-text">{error}</p>}
         {loading ? (
           <p>載入中...</p>

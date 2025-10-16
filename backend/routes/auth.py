@@ -130,7 +130,8 @@ def list_users():
         .order_by(User.username.asc())
         .all()
     )
-    return jsonify([_serialize_user_with_tasks(user) for user in users])
+    payload = [_serialize_user_with_tasks(user) for user in users]
+    return jsonify({"users": payload, "total": len(payload)})
 
 
 @auth_bp.get("/assignable-users")
