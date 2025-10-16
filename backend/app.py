@@ -1,7 +1,7 @@
 import os
 from datetime import timedelta
 
-from flask import Flask, abort, send_from_directory
+from flask import Flask, abort, jsonify, send_from_directory
 from flask_cors import CORS
 
 from extensions import db, jwt
@@ -33,6 +33,24 @@ def create_app() -> Flask:
     db.init_app(app)
     jwt.init_app(app)
 
+    @jwt.user_identity_loader
+    def _user_identity_lookup(identity):
+        """Ensure all JWT subjects are stored as strings."""
+
+        return str(identity) if identity is not None else None
+
+    @jwt.invalid_token_loader
+    def _invalid_token_callback(reason: str):
+        return jsonify({"msg": "Invalid authentication token"}), 401
+
+    @jwt.unauthorized_loader
+    def _unauthorized_callback(reason: str):
+        return jsonify({"msg": "Missing authentication token"}), 401
+
+    @jwt.expired_token_loader
+    def _expired_token_callback(jwt_header, jwt_payload):
+        return jsonify({"msg": "Authentication token has expired"}), 401
+
     from routes.auth import auth_bp
     from routes.tasks import tasks_bp
 
@@ -58,6 +76,12 @@ def create_app() -> Flask:
                 return send_from_directory(static_folder, "index.html")
 
         return ("Frontend build not found", 404)
+
+    @app.errorhandler(TypeError)
+    def _handle_type_error(error):
+        if str(error) == "Subject must be a string":
+            return jsonify({"msg": "Invalid authentication token"}), 401
+        raise error
 
     with app.app_context():
         from models import Attachment, Task, TaskUpdate, User  # noqa: F401

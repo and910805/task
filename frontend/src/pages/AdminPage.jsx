@@ -6,7 +6,7 @@ import { roleLabels, roleOptions } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
 const AdminPage = () => {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -26,8 +26,14 @@ const AdminPage = () => {
       const { data } = await api.get('/auth/users');
       setUsers(data);
     } catch (err) {
-      const message = err.response?.data?.msg || '無法取得使用者列表。';
-      setError(message);
+      const status = err.response?.status;
+      if (status === 401) {
+        logout();
+        setError('登入資訊已失效，請重新登入。');
+      } else {
+        const message = err.response?.data?.msg || '無法取得使用者列表。';
+        setError(message);
+      }
     } finally {
       setLoading(false);
     }
@@ -80,8 +86,14 @@ const AdminPage = () => {
       await api.delete(`/auth/users/${targetUser.id}`);
       await loadUsers();
     } catch (err) {
-      const message = err.response?.data?.msg || '刪除帳號失敗。';
-      setError(message);
+      const status = err.response?.status;
+      if (status === 401) {
+        logout();
+        setError('登入資訊已失效，請重新登入。');
+      } else {
+        const message = err.response?.data?.msg || '刪除帳號失敗。';
+        setError(message);
+      }
     }
   };
 
