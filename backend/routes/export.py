@@ -1,4 +1,4 @@
-"""Blueprint for exporting TaskGo reports."""
+"""Blueprint for exporting 立翔水電行 reports."""
 
 from __future__ import annotations
 

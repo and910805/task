@@ -1,4 +1,4 @@
-"""Blueprint dedicated to rich media uploads for TaskGo tasks."""
+"""Blueprint dedicated to rich media uploads for 立翔水電行 tasks."""
 
 from __future__ import annotations
 

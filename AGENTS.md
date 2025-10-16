@@ -1,4 +1,8 @@
-# TaskGo 開發說明
+# 立翔水電行 開發說明
+
+## 當前狀況
+- 前後端品牌名稱請統一顯示為「立翔水電行」。
+- 圖片上傳雖可成功，但前端仍無法顯示預簽名連結的內容，需要持續排查 S3 URL 或授權流程。
 
 ## 專案架構概述
 - **backend/**：Flask + SQLAlchemy + SQLite，提供 RESTful API、JWT 驗證與檔案上傳功能。
@@ -211,7 +215,7 @@
 - **systemd (`/etc/systemd/system/taskgo.service`)**
   ```ini
   [Unit]
-  Description=TaskGo Gunicorn Service
+  Description=立翔水電行 Gunicorn Service
   After=network.target
 
   [Service]

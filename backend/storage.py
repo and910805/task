@@ -1,4 +1,4 @@
-"""Storage backends for TaskGo uploads with local/S3 support."""
+"""Storage backends for 立翔水電行 uploads with local/S3 support."""
 
 from __future__ import annotations
 
