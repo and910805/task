@@ -1,14 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+import { roleOptions } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
-
-const roles = [
-  { value: 'worker', label: '工人' },
-  { value: 'site_supervisor', label: '現場主管' },
-  { value: 'hq_staff', label: '總部人員' },
-  { value: 'admin', label: '管理員' },
-];
 
 const LoginPage = () => {
   const navigate = useNavigate();
@@ -16,6 +10,7 @@ const LoginPage = () => {
   const [mode, setMode] = useState('login');
   const [error, setError] = useState('');
   const [form, setForm] = useState({ username: '', password: '', role: 'worker' });
+  const [success, setSuccess] = useState('');
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -25,12 +20,15 @@ const LoginPage = () => {
   const handleSubmit = async (event) => {
     event.preventDefault();
     setError('');
+    setSuccess('');
     try {
       if (mode === 'login') {
         await login({ username: form.username, password: form.password });
         navigate('/');
       } else {
         await register(form);
+        setSuccess('帳號建立成功，請使用該帳號登入。');
+        setForm({ username: '', password: '', role: 'worker' });
         setMode('login');
       }
     } catch (err) {
@@ -44,6 +42,7 @@ const LoginPage = () => {
       <form className="auth-card" onSubmit={handleSubmit}>
         <h2>{mode === 'login' ? '登入' : '建立帳號'}</h2>
         {error && <p className="error-text">{error}</p>}
+        {success && <p className="success-text">{success}</p>}
         <label>
           帳號
           <input
@@ -70,7 +69,7 @@ const LoginPage = () => {
           <label>
             角色
             <select name="role" value={form.role} onChange={handleChange}>
-              {roles.map((role) => (
+              {roleOptions.map((role) => (
                 <option key={role.value} value={role.value}>
                   {role.label}
                 </option>
@@ -87,6 +86,7 @@ const LoginPage = () => {
           onClick={() => {
             setMode(mode === 'login' ? 'register' : 'login');
             setError('');
+            setSuccess('');
           }}
         >
           {mode === 'login' ? '沒有帳號？建立新帳號' : '已有帳號？立即登入'}

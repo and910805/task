@@ -1,14 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import api from '../api/client.js';
+import AppHeader from '../components/AppHeader.jsx';
+import { managerRoles, roleLabels } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
 const statusOptions = [
-  { value: 'pending', label: '待處理' },
-  { value: 'in_progress', label: '處理中' },
-  { value: 'on_hold', label: '暫停' },
-  { value: 'completed', label: '已完成' },
+  { value: '尚未接單', label: '尚未接單' },
+  { value: '進行中', label: '進行中' },
+  { value: '已完成', label: '已完成' },
 ];
 
 const attachmentTypes = [
@@ -18,15 +19,32 @@ const attachmentTypes = [
   { value: 'other', label: '其他' },
 ];
 
+const toInputDatetimeValue = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  const offsetInMs = date.getTimezoneOffset() * 60 * 1000;
+  const local = new Date(date.getTime() - offsetInMs);
+  return local.toISOString().slice(0, 16);
+};
+
 const TaskDetailPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
   const [task, setTask] = useState(null);
   const [error, setError] = useState('');
+  const [assignmentError, setAssignmentError] = useState('');
+  const [assignmentSuccess, setAssignmentSuccess] = useState('');
   const [updateForm, setUpdateForm] = useState({ status: '', note: '' });
   const [fileForm, setFileForm] = useState({ file: null, file_type: 'image', note: '' });
   const [loading, setLoading] = useState(true);
+  const [assignableUsers, setAssignableUsers] = useState([]);
+  const [assignmentForm, setAssignmentForm] = useState({
+    assigned_to_id: '',
+    due_date: '',
+  });
+
+  const isManager = useMemo(() => managerRoles.has(user?.role), [user?.role]);
 
   const loadTask = async () => {
     setLoading(true);
@@ -42,13 +60,42 @@ const TaskDetailPage = () => {
     }
   };
 
+  const loadAssignableUsers = async () => {
+    if (!isManager) return;
+    try {
+      const { data } = await api.get('/auth/assignable-users');
+      setAssignableUsers(data);
+    } catch (err) {
+      console.error('無法取得可指派使用者列表', err);
+    }
+  };
+
   useEffect(() => {
     loadTask();
   }, [id]);
 
+  useEffect(() => {
+    if (isManager) {
+      loadAssignableUsers();
+    }
+  }, [isManager]);
+
+  useEffect(() => {
+    if (!task) return;
+    setAssignmentForm({
+      assigned_to_id: task.assigned_to_id ? String(task.assigned_to_id) : '',
+      due_date: task.due_date ? toInputDatetimeValue(task.due_date) : '',
+    });
+  }, [task]);
+
   const handleUpdateChange = (event) => {
     const { name, value } = event.target;
     setUpdateForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleAssignmentChange = (event) => {
+    const { name, value } = event.target;
+    setAssignmentForm((prev) => ({ ...prev, [name]: value }));
   };
 
   const handleStatusSubmit = async (event) => {
@@ -65,6 +112,26 @@ const TaskDetailPage = () => {
     } catch (err) {
       const message = err.response?.data?.msg || '更新狀態失敗。';
       setError(message);
+    }
+  };
+
+  const handleAssignmentSubmit = async (event) => {
+    event.preventDefault();
+    setAssignmentError('');
+    setAssignmentSuccess('');
+    try {
+      const payload = {
+        assigned_to_id: assignmentForm.assigned_to_id
+          ? Number(assignmentForm.assigned_to_id)
+          : null,
+        due_date: assignmentForm.due_date,
+      };
+      await api.put(`/tasks/${id}`, payload);
+      setAssignmentSuccess('任務指派資訊已更新。');
+      await loadTask();
+    } catch (err) {
+      const message = err.response?.data?.msg || '更新任務指派失敗。';
+      setAssignmentError(message);
     }
   };
 
@@ -120,12 +187,11 @@ const TaskDetailPage = () => {
 
   return (
     <div className="page">
-      <header className="page-header">
-        <h1>{task.title}</h1>
-        <div className="header-actions">
-          <Link to="/">返回列表</Link>
-        </div>
-      </header>
+      <AppHeader title={task.title} subtitle={`任務編號：${task.id}`}>
+        <Link to="/" className="link-button">
+          ← 返回任務列表
+        </Link>
+      </AppHeader>
       {error && <p className="error-text">{error}</p>}
       <section className="panel">
         <h2>任務資訊</h2>
@@ -133,8 +199,46 @@ const TaskDetailPage = () => {
         <p>指派給：{task.assigned_to || '未指派'}</p>
         <p>建立人：{task.assigned_by || '系統'}</p>
         <p>內容：{task.description || '沒有描述'}</p>
+        <p>地點：{task.location}</p>
+        <p>預計完成時間：{task.expected_time ? new Date(task.expected_time).toLocaleString() : '未設定'}</p>
+        {task.completed_at && <p>實際完成時間：{new Date(task.completed_at).toLocaleString()}</p>}
         {task.due_date && <p>截止日期：{new Date(task.due_date).toLocaleString()}</p>}
       </section>
+
+      {isManager && (
+        <section className="panel">
+          <h2>指派設定</h2>
+          {assignmentError && <p className="error-text">{assignmentError}</p>}
+          {assignmentSuccess && <p className="success-text">{assignmentSuccess}</p>}
+          <form className="stack" onSubmit={handleAssignmentSubmit}>
+            <label>
+              指派給
+              <select
+                name="assigned_to_id"
+                value={assignmentForm.assigned_to_id}
+                onChange={handleAssignmentChange}
+              >
+                <option value="">未指派</option>
+                {assignableUsers.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.username}（{roleLabels[option.role] || option.role}）
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              截止時間
+              <input
+                type="datetime-local"
+                name="due_date"
+                value={assignmentForm.due_date}
+                onChange={handleAssignmentChange}
+              />
+            </label>
+            <button type="submit">儲存指派</button>
+          </form>
+        </section>
+      )}
 
       <section className="panel">
         <h2>狀態更新與回報</h2>

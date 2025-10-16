@@ -4,12 +4,17 @@ import { AuthProvider, useAuth } from './context/AuthContext.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import TaskDetailPage from './pages/TaskDetailPage.jsx';
 import TaskListPage from './pages/TaskListPage.jsx';
+import AdminPage from './pages/AdminPage.jsx';
+import ProfilePage from './pages/ProfilePage.jsx';
 import './App.css';
 
-const PrivateRoute = ({ children }) => {
-  const { isAuthenticated } = useAuth();
+const PrivateRoute = ({ children, roles }) => {
+  const { isAuthenticated, user } = useAuth();
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
+  }
+  if (roles && !roles.includes(user?.role)) {
+    return <Navigate to="/" replace />;
   }
   return children;
 };
@@ -30,6 +35,22 @@ const AppRoutes = () => (
       element={(
         <PrivateRoute>
           <TaskDetailPage />
+        </PrivateRoute>
+      )}
+    />
+    <Route
+      path="/profile"
+      element={(
+        <PrivateRoute>
+          <ProfilePage />
+        </PrivateRoute>
+      )}
+    />
+    <Route
+      path="/admin"
+      element={(
+        <PrivateRoute roles={["admin"]}>
+          <AdminPage />
         </PrivateRoute>
       )}
     />

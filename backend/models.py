@@ -43,8 +43,11 @@ class Task(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(150), nullable=False)
-    description = db.Column(db.Text)
-    status = db.Column(db.String(32), nullable=False, default="pending")
+    description = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(32), nullable=False, default="尚未接單")
+    location = db.Column(db.String(255), nullable=False)
+    expected_time = db.Column(db.DateTime, nullable=False)
+    completed_at = db.Column(db.DateTime)
     assigned_to_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
     assigned_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
     due_date = db.Column(db.DateTime)
@@ -67,6 +70,9 @@ class Task(db.Model):
             "title": self.title,
             "description": self.description,
             "status": self.status,
+            "location": self.location,
+            "expected_time": self.expected_time.isoformat() if self.expected_time else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "assigned_to": self.assignee.username if self.assignee else None,
             "assigned_to_id": self.assigned_to_id,
             "assigned_by": self.assigner.username if self.assigner else None,
@@ -84,7 +90,11 @@ class TaskUpdate(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     task_id = db.Column(db.Integer, db.ForeignKey("task.id"), nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     status = db.Column(db.String(32))
     note = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)

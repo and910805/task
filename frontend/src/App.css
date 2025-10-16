@@ -34,14 +34,42 @@ a:hover {
   gap: 1rem;
 }
 
+.page-header__titles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
 .page-header h1 {
   margin: 0;
+}
+
+.page-subtitle {
+  margin: 0;
+  color: #4b5563;
+  font-size: 0.95rem;
 }
 
 .header-actions {
   display: flex;
   align-items: center;
   gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.header-nav {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.header-nav a {
+  font-weight: 600;
+  color: #1f2937;
+  text-decoration: none;
+}
+
+.header-nav a:hover {
+  color: #2563eb;
 }
 
 .panel {
@@ -52,6 +80,19 @@ a:hover {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.panel-hint {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.9rem;
 }
 
 .stack {
@@ -120,6 +161,24 @@ button:disabled {
   box-shadow: none;
 }
 
+.secondary-button {
+  background: #e0e7ff;
+  color: #3730a3;
+}
+
+.secondary-button:hover {
+  box-shadow: none;
+  transform: none;
+}
+
+.danger-button {
+  background: #ef4444;
+}
+
+.danger-button:hover {
+  box-shadow: 0 10px 20px rgba(239, 68, 68, 0.25);
+}
+
 .link-button {
   background: transparent;
   color: #2563eb;
@@ -138,6 +197,33 @@ button:disabled {
   margin: 0;
   display: grid;
   gap: 1rem;
+}
+
+.table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.data-table th,
+.data-table td {
+  padding: 0.75rem 0.5rem;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: left;
+}
+
+.data-table th {
+  background: #f1f5f9;
+  font-weight: 700;
+}
+
+.data-table tbody tr:hover {
+  background: #f8fafc;
 }
 
 .task-item {
@@ -159,6 +245,11 @@ button:disabled {
 
 .error-text {
   color: #dc2626;
+  font-weight: 600;
+}
+
+.success-text {
+  color: #16a34a;
   font-weight: 600;
 }
 

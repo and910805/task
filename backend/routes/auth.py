@@ -1,14 +1,18 @@
+import secrets
+
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import (
     create_access_token,
     get_jwt,
-    get_jwt_identity,
     jwt_required,
 )
 
 from decorators import role_required
 from extensions import db
-from models import User
+from sqlalchemy.orm import selectinload
+
+from models import Attachment, Task, TaskUpdate, User
+from utils import get_current_user_id
 
 
 VALID_ROLES = {"worker", "site_supervisor", "hq_staff", "admin"}
@@ -16,15 +20,22 @@ VALID_ROLES = {"worker", "site_supervisor", "hq_staff", "admin"}
 auth_bp = Blueprint("auth", __name__)
 
 
+def _generate_password() -> str:
+    """Return a random password safe for initial credentials."""
+
+    # 12-characters token encoded using URL-safe alphabet (~16 bytes entropy)
+    return secrets.token_urlsafe(9)
+
+
 @auth_bp.post("/register")
 @jwt_required(optional=True)
 def register():
     data = request.get_json() or {}
     username = (data.get("username") or "").strip()
-    password = data.get("password") or ""
+    password = data.get("password")
     role = data.get("role", "worker")
 
-    if not username or not password:
+    if not username:
         return jsonify({"msg": "Username and password are required"}), 400
 
     if role not in VALID_ROLES:
@@ -32,14 +43,30 @@ def register():
 
     user_count = User.query.count()
     current_role = None
-    current_user_id = get_jwt_identity()
+    current_user_id = get_current_user_id()
     if current_user_id:
         claims = get_jwt()
         current_role = claims.get("role")
     is_admin = current_role == "admin"
 
-    if user_count > 0 and not is_admin:
-        return jsonify({"msg": "Only administrators can create users"}), 403
+    is_initial_setup = user_count == 0
+
+    if not is_initial_setup and not is_admin and role != "worker":
+        return (
+            jsonify({"msg": "僅管理員可建立此角色"}),
+            403,
+        )
+
+    if not is_initial_setup and not is_admin:
+        role = "worker"
+
+    generated_password = None
+
+    if not password:
+        if role == "worker" and not (is_admin or is_initial_setup):
+            return jsonify({"msg": "Username and password are required"}), 400
+        password = _generate_password()
+        generated_password = password
 
     if User.query.filter_by(username=username).first():
         return jsonify({"msg": "Username already exists"}), 400
@@ -49,7 +76,11 @@ def register():
     db.session.add(user)
     db.session.commit()
 
-    return jsonify({"msg": "User created", "user": user.to_dict()}), 201
+    response = {"msg": "User created", "user": user.to_dict()}
+    if generated_password:
+        response["generated_password"] = generated_password
+
+    return jsonify(response), 201
 
 
 @auth_bp.post("/login")
@@ -66,7 +97,7 @@ def login():
         return jsonify({"msg": "Invalid credentials"}), 401
 
     additional_claims = {"role": user.role}
-    token = create_access_token(identity=user.id, additional_claims=additional_claims)
+    token = create_access_token(identity=str(user.id), additional_claims=additional_claims)
 
     return jsonify({"token": token, "user": user.to_dict()})
 
@@ -74,15 +105,43 @@ def login():
 @auth_bp.get("/me")
 @jwt_required()
 def me():
-    user_id = get_jwt_identity()
+    user_id = get_current_user_id()
+    if user_id is None:
+        return jsonify({"msg": "Invalid authentication token"}), 401
+
     user = User.query.get_or_404(user_id)
     return jsonify(user.to_dict())
+
+
+def _serialize_user_with_tasks(user: User) -> dict:
+    data = user.to_dict()
+    data["assigned_tasks"] = [
+        {"id": task.id, "title": task.title, "status": task.status}
+        for task in user.assigned_tasks
+    ]
+    return data
 
 
 @auth_bp.get("/users")
 @role_required("admin")
 def list_users():
-    users = User.query.order_by(User.username.asc()).all()
+    users = (
+        User.query.options(selectinload(User.assigned_tasks))
+        .order_by(User.username.asc())
+        .all()
+    )
+    payload = [_serialize_user_with_tasks(user) for user in users]
+    return jsonify({"users": payload, "total": len(payload)})
+
+
+@auth_bp.get("/assignable-users")
+@role_required("site_supervisor", "hq_staff")
+def list_assignable_users():
+    users = (
+        User.query.filter(User.role != "admin")
+        .order_by(User.username.asc())
+        .all()
+    )
     return jsonify([user.to_dict() for user in users])
 
 
@@ -111,6 +170,50 @@ def update_user(user_id: int):
 @role_required("admin")
 def delete_user(user_id: int):
     user = User.query.get_or_404(user_id)
+    Task.query.filter_by(assigned_to_id=user.id).update(
+        {"assigned_to_id": None}, synchronize_session=False
+    )
+    Task.query.filter_by(assigned_by_id=user.id).update(
+        {"assigned_by_id": None}, synchronize_session=False
+    )
+    TaskUpdate.query.filter_by(user_id=user.id).update(
+        {"user_id": None}, synchronize_session=False
+    )
+    Attachment.query.filter_by(uploaded_by_id=user.id).update(
+        {"uploaded_by_id": None}, synchronize_session=False
+    )
     db.session.delete(user)
     db.session.commit()
     return jsonify({"msg": "User deleted"})
+
+
+@auth_bp.post("/change-password")
+@jwt_required()
+def change_password():
+    user_id = get_current_user_id()
+    if user_id is None:
+        return jsonify({"msg": "Invalid authentication token"}), 401
+
+    user = User.query.get_or_404(user_id)
+
+    data = request.get_json() or {}
+    current_password = (data.get("current_password") or "").strip()
+    new_password = (data.get("new_password") or "").strip()
+    confirm_password = (data.get("confirm_password") or "").strip()
+
+    if not current_password or not new_password or not confirm_password:
+        return jsonify({"msg": "請完整填寫密碼欄位"}), 400
+
+    if not user.check_password(current_password):
+        return jsonify({"msg": "舊密碼不正確"}), 400
+
+    if new_password != confirm_password:
+        return jsonify({"msg": "新密碼與確認密碼不一致"}), 400
+
+    if current_password == new_password:
+        return jsonify({"msg": "新密碼不可與舊密碼相同"}), 400
+
+    user.set_password(new_password)
+    db.session.commit()
+
+    return jsonify({"msg": "密碼已更新"})
