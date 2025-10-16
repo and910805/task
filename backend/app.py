@@ -1,7 +1,7 @@
 import os
 from datetime import timedelta
 
-from flask import Flask, abort, jsonify, send_from_directory
+from flask import Flask, abort, jsonify, redirect, send_from_directory
 from flask_cors import CORS
 
 from extensions import db, jwt
@@ -92,6 +92,12 @@ def create_app() -> Flask:
     app.register_blueprint(tasks_bp, url_prefix="/api/tasks")
     app.register_blueprint(upload_bp, url_prefix="/api/upload")
     app.register_blueprint(export_bp, url_prefix="/api/export")
+
+    @app.route("/LOGIN")
+    def _redirect_upper_login():
+        """Redirect legacy uppercase login URLs to the SPA root."""
+
+        return redirect("/", code=302)
 
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
