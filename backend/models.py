@@ -1,5 +1,7 @@
 from datetime import datetime
-from werkzeug.security import generate_password_hash, check_password_hash
+
+from flask import current_app
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from extensions import db
 
@@ -43,8 +45,11 @@ class Task(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(150), nullable=False)
-    description = db.Column(db.Text)
-    status = db.Column(db.String(32), nullable=False, default="pending")
+    description = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(32), nullable=False, default="尚未接單")
+    location = db.Column(db.String(255), nullable=False)
+    expected_time = db.Column(db.DateTime, nullable=False)
+    completed_at = db.Column(db.DateTime)
     assigned_to_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
     assigned_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
     due_date = db.Column(db.DateTime)
@@ -61,12 +66,25 @@ class Task(db.Model):
         order_by="TaskUpdate.created_at.desc()",
     )
 
+    def total_work_hours(self) -> float:
+        return sum(
+            (update.work_hours or 0.0)
+            for update in self.updates
+            if update.work_hours is not None
+        )
+
     def to_dict(self) -> dict:
+        time_entries = [
+            update.to_time_dict() for update in self.updates if update.start_time
+        ]
         return {
             "id": self.id,
             "title": self.title,
             "description": self.description,
             "status": self.status,
+            "location": self.location,
+            "expected_time": self.expected_time.isoformat() if self.expected_time else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "assigned_to": self.assignee.username if self.assignee else None,
             "assigned_to_id": self.assigned_to_id,
             "assigned_by": self.assigner.username if self.assigner else None,
@@ -76,6 +94,8 @@ class Task(db.Model):
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "attachments": [attachment.to_dict() for attachment in self.attachments],
             "updates": [update.to_dict() for update in self.updates],
+            "time_entries": time_entries,
+            "total_work_hours": round(self.total_work_hours(), 2),
         }
 
 
@@ -84,9 +104,16 @@ class TaskUpdate(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     task_id = db.Column(db.Integer, db.ForeignKey("task.id"), nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     status = db.Column(db.String(32))
     note = db.Column(db.Text)
+    start_time = db.Column(db.DateTime)
+    end_time = db.Column(db.DateTime)
+    work_hours = db.Column(db.Float)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     task = db.relationship("Task", back_populates="updates")
@@ -100,6 +127,19 @@ class TaskUpdate(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "author": self.author.username if self.author else None,
             "user_id": self.user_id,
+            "start_time": self.start_time.isoformat() if self.start_time else None,
+            "end_time": self.end_time.isoformat() if self.end_time else None,
+            "work_hours": self.work_hours,
+        }
+
+    def to_time_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "start_time": self.start_time.isoformat() if self.start_time else None,
+            "end_time": self.end_time.isoformat() if self.end_time else None,
+            "work_hours": self.work_hours,
+            "author": self.author.username if self.author else None,
         }
 
 
@@ -112,6 +152,7 @@ class Attachment(db.Model):
     file_type = db.Column(db.String(32))
     original_name = db.Column(db.String(255))
     file_path = db.Column(db.String(255), nullable=False)
+    transcript = db.Column(db.Text)
     note = db.Column(db.Text)
     uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -119,11 +160,24 @@ class Attachment(db.Model):
     uploader = db.relationship("User", back_populates="attachments")
 
     def to_dict(self) -> dict:
+        url = None
+        try:
+            storage = current_app.extensions.get("storage")  # type: ignore[attr-defined]
+        except RuntimeError:
+            storage = None
+        if storage:
+            try:
+                url = storage.url_for(self.file_path)
+            except Exception:  # pragma: no cover - defensive fallback
+                url = None
+        if not url:
+            url = f"/api/upload/files/{self.file_path}"
         return {
             "id": self.id,
             "file_type": self.file_type,
             "original_name": self.original_name,
             "note": self.note,
             "uploaded_at": self.uploaded_at.isoformat() if self.uploaded_at else None,
-            "url": f"/api/tasks/attachments/{self.file_path}",
+            "url": url,
+            "transcript": self.transcript,
         }

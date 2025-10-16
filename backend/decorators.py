@@ -1,4 +1,6 @@
 from functools import wraps
+from functools import wraps
+
 from flask import jsonify
 from flask_jwt_extended import get_jwt, verify_jwt_in_request
 
@@ -17,7 +19,10 @@ def role_required(*roles):
     def decorator(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
-            verify_jwt_in_request()
+            try:
+                verify_jwt_in_request()
+            except TypeError:
+                return jsonify({"msg": "Invalid authentication token"}), 401
             claims = get_jwt() or {}
             user_role = claims.get("role")
             if user_role not in allowed_roles:

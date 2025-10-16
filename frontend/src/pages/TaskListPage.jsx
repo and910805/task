@@ -1,21 +1,36 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import api from '../api/client.js';
+import AppHeader from '../components/AppHeader.jsx';
+import { managerRoles, roleLabels } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
-const managerRoles = new Set(['site_supervisor', 'hq_staff', 'admin']);
+const statusOptions = [
+  { value: '尚未接單', label: '尚未接單' },
+  { value: '進行中', label: '進行中' },
+  { value: '已完成', label: '已完成' },
+];
+
+const initialForm = {
+  title: '',
+  description: '',
+  location: '',
+  expected_time: '',
+  status: '尚未接單',
+  assigned_to_id: '',
+};
 
 const TaskListPage = () => {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
-  const [form, setForm] = useState({ title: '', description: '', assigned_to_id: '' });
+  const [form, setForm] = useState(initialForm);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
 
-  const isManager = useMemo(() => managerRoles.has(user?.role), [user?.role]);
+  const isManager = managerRoles.has(user?.role);
 
   const loadTasks = async () => {
     setLoading(true);
@@ -34,7 +49,7 @@ const TaskListPage = () => {
   const loadUsers = async () => {
     if (!isManager) return;
     try {
-      const { data } = await api.get('/auth/users');
+      const { data } = await api.get('/auth/assignable-users');
       setUsers(data);
     } catch (err) {
       console.error('無法取得使用者列表', err);
@@ -56,14 +71,33 @@ const TaskListPage = () => {
 
   const handleCreate = async (event) => {
     event.preventDefault();
+    setError('');
+    const trimmedTitle = form.title.trim();
+    const trimmedDescription = form.description.trim();
+    const trimmedLocation = form.location.trim();
+
+    if (!trimmedTitle || !trimmedDescription || !trimmedLocation || !form.expected_time) {
+      setError('請完整填寫任務名稱、地點、描述與預計完成時間。');
+      return;
+    }
+
+    const expectedDate = new Date(form.expected_time);
+    if (Number.isNaN(expectedDate.getTime())) {
+      setError('預計完成時間格式不正確。');
+      return;
+    }
+
     try {
       const payload = {
-        title: form.title,
-        description: form.description,
-        assigned_to_id: form.assigned_to_id || null,
+        title: trimmedTitle,
+        description: trimmedDescription,
+        location: trimmedLocation,
+        expected_time: expectedDate.toISOString(),
+        status: form.status,
+        assigned_to_id: form.assigned_to_id ? Number(form.assigned_to_id) : null,
       };
-      await api.post('/tasks', payload);
-      setForm({ title: '', description: '', assigned_to_id: '' });
+      await api.post('/tasks/create', payload);
+      setForm(initialForm);
       setCreating(false);
       await loadTasks();
     } catch (err) {
@@ -72,17 +106,19 @@ const TaskListPage = () => {
     }
   };
 
+  const handleStatusChange = async (taskId, nextStatus) => {
+    try {
+      await api.patch(`/tasks/update/${taskId}`, { status: nextStatus });
+      await loadTasks();
+    } catch (err) {
+      const message = err.response?.data?.msg || '更新任務狀態失敗。';
+      setError(message);
+    }
+  };
+
   return (
     <div className="page">
-      <header className="page-header">
-        <h1>任務管理面板</h1>
-        <div className="header-actions">
-          <span>目前登入：{user?.username}（{user?.role}）</span>
-          <button type="button" onClick={logout}>
-            登出
-          </button>
-        </div>
-      </header>
+      <AppHeader title="任務管理面板" subtitle="檢視與指派任務" />
       {isManager && (
         <section className="panel">
           <button type="button" onClick={() => setCreating((prev) => !prev)}>
@@ -107,7 +143,38 @@ const TaskListPage = () => {
                   value={form.description}
                   onChange={handleChange}
                   placeholder="描述任務內容"
+                  required
                 />
+              </label>
+              <label>
+                任務地點
+                <input
+                  name="location"
+                  value={form.location}
+                  onChange={handleChange}
+                  placeholder="輸入地點"
+                  required
+                />
+              </label>
+              <label>
+                預計完成時間
+                <input
+                  type="datetime-local"
+                  name="expected_time"
+                  value={form.expected_time}
+                  onChange={handleChange}
+                  required
+                />
+              </label>
+              <label>
+                任務進度
+                <select name="status" value={form.status} onChange={handleChange}>
+                  {statusOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label>
                 指派給
@@ -119,7 +186,7 @@ const TaskListPage = () => {
                   <option value="">未指派</option>
                   {users.map((option) => (
                     <option key={option.id} value={option.id}>
-                      {option.username}（{option.role}）
+                      {option.username}（{roleLabels[option.role] || option.role}）
                     </option>
                   ))}
                 </select>
@@ -139,14 +206,31 @@ const TaskListPage = () => {
         ) : (
           <ul className="task-list">
             {tasks.map((task) => (
-              <li key={task.id} className={`task-item status-${task.status}`}>
+              <li key={task.id} className="task-item">
                 <div>
                   <h3>
                     <Link to={`/tasks/${task.id}`}>{task.title}</Link>
                   </h3>
                   <p>{task.description || '沒有描述'}</p>
+                  <p>地點：{task.location}</p>
+                  <p>預計完成：{task.expected_time ? new Date(task.expected_time).toLocaleString() : '未設定'}</p>
+                  <p>總工時：{(task.total_work_hours ?? 0).toFixed(2)} 小時</p>
                   <p>
-                    狀態：<strong>{task.status}</strong>
+                    任務進度：
+                    {isManager ? (
+                      <select
+                        value={task.status}
+                        onChange={(event) => handleStatusChange(task.id, event.target.value)}
+                      >
+                        {statusOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <strong>{task.status}</strong>
+                    )}
                   </p>
                   <p>指派給：{task.assigned_to || '未指派'}</p>
                 </div>
