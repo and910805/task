@@ -48,7 +48,9 @@ def create_task():
         return jsonify({"msg": "Title is required"}), 400
 
     if assigned_to_id:
-        User.query.get_or_404(assigned_to_id)
+        assignee = User.query.get_or_404(assigned_to_id)
+        if assignee.role == "admin":
+            return jsonify({"msg": "Cannot assign tasks to admin users"}), 400
 
     due_date = None
     if due_date_raw:
@@ -105,7 +107,9 @@ def update_task(task_id: int):
         task.status = status
     if assigned_to_id is not None:
         if assigned_to_id:
-            User.query.get_or_404(assigned_to_id)
+            assignee = User.query.get_or_404(assigned_to_id)
+            if assignee.role == "admin":
+                return jsonify({"msg": "Cannot assign tasks to admin users"}), 400
         task.assigned_to_id = assigned_to_id
     if due_date_raw is not None:
         if due_date_raw == "":

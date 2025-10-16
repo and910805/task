@@ -1,3 +1,5 @@
+import secrets
+
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import (
     create_access_token,
@@ -16,15 +18,22 @@ VALID_ROLES = {"worker", "site_supervisor", "hq_staff", "admin"}
 auth_bp = Blueprint("auth", __name__)
 
 
+def _generate_password() -> str:
+    """Return a random password safe for initial credentials."""
+
+    # 12-characters token encoded using URL-safe alphabet (~16 bytes entropy)
+    return secrets.token_urlsafe(9)
+
+
 @auth_bp.post("/register")
 @jwt_required(optional=True)
 def register():
     data = request.get_json() or {}
     username = (data.get("username") or "").strip()
-    password = data.get("password") or ""
+    password = data.get("password")
     role = data.get("role", "worker")
 
-    if not username or not password:
+    if not username:
         return jsonify({"msg": "Username and password are required"}), 400
 
     if role not in VALID_ROLES:
@@ -38,8 +47,24 @@ def register():
         current_role = claims.get("role")
     is_admin = current_role == "admin"
 
-    if user_count > 0 and not is_admin:
-        return jsonify({"msg": "Only administrators can create users"}), 403
+    is_initial_setup = user_count == 0
+
+    if not is_initial_setup and not is_admin and role != "worker":
+        return (
+            jsonify({"msg": "僅管理員可建立此角色"}),
+            403,
+        )
+
+    if not is_initial_setup and not is_admin:
+        role = "worker"
+
+    generated_password = None
+
+    if not password:
+        if role == "worker" and not (is_admin or is_initial_setup):
+            return jsonify({"msg": "Username and password are required"}), 400
+        password = _generate_password()
+        generated_password = password
 
     if User.query.filter_by(username=username).first():
         return jsonify({"msg": "Username already exists"}), 400
@@ -49,7 +74,11 @@ def register():
     db.session.add(user)
     db.session.commit()
 
-    return jsonify({"msg": "User created", "user": user.to_dict()}), 201
+    response = {"msg": "User created", "user": user.to_dict()}
+    if generated_password:
+        response["generated_password"] = generated_password
+
+    return jsonify(response), 201
 
 
 @auth_bp.post("/login")
@@ -83,6 +112,17 @@ def me():
 @role_required("admin")
 def list_users():
     users = User.query.order_by(User.username.asc()).all()
+    return jsonify([user.to_dict() for user in users])
+
+
+@auth_bp.get("/assignable-users")
+@role_required("site_supervisor", "hq_staff")
+def list_assignable_users():
+    users = (
+        User.query.filter(User.role != "admin")
+        .order_by(User.username.asc())
+        .all()
+    )
     return jsonify([user.to_dict() for user in users])
 
 

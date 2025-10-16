@@ -162,6 +162,11 @@ button:disabled {
   font-weight: 600;
 }
 
+.success-text {
+  color: #16a34a;
+  font-weight: 600;
+}
+
 .auth-container {
   min-height: 100vh;
   display: flex;
