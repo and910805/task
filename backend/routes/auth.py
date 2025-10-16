@@ -10,7 +10,9 @@ from flask_jwt_extended import (
 
 from decorators import role_required
 from extensions import db
-from models import User
+from sqlalchemy.orm import selectinload
+
+from models import Attachment, Task, TaskUpdate, User
 
 
 VALID_ROLES = {"worker", "site_supervisor", "hq_staff", "admin"}
@@ -108,11 +110,24 @@ def me():
     return jsonify(user.to_dict())
 
 
+def _serialize_user_with_tasks(user: User) -> dict:
+    data = user.to_dict()
+    data["assigned_tasks"] = [
+        {"id": task.id, "title": task.title, "status": task.status}
+        for task in user.assigned_tasks
+    ]
+    return data
+
+
 @auth_bp.get("/users")
 @role_required("admin")
 def list_users():
-    users = User.query.order_by(User.username.asc()).all()
-    return jsonify([user.to_dict() for user in users])
+    users = (
+        User.query.options(selectinload(User.assigned_tasks))
+        .order_by(User.username.asc())
+        .all()
+    )
+    return jsonify([_serialize_user_with_tasks(user) for user in users])
 
 
 @auth_bp.get("/assignable-users")
@@ -151,6 +166,47 @@ def update_user(user_id: int):
 @role_required("admin")
 def delete_user(user_id: int):
     user = User.query.get_or_404(user_id)
+    Task.query.filter_by(assigned_to_id=user.id).update(
+        {"assigned_to_id": None}, synchronize_session=False
+    )
+    Task.query.filter_by(assigned_by_id=user.id).update(
+        {"assigned_by_id": None}, synchronize_session=False
+    )
+    TaskUpdate.query.filter_by(user_id=user.id).update(
+        {"user_id": None}, synchronize_session=False
+    )
+    Attachment.query.filter_by(uploaded_by_id=user.id).update(
+        {"uploaded_by_id": None}, synchronize_session=False
+    )
     db.session.delete(user)
     db.session.commit()
     return jsonify({"msg": "User deleted"})
+
+
+@auth_bp.post("/change-password")
+@jwt_required()
+def change_password():
+    user_id = get_jwt_identity()
+    user = User.query.get_or_404(user_id)
+
+    data = request.get_json() or {}
+    current_password = (data.get("current_password") or "").strip()
+    new_password = (data.get("new_password") or "").strip()
+    confirm_password = (data.get("confirm_password") or "").strip()
+
+    if not current_password or not new_password or not confirm_password:
+        return jsonify({"msg": "請完整填寫密碼欄位"}), 400
+
+    if not user.check_password(current_password):
+        return jsonify({"msg": "舊密碼不正確"}), 400
+
+    if new_password != confirm_password:
+        return jsonify({"msg": "新密碼與確認密碼不一致"}), 400
+
+    if current_password == new_password:
+        return jsonify({"msg": "新密碼不可與舊密碼相同"}), 400
+
+    user.set_password(new_password)
+    db.session.commit()
+
+    return jsonify({"msg": "密碼已更新"})

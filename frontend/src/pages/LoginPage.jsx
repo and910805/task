@@ -1,14 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+import { roleOptions } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
-
-const roles = [
-  { value: 'worker', label: '工人' },
-  { value: 'site_supervisor', label: '現場主管' },
-  { value: 'hq_staff', label: '總部人員' },
-  { value: 'admin', label: '管理員' },
-];
 
 const LoginPage = () => {
   const navigate = useNavigate();
@@ -75,7 +69,7 @@ const LoginPage = () => {
           <label>
             角色
             <select name="role" value={form.role} onChange={handleChange}>
-              {roles.map((role) => (
+              {roleOptions.map((role) => (
                 <option key={role.value} value={role.value}>
                   {role.label}
                 </option>

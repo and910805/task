@@ -1,31 +1,21 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import api from '../api/client.js';
+import AppHeader from '../components/AppHeader.jsx';
+import { managerRoles, roleLabels } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
-const managerRoles = new Set(['site_supervisor', 'hq_staff', 'admin']);
-const roleLabels = {
-  worker: '工人',
-  site_supervisor: '現場主管',
-  hq_staff: '總部人員',
-  admin: '管理員',
-};
-
 const TaskListPage = () => {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
   const [form, setForm] = useState({ title: '', description: '', assigned_to_id: '' });
-  const [userForm, setUserForm] = useState({ username: '', role: 'site_supervisor' });
   const [error, setError] = useState('');
-  const [userError, setUserError] = useState('');
-  const [userSuccess, setUserSuccess] = useState('');
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
 
-  const isManager = useMemo(() => managerRoles.has(user?.role), [user?.role]);
-  const isAdmin = user?.role === 'admin';
+  const isManager = managerRoles.has(user?.role);
 
   const loadTasks = async () => {
     setLoading(true);
@@ -64,11 +54,6 @@ const TaskListPage = () => {
     setForm((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleUserFormChange = (event) => {
-    const { name, value } = event.target;
-    setUserForm((prev) => ({ ...prev, [name]: value }));
-  };
-
   const handleCreate = async (event) => {
     event.preventDefault();
     try {
@@ -87,41 +72,9 @@ const TaskListPage = () => {
     }
   };
 
-  const handleCreateUser = async (event) => {
-    event.preventDefault();
-    setUserError('');
-    setUserSuccess('');
-    try {
-      const payload = {
-        username: userForm.username,
-        role: userForm.role,
-      };
-      const { data } = await api.post('/auth/register', payload);
-      const message = data.generated_password
-        ? `已建立帳號，初始密碼：${data.generated_password}`
-        : '帳號建立成功。';
-      setUserSuccess(message);
-      setUserForm({ username: '', role: 'site_supervisor' });
-      await loadUsers();
-    } catch (err) {
-      const message = err.response?.data?.msg || '建立帳號失敗。';
-      setUserError(message);
-    }
-  };
-
   return (
     <div className="page">
-      <header className="page-header">
-        <h1>任務管理面板</h1>
-        <div className="header-actions">
-          <span>
-            目前登入：{user?.username}（{roleLabels[user?.role] || user?.role}）
-          </span>
-          <button type="button" onClick={logout}>
-            登出
-          </button>
-        </div>
-      </header>
+      <AppHeader title="任務管理面板" subtitle="檢視與指派任務" />
       {isManager && (
         <section className="panel">
           <button type="button" onClick={() => setCreating((prev) => !prev)}>
@@ -166,34 +119,6 @@ const TaskListPage = () => {
               <button type="submit">建立任務</button>
             </form>
           )}
-        </section>
-      )}
-      {isAdmin && (
-        <section className="panel">
-          <h2>建立主管／總部帳號</h2>
-          {userError && <p className="error-text">{userError}</p>}
-          {userSuccess && <p className="success-text">{userSuccess}</p>}
-          <form className="stack" onSubmit={handleCreateUser}>
-            <label>
-              帳號名稱
-              <input
-                name="username"
-                value={userForm.username}
-                onChange={handleUserFormChange}
-                placeholder="輸入帳號名稱"
-                required
-              />
-            </label>
-            <label>
-              角色
-              <select name="role" value={userForm.role} onChange={handleUserFormChange}>
-                <option value="site_supervisor">現場主管</option>
-                <option value="hq_staff">總部人員</option>
-                <option value="admin">管理員</option>
-              </select>
-            </label>
-            <button type="submit">建立帳號</button>
-          </form>
         </section>
       )}
       {error && <p className="error-text">{error}</p>}
