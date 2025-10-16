@@ -38,6 +38,9 @@ const LoginPage = () => {
 
   return (
     <div className="auth-container">
+      <div className="auth-brand">
+        <h1>立翔水電行</h1>
+      </div>
       <form className="auth-card" onSubmit={handleSubmit}>
         <h2>{mode === 'login' ? '登入' : '建立帳號'}</h2>
         {error && <p className="error-text">{error}</p>}
