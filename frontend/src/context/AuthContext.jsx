@@ -43,7 +43,10 @@ export const AuthProvider = ({ children }) => {
   const register = async (payload) => {
     setLoading(true);
     try {
-      const { data } = await api.post('/auth/register', payload);
+      const { data } = await api.post('/auth/register', {
+        ...payload,
+        role: 'worker',
+      });
       return data;
     } finally {
       setLoading(false);

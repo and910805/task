@@ -31,7 +31,7 @@ def _serve_file(filename: str):
 
     if getattr(storage, "use_s3", False):
         try:
-            url = storage.url_for(filename)
+            url = storage.url_for(filename, expires_in=3600)
         except StorageError:
             return jsonify({"msg": "Unable to generate download link"}), 500
         return redirect(url)
@@ -42,7 +42,10 @@ def _serve_file(filename: str):
         return jsonify({"msg": "File not found"}), 404
     except (AttributeError, StorageError):
         try:
-            url = storage.url_for(filename)
+            if getattr(storage, "use_s3", False):
+                url = storage.url_for(filename, expires_in=3600)
+            else:
+                url = storage.url_for(filename)
         except StorageError:
             return jsonify({"msg": "Unable to generate download link"}), 500
         return redirect(url)

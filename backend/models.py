@@ -167,7 +167,10 @@ class Attachment(db.Model):
             storage = None
         if storage:
             try:
-                url = storage.url_for(self.file_path)
+                if getattr(storage, "use_s3", False):
+                    url = storage.url_for(self.file_path, expires_in=3600)
+                else:
+                    url = storage.url_for(self.file_path)
             except Exception:  # pragma: no cover - defensive fallback
                 url = None
         if not url:
@@ -180,4 +183,6 @@ class Attachment(db.Model):
             "uploaded_at": self.uploaded_at.isoformat() if self.uploaded_at else None,
             "url": url,
             "transcript": self.transcript,
+            "uploaded_by": self.uploader.username if self.uploader else None,
+            "uploaded_by_id": self.uploaded_by_id,
         }

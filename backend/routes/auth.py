@@ -34,32 +34,30 @@ def register():
     data = request.get_json() or {}
     username = (data.get("username") or "").strip()
     password = data.get("password")
-    role = data.get("role", "worker")
+    requested_role_raw = data.get("role", "worker")
+    requested_role = (
+        requested_role_raw.strip()
+        if isinstance(requested_role_raw, str)
+        else str(requested_role_raw or "worker")
+    )
 
     if not username:
         return jsonify({"msg": "Username and password are required"}), 400
 
-    if role not in VALID_ROLES:
+    if requested_role not in VALID_ROLES:
         return jsonify({"msg": "Invalid role"}), 400
 
     user_count = User.query.count()
-    current_role = None
-    current_user_id = get_current_user_id()
-    if current_user_id:
-        claims = get_jwt()
-        current_role = claims.get("role")
-    is_admin = current_role == "admin"
-
     is_initial_setup = user_count == 0
 
-    if not is_initial_setup and not is_admin and role != "worker":
-        return (
-            jsonify({"msg": "僅管理員可建立此角色"}),
-            403,
-        )
+    try:
+        claims = get_jwt() or {}
+    except RuntimeError:
+        claims = {}
+    current_role = claims.get("role")
+    is_admin = current_role == "admin"
 
-    if not is_initial_setup and not is_admin:
-        role = "worker"
+    role = requested_role if is_admin else "worker"
 
     generated_password = None
 
@@ -77,7 +75,7 @@ def register():
     db.session.add(user)
     db.session.commit()
 
-    response = {"msg": "User created", "user": user.to_dict()}
+    response = {"msg": "User created", "user": user.to_dict(), "role": user.role}
     if generated_password:
         response["generated_password"] = generated_password
 

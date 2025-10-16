@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import api from '../api/client.js';
@@ -21,6 +21,11 @@ const initialForm = {
   assigned_to_id: '',
 };
 
+const statusFilterOptions = [
+  { value: 'all', label: '全部任務' },
+  ...statusOptions,
+];
+
 const TaskListPage = () => {
   const { user } = useAuth();
   const [tasks, setTasks] = useState([]);
@@ -29,11 +34,16 @@ const TaskListPage = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [assigningTaskId, setAssigningTaskId] = useState(null);
 
   const isManager = managerRoles.has(user?.role);
 
-  const loadTasks = async () => {
-    setLoading(true);
+  const loadTasks = async ({ showLoading = true } = {}) => {
+    if (showLoading) {
+      setLoading(true);
+    }
     setError('');
     try {
       const { data } = await api.get('/tasks');
@@ -42,7 +52,9 @@ const TaskListPage = () => {
       const message = err.response?.data?.msg || '無法取得任務列表。';
       setError(message);
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
   };
 
@@ -107,18 +119,92 @@ const TaskListPage = () => {
   };
 
   const handleStatusChange = async (taskId, nextStatus) => {
+    setError('');
     try {
       await api.patch(`/tasks/update/${taskId}`, { status: nextStatus });
-      await loadTasks();
+      await loadTasks({ showLoading: false });
     } catch (err) {
       const message = err.response?.data?.msg || '更新任務狀態失敗。';
       setError(message);
     }
   };
 
+  const handleAssigneeChange = async (taskId, value) => {
+    setError('');
+    setAssigningTaskId(taskId);
+    const nextValue = value === '' ? null : Number(value);
+    try {
+      await api.patch(`/tasks/update/${taskId}`, { assigned_to_id: nextValue });
+      await loadTasks({ showLoading: false });
+    } catch (err) {
+      const message = err.response?.data?.msg || '更新指派對象失敗。';
+      setError(message);
+    } finally {
+      setAssigningTaskId(null);
+    }
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await loadTasks({ showLoading: false });
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const filteredTasks = useMemo(() => {
+    if (statusFilter === 'all') {
+      return tasks;
+    }
+    return tasks.filter((task) => task.status === statusFilter);
+  }, [tasks, statusFilter]);
+
+  const statusBadgeClass = {
+    尚未接單: 'status-badge status-pending',
+    進行中: 'status-badge status-in-progress',
+    已完成: 'status-badge status-completed',
+  };
+
+  const headerActions = isManager ? (
+    <div className="task-toolbar">
+      <label>
+        顯示狀態
+        <select
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value)}
+        >
+          {statusFilterOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  ) : (
+    <button
+      type="button"
+      className="secondary-button"
+      onClick={handleRefresh}
+      disabled={refreshing}
+    >
+      {refreshing ? '刷新中…' : '🔄 刷新任務'}
+    </button>
+  );
+
+  const emptyStateMessage =
+    statusFilter === 'all'
+      ? '目前沒有任務。'
+      : '此狀態沒有符合的任務。';
+
   return (
     <div className="page">
-      <AppHeader title="任務管理面板" subtitle="檢視與指派任務" />
+      <AppHeader
+        title="任務管理面板"
+        subtitle="檢視與指派任務"
+        actions={headerActions}
+      />
       {isManager && (
         <section className="panel">
           <button type="button" onClick={() => setCreating((prev) => !prev)}>
@@ -201,41 +287,87 @@ const TaskListPage = () => {
         <h2>任務列表</h2>
         {loading ? (
           <p>載入中...</p>
-        ) : tasks.length === 0 ? (
-          <p>目前沒有任務。</p>
+        ) : filteredTasks.length === 0 ? (
+          <p>{emptyStateMessage}</p>
         ) : (
           <ul className="task-list">
-            {tasks.map((task) => (
-              <li key={task.id} className="task-item">
-                <div>
-                  <h3>
-                    <Link to={`/tasks/${task.id}`}>{task.title}</Link>
-                  </h3>
-                  <p>{task.description || '沒有描述'}</p>
-                  <p>地點：{task.location}</p>
-                  <p>預計完成：{task.expected_time ? new Date(task.expected_time).toLocaleString() : '未設定'}</p>
-                  <p>總工時：{(task.total_work_hours ?? 0).toFixed(2)} 小時</p>
-                  <p>
-                    任務進度：
-                    {isManager ? (
-                      <select
-                        value={task.status}
-                        onChange={(event) => handleStatusChange(task.id, event.target.value)}
-                      >
-                        {statusOptions.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <strong>{task.status}</strong>
-                    )}
-                  </p>
-                  <p>指派給：{task.assigned_to || '未指派'}</p>
-                </div>
-              </li>
-            ))}
+            {filteredTasks.map((task) => {
+              const assigneeMissing =
+                task.assigned_to_id &&
+                !users.some((option) => option.id === task.assigned_to_id);
+              return (
+                <li key={task.id} className="task-item">
+                  <div>
+                    <h3>
+                      <Link to={`/tasks/${task.id}`}>{task.title}</Link>
+                    </h3>
+                    <p>{task.description || '沒有描述'}</p>
+                    <p>地點：{task.location}</p>
+                    <p>
+                      預計完成：
+                      {task.expected_time
+                        ? new Date(task.expected_time).toLocaleString()
+                        : '未設定'}
+                    </p>
+                    <p>總工時：{(task.total_work_hours ?? 0).toFixed(2)} 小時</p>
+                    <p>
+                      任務進度：
+                      {isManager ? (
+                        <span className="task-status-control">
+                          <span className={statusBadgeClass[task.status] || 'status-badge'}>
+                            ● {task.status}
+                          </span>
+                          <select
+                            value={task.status}
+                            onChange={(event) =>
+                              handleStatusChange(task.id, event.target.value)
+                            }
+                          >
+                            {statusOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </span>
+                      ) : (
+                        <span className={statusBadgeClass[task.status] || 'status-badge'}>
+                          ● {task.status}
+                        </span>
+                      )}
+                    </p>
+                    <p>
+                      指派給：
+                      {isManager ? (
+                        <span className="task-status-control">
+                          <select
+                            value={task.assigned_to_id ?? ''}
+                            onChange={(event) =>
+                              handleAssigneeChange(task.id, event.target.value)
+                            }
+                            disabled={assigningTaskId === task.id}
+                          >
+                            <option value="">未指派</option>
+                            {assigneeMissing ? (
+                              <option value={task.assigned_to_id}>
+                                {task.assigned_to || `使用者 #${task.assigned_to_id}`}
+                              </option>
+                            ) : null}
+                            {users.map((option) => (
+                              <option key={option.id} value={option.id}>
+                                {option.username}（{roleLabels[option.role] || option.role}）
+                              </option>
+                            ))}
+                          </select>
+                        </span>
+                      ) : (
+                        task.assigned_to || '未指派'
+                      )}
+                    </p>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

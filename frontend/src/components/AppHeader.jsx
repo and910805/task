@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { roleLabels } from '../constants/roles.js';
 
-const AppHeader = ({ title, subtitle, children }) => {
+const AppHeader = ({ title, subtitle, actions = null, children }) => {
   const { user, logout } = useAuth();
   const isAdmin = user?.role === 'admin';
 
@@ -15,6 +15,7 @@ const AppHeader = ({ title, subtitle, children }) => {
         {children}
       </div>
       <div className="header-actions">
+        {actions ? <div className="header-extra">{actions}</div> : null}
         <nav className="header-nav">
           <Link to="/">任務列表</Link>
           {isAdmin ? <Link to="/admin">使用者管理</Link> : null}

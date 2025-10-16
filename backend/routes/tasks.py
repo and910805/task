@@ -107,6 +107,21 @@ def _normalize_user_id(value):
         return None
 
 
+def _serialize_task_for_viewer(task: Task, role: str | None, user_id: int | None) -> dict:
+    data = task.to_dict()
+    if role == "worker":
+        attachments = data.get("attachments") or []
+        if user_id is None:
+            data["attachments"] = []
+        else:
+            data["attachments"] = [
+                attachment
+                for attachment in attachments
+                if attachment.get("uploaded_by_id") == user_id
+            ]
+    return data
+
+
 @tasks_bp.get("/")
 @jwt_required()
 def list_tasks():
@@ -124,7 +139,8 @@ def list_tasks():
         )
 
     tasks = query.order_by(Task.created_at.desc()).all()
-    return jsonify([task.to_dict() for task in tasks])
+    payload = [_serialize_task_for_viewer(task, role, user_id) for task in tasks]
+    return jsonify(payload)
 
 
 def _handle_create_task(data, creator_id):
@@ -225,7 +241,7 @@ def get_task(task_id: int):
     if permission_error:
         return permission_error
 
-    return jsonify(task.to_dict())
+    return jsonify(_serialize_task_for_viewer(task, role, user_id))
 
 
 def _apply_task_updates(task: Task, data: dict):

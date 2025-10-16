@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { roleOptions } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
 const LoginPage = () => {
@@ -9,7 +8,7 @@ const LoginPage = () => {
   const { login, register, loading } = useAuth();
   const [mode, setMode] = useState('login');
   const [error, setError] = useState('');
-  const [form, setForm] = useState({ username: '', password: '', role: 'worker' });
+  const [form, setForm] = useState({ username: '', password: '' });
   const [success, setSuccess] = useState('');
 
   const handleChange = (event) => {
@@ -26,9 +25,9 @@ const LoginPage = () => {
         await login({ username: form.username, password: form.password });
         navigate('/');
       } else {
-        await register(form);
+        await register({ username: form.username, password: form.password });
         setSuccess('帳號建立成功，請使用該帳號登入。');
-        setForm({ username: '', password: '', role: 'worker' });
+        setForm({ username: '', password: '' });
         setMode('login');
       }
     } catch (err) {
@@ -65,18 +64,6 @@ const LoginPage = () => {
             required
           />
         </label>
-        {mode === 'register' && (
-          <label>
-            角色
-            <select name="role" value={form.role} onChange={handleChange}>
-              {roleOptions.map((role) => (
-                <option key={role.value} value={role.value}>
-                  {role.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
         <button type="submit" disabled={loading}>
           {mode === 'login' ? '登入' : '註冊'}
         </button>
