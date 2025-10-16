@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import api from '../api/client.js';
@@ -44,7 +44,7 @@ const formatHours = (hours) => Number(hours ?? 0).toFixed(2);
 const TaskDetailPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { token, user } = useAuth();
   const [task, setTask] = useState(null);
   const [error, setError] = useState('');
   const [assignmentError, setAssignmentError] = useState('');
@@ -111,17 +111,41 @@ const TaskDetailPage = () => {
     });
   }, [task]);
 
+  const buildAttachmentUrl = useCallback(
+    (url) => {
+      if (!url) return url;
+      if (/^https?:\/\//i.test(url)) {
+        return url;
+      }
+      if (!token) {
+        return url;
+      }
+      const separator = url.includes('?') ? '&' : '?';
+      return `${url}${separator}token=${encodeURIComponent(token)}`;
+    },
+    [token],
+  );
+
+  const resolvedAttachments = useMemo(
+    () =>
+      (task?.attachments ?? []).map((item) => ({
+        ...item,
+        url: buildAttachmentUrl(item.url),
+      })),
+    [task, buildAttachmentUrl],
+  );
+
   const photoAttachments = useMemo(
-    () => (task?.attachments ?? []).filter((item) => item.file_type === 'image'),
-    [task],
+    () => resolvedAttachments.filter((item) => item.file_type === 'image'),
+    [resolvedAttachments],
   );
   const audioAttachments = useMemo(
-    () => (task?.attachments ?? []).filter((item) => item.file_type === 'audio'),
-    [task],
+    () => resolvedAttachments.filter((item) => item.file_type === 'audio'),
+    [resolvedAttachments],
   );
   const signatureAttachment = useMemo(
-    () => (task?.attachments ?? []).find((item) => item.file_type === 'signature') || null,
-    [task],
+    () => resolvedAttachments.find((item) => item.file_type === 'signature') || null,
+    [resolvedAttachments],
   );
   const timeEntries = useMemo(() => task?.time_entries ?? [], [task]);
   const activeEntry = useMemo(

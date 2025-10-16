@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from flask import Blueprint, current_app, jsonify, redirect, request, send_from_directory
-from flask_jwt_extended import get_jwt, jwt_required
+from flask_jwt_extended import (
+    decode_token,
+    get_jwt,
+    jwt_required,
+    verify_jwt_in_request,
+)
+from flask_jwt_extended.exceptions import NoAuthorizationError
 
 from models import Task
 from services.attachments import create_file_attachment, create_signature_attachment
@@ -51,6 +59,28 @@ def _serve_file(filename: str):
         return redirect(url)
 
     return send_from_directory(path.parent, path.name)
+
+
+def _has_valid_download_token() -> bool:
+    try:
+        verify_jwt_in_request()
+        return True
+    except NoAuthorizationError:
+        token_value = request.args.get("token", type=str)
+        if not token_value:
+            return False
+        try:
+            decoded = decode_token(token_value)
+        except Exception:
+            return False
+
+        expiry = decoded.get("exp")
+        if expiry is not None:
+            expires_at = datetime.fromtimestamp(expiry, tz=timezone.utc)
+            if expires_at <= datetime.now(timezone.utc):
+                return False
+
+        return True
 
 
 @upload_bp.post("/tasks/<int:task_id>/images")
@@ -149,7 +179,8 @@ def upload_signature(task_id: int):
 
 
 @upload_bp.get("/files/<path:filename>")
-@jwt_required()
 def download_file(filename: str):
+    if not _has_valid_download_token():
+        return jsonify({"msg": "Missing or invalid authentication token"}), 401
     return _serve_file(filename)
 
