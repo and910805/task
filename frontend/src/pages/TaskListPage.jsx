@@ -214,6 +214,7 @@ const TaskListPage = () => {
                   <p>{task.description || '沒有描述'}</p>
                   <p>地點：{task.location}</p>
                   <p>預計完成：{task.expected_time ? new Date(task.expected_time).toLocaleString() : '未設定'}</p>
+                  <p>總工時：{(task.total_work_hours ?? 0).toFixed(2)} 小時</p>
                   <p>
                     任務進度：
                     {isManager ? (

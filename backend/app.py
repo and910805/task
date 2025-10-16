@@ -5,6 +5,7 @@ from flask import Flask, abort, jsonify, send_from_directory
 from flask_cors import CORS
 
 from extensions import db, jwt
+from storage import create_storage, StorageError
 
 
 def create_app() -> Flask:
@@ -14,8 +15,14 @@ def create_app() -> Flask:
 
     app = Flask(__name__, static_folder=frontend_dist_path, static_url_path="/")
 
-    database_path = os.path.join(os.path.dirname(__file__), "task_manager.db")
-    uploads_path = os.path.join(os.path.dirname(__file__), "uploads")
+    base_dir = os.path.dirname(__file__)
+    database_path = os.path.join(base_dir, "task_manager.db")
+    uploads_path = os.path.join(base_dir, "uploads")
+    reports_path = os.path.join(uploads_path, "reports")
+    images_path = os.path.join(uploads_path, "images")
+    audio_path = os.path.join(uploads_path, "audio")
+    signature_path = os.path.join(uploads_path, "signature")
+    other_path = os.path.join(uploads_path, "other")
 
     app.config.update(
         SECRET_KEY="super-secret-key",
@@ -24,14 +31,39 @@ def create_app() -> Flask:
         JWT_SECRET_KEY="jwt-secret-key",
         JWT_ACCESS_TOKEN_EXPIRES=timedelta(hours=8),
         UPLOAD_FOLDER=uploads_path,
+        UPLOAD_IMAGE_DIR=images_path,
+        UPLOAD_AUDIO_DIR=audio_path,
+        UPLOAD_SIGNATURE_DIR=signature_path,
+        REPORTS_DIR=reports_path,
+        STORAGE_MODE=os.environ.get("STORAGE_MODE", "local"),
+        S3_BUCKET=os.environ.get("S3_BUCKET"),
+        S3_BASE_PATH=os.environ.get("S3_BASE_PATH", ""),
+        S3_REGION_NAME=os.environ.get("S3_REGION_NAME"),
+        S3_ENDPOINT_URL=os.environ.get("S3_ENDPOINT_URL"),
+        S3_URL_EXPIRY=int(os.environ.get("S3_URL_EXPIRY", "3600")),
         MAX_CONTENT_LENGTH=16 * 1024 * 1024,
     )
 
-    os.makedirs(uploads_path, exist_ok=True)
+    for folder in (
+        uploads_path,
+        reports_path,
+        images_path,
+        audio_path,
+        signature_path,
+        other_path,
+    ):
+        os.makedirs(folder, exist_ok=True)
 
     CORS(app)
     db.init_app(app)
     jwt.init_app(app)
+
+    try:
+        storage_backend = create_storage(app.config)
+    except StorageError as exc:
+        raise RuntimeError(f"Failed to configure storage backend: {exc}") from exc
+
+    app.extensions["storage"] = storage_backend
 
     @jwt.user_identity_loader
     def _user_identity_lookup(identity):
@@ -52,10 +84,14 @@ def create_app() -> Flask:
         return jsonify({"msg": "Authentication token has expired"}), 401
 
     from routes.auth import auth_bp
+    from routes.export import export_bp
     from routes.tasks import tasks_bp
+    from routes.uploads import upload_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(tasks_bp, url_prefix="/api/tasks")
+    app.register_blueprint(upload_bp, url_prefix="/api/upload")
+    app.register_blueprint(export_bp, url_prefix="/api/export")
 
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")

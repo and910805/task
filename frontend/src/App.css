@@ -243,6 +243,111 @@ button:disabled {
   margin: 0 0 0.5rem;
 }
 
+.tab-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tab {
+  border-radius: 999px;
+  border: 1px solid #cbd5f5;
+  background: #eef2ff;
+  color: #3730a3;
+  padding: 0.45rem 1.2rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tab:hover {
+  background: #e0e7ff;
+}
+
+.tab.active {
+  background: linear-gradient(135deg, #6366f1, #2563eb);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 12px 24px rgba(79, 70, 229, 0.25);
+}
+
+.attachment-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 1rem;
+}
+
+.attachment-grid figure {
+  margin: 0;
+  background: #f8fafc;
+  border-radius: 12px;
+  padding: 0.75rem;
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.attachment-grid img {
+  width: 100%;
+  height: 140px;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.signature-pad {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.signature-canvas {
+  width: 100%;
+  max-width: 520px;
+  background: #fff;
+  border-radius: 12px;
+  border: 2px dashed #cbd5f5;
+  touch-action: none;
+}
+
+.signature-actions {
+  display: flex;
+  gap: 1rem;
+}
+
+.signature-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.signature-preview img {
+  max-width: 360px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.recorder {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.recorder-controls {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.hint-text {
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.time-actions {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
 .error-text {
   color: #dc2626;
   font-weight: 600;

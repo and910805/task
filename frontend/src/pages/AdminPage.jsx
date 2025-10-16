@@ -13,6 +13,9 @@ const AdminPage = () => {
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
   const [userCount, setUserCount] = useState(0);
+  const [exportError, setExportError] = useState('');
+  const [exportSuccess, setExportSuccess] = useState('');
+  const [exporting, setExporting] = useState(false);
   const [form, setForm] = useState({
     name: '',
     username: '',
@@ -46,6 +49,27 @@ const AdminPage = () => {
   useEffect(() => {
     loadUsers();
   }, []);
+
+  const handleExport = async () => {
+    setExportError('');
+    setExportSuccess('');
+    setExporting(true);
+    try {
+      const { data } = await api.get('/export/tasks');
+      const downloadUrl = data?.url;
+      if (downloadUrl) {
+        window.open(downloadUrl, '_blank', 'noopener');
+        setExportSuccess('報表匯出完成，已在新分頁開啟下載。');
+      } else {
+        setExportSuccess('報表已產生。');
+      }
+    } catch (err) {
+      const message = err.response?.data?.msg || '匯出報表失敗。';
+      setExportError(message);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const handleFormChange = (event) => {
     const { name, value } = event.target;
@@ -111,6 +135,15 @@ const AdminPage = () => {
   return (
     <div className="page">
       <AppHeader title="使用者管理" subtitle="建立、檢視與移除系統帳號" />
+      <section className="panel">
+        <h2>匯出報表</h2>
+        <p className="panel-hint">產出任務、附件與工時的 Excel 報表。</p>
+        {exportError && <p className="error-text">{exportError}</p>}
+        {exportSuccess && <p className="success-text">{exportSuccess}</p>}
+        <button type="button" onClick={handleExport} disabled={exporting}>
+          {exporting ? '匯出中…' : '匯出任務報表'}
+        </button>
+      </section>
       <section className="panel">
         <div className="panel-header">
           <h2>新增帳號</h2>

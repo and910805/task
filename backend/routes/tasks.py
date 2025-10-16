@@ -1,14 +1,17 @@
 import os
-import uuid
 from datetime import datetime, timezone
 
-from flask import Blueprint, current_app, jsonify, request, send_from_directory
+from flask import Blueprint, current_app, jsonify, redirect, request, send_file
 from flask_jwt_extended import get_jwt, jwt_required
 from sqlalchemy import or_
 
 from decorators import role_required
 from extensions import db
-from models import Attachment, Task, TaskUpdate, User
+from models import Task, TaskUpdate, User
+from services.attachments import (
+    create_file_attachment,
+    create_signature_attachment,
+)
 from utils import get_current_user_id
 
 
@@ -17,6 +20,14 @@ tasks_bp = Blueprint("tasks", __name__)
 TASK_STATUS_OPTIONS = ["尚未接單", "進行中", "已完成"]
 ALLOWED_STATUSES = set(TASK_STATUS_OPTIONS)
 ALLOWED_ATTACHMENT_TYPES = {"image", "audio", "signature", "other"}
+
+
+def _ensure_task_permission(task: Task, role: str | None, user_id: int | None, *, message: str = "You do not have access to this task"):
+    if user_id is None:
+        return jsonify({"msg": "Invalid authentication token"}), 401
+    if role == "worker" and task.assigned_to_id != user_id:
+        return jsonify({"msg": message}), 403
+    return None
 
 
 def _parse_datetime(value, field_name: str, *, required: bool = False):
@@ -208,11 +219,11 @@ def get_task(task_id: int):
     task = Task.query.get_or_404(task_id)
     role = (get_jwt() or {}).get("role")
     user_id = get_current_user_id()
-    if user_id is None:
-        return jsonify({"msg": "Invalid authentication token"}), 401
-
-    if role == "worker" and task.assigned_to_id != user_id:
-        return jsonify({"msg": "You do not have access to this task"}), 403
+    permission_error = _ensure_task_permission(
+        task, role, user_id, message="You do not have access to this task"
+    )
+    if permission_error:
+        return permission_error
 
     return jsonify(task.to_dict())
 
@@ -315,12 +326,12 @@ def add_update(task_id: int):
     note = data.get("note")
 
     user_id = get_current_user_id()
-    if user_id is None:
-        return jsonify({"msg": "Invalid authentication token"}), 401
     role = (get_jwt() or {}).get("role")
-
-    if role == "worker" and task.assigned_to_id != user_id:
-        return jsonify({"msg": "You cannot update this task"}), 403
+    permission_error = _ensure_task_permission(
+        task, role, user_id, message="You cannot update this task"
+    )
+    if permission_error:
+        return permission_error
 
     if not status and not note:
         return jsonify({"msg": "Status or note is required"}), 400
@@ -344,17 +355,84 @@ def add_update(task_id: int):
     return jsonify(update.to_dict()), 201
 
 
+@tasks_bp.post("/<int:task_id>/time/start")
+@jwt_required()
+def start_time_tracking(task_id: int):
+    task = Task.query.get_or_404(task_id)
+    role = (get_jwt() or {}).get("role")
+    user_id = get_current_user_id()
+    permission_error = _ensure_task_permission(
+        task, role, user_id, message="You cannot start timing for this task"
+    )
+    if permission_error:
+        return permission_error
+
+    active_entry = (
+        TaskUpdate.query.filter_by(task_id=task.id, user_id=user_id)
+        .filter(TaskUpdate.start_time.isnot(None), TaskUpdate.end_time.is_(None))
+        .order_by(TaskUpdate.created_at.desc())
+        .first()
+    )
+    if active_entry:
+        return jsonify({"msg": "目前已有進行中的工時紀錄"}), 400
+
+    now = datetime.utcnow()
+    entry = TaskUpdate(
+        task_id=task.id,
+        user_id=user_id,
+        start_time=now,
+        status="進行中",
+    )
+    task.updated_at = now
+    db.session.add(entry)
+    db.session.commit()
+    return jsonify(entry.to_time_dict()), 201
+
+
+@tasks_bp.post("/<int:task_id>/time/stop")
+@jwt_required()
+def stop_time_tracking(task_id: int):
+    task = Task.query.get_or_404(task_id)
+    role = (get_jwt() or {}).get("role")
+    user_id = get_current_user_id()
+    permission_error = _ensure_task_permission(
+        task, role, user_id, message="You cannot stop timing for this task"
+    )
+    if permission_error:
+        return permission_error
+
+    active_entry = (
+        TaskUpdate.query.filter_by(task_id=task.id, user_id=user_id)
+        .filter(TaskUpdate.start_time.isnot(None), TaskUpdate.end_time.is_(None))
+        .order_by(TaskUpdate.created_at.desc())
+        .first()
+    )
+    if not active_entry:
+        return jsonify({"msg": "尚未開始工時"}), 400
+
+    now = datetime.utcnow()
+    active_entry.end_time = now
+    if active_entry.start_time:
+        delta = now - active_entry.start_time
+        active_entry.work_hours = round(delta.total_seconds() / 3600, 2)
+    else:
+        active_entry.work_hours = 0.0
+    task.updated_at = now
+    db.session.commit()
+    return jsonify(active_entry.to_time_dict())
+
+
 @tasks_bp.post("/<int:task_id>/attachments")
 @jwt_required()
 def upload_attachment(task_id: int):
     task = Task.query.get_or_404(task_id)
     role = (get_jwt() or {}).get("role")
     user_id = get_current_user_id()
-    if user_id is None:
-        return jsonify({"msg": "Invalid authentication token"}), 401
-
-    if role == "worker" and task.assigned_to_id != user_id:
-        return jsonify({"msg": "You cannot upload for this task"}), 403
+    permission_error = _ensure_task_permission(
+        task, role, user_id, message="You cannot upload for this task"
+    )
+    if permission_error:
+        return permission_error
 
     if "file" not in request.files:
         return jsonify({"msg": "No file provided"}), 400
@@ -363,27 +441,26 @@ def upload_attachment(task_id: int):
     if file.filename == "":
         return jsonify({"msg": "File name is required"}), 400
 
-    uploads_dir = current_app.config["UPLOAD_FOLDER"]
-    _, ext = os.path.splitext(file.filename)
-    safe_name = f"{uuid.uuid4().hex}{ext}"
-    file_path = os.path.join(uploads_dir, safe_name)
-    file.save(file_path)
-
     file_type = request.form.get("file_type", "other")
     if file_type not in ALLOWED_ATTACHMENT_TYPES:
         file_type = "other"
     note = request.form.get("note")
+    transcript = request.form.get("transcript")
 
-    attachment = Attachment(
-        task_id=task.id,
-        uploaded_by_id=user_id,
-        file_type=file_type,
-        original_name=file.filename,
-        file_path=safe_name,
-        note=note,
-    )
-    db.session.add(attachment)
-    db.session.commit()
+    try:
+        attachment = create_file_attachment(
+            task,
+            user_id=user_id,
+            uploaded_file=file,
+            file_type=file_type,
+            note=note,
+            transcript=transcript,
+        )
+    except ValueError as exc:
+        return jsonify({"msg": str(exc)}), 400
+    except RuntimeError as exc:
+        current_app.logger.error("Attachment upload failed: %s", exc)
+        return jsonify({"msg": "Unable to store attachment"}), 500
 
     return jsonify(attachment.to_dict()), 201
 
@@ -391,5 +468,19 @@ def upload_attachment(task_id: int):
 @tasks_bp.get("/attachments/<path:filename>")
 @jwt_required()
 def get_attachment(filename: str):
-    uploads_dir = current_app.config["UPLOAD_FOLDER"]
-    return send_from_directory(uploads_dir, filename)
+    storage = current_app.extensions.get("storage")
+    if storage is None:
+        return jsonify({"msg": "Storage backend is not configured"}), 500
+
+    if hasattr(storage, "local_path"):
+        try:
+            path = storage.local_path(filename)
+        except FileNotFoundError:
+            return jsonify({"msg": "File not found"}), 404
+        return send_file(path)
+
+    try:
+        url = storage.url_for(filename)
+    except Exception:
+        return jsonify({"msg": "Unable to generate download link"}), 500
+    return redirect(url)
