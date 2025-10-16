@@ -1,6 +1,6 @@
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, request, send_from_directory
 from flask_jwt_extended import get_jwt, jwt_required
@@ -32,10 +32,30 @@ def _parse_datetime(value, field_name: str, *, required: bool = False):
             return None, jsonify({"msg": f"{field_name} is required"}), 400
         return None, None, None
 
-    try:
-        parsed = datetime.fromisoformat(value)
-    except (TypeError, ValueError):
+    parsed = None
+
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        candidate = value
+        if candidate.endswith("Z"):
+            candidate = candidate[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(candidate)
+        except ValueError:
+            # Accept strings without the "T" separator as a last resort.
+            alternate = candidate.replace("T", " ", 1)
+            try:
+                parsed = datetime.fromisoformat(alternate)
+            except ValueError:
+                parsed = None
+
+    if parsed is None:
         return None, jsonify({"msg": f"Invalid {field_name} format"}), 400
+
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+
     return parsed, None, None
 
 

@@ -9,6 +9,7 @@ from flask_jwt_extended import (
 
 from decorators import role_required
 from extensions import db
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import selectinload
 
 from models import Attachment, Task, TaskUpdate, User
@@ -125,12 +126,17 @@ def _serialize_user_with_tasks(user: User) -> dict:
 @auth_bp.get("/users")
 @role_required("admin")
 def list_users():
-    users = (
-        User.query.options(selectinload(User.assigned_tasks))
-        .order_by(User.username.asc())
-        .all()
-    )
-    payload = [_serialize_user_with_tasks(user) for user in users]
+    try:
+        users = (
+            User.query.options(selectinload(User.assigned_tasks))
+            .order_by(User.username.asc())
+            .all()
+        )
+        payload = [_serialize_user_with_tasks(user) for user in users]
+    except OperationalError:
+        db.session.rollback()
+        users = User.query.order_by(User.username.asc()).all()
+        payload = [user.to_dict() | {"assigned_tasks": []} for user in users]
     return jsonify({"users": payload, "total": len(payload)})
 
 
