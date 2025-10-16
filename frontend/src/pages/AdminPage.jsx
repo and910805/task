@@ -6,7 +6,7 @@ import { roleLabels, roleOptions } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
 const AdminPage = () => {
-  const { user, logout } = useAuth();
+  const { user, token, logout } = useAuth();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -58,7 +58,12 @@ const AdminPage = () => {
       const { data } = await api.get('/export/tasks');
       const downloadUrl = data?.url;
       if (downloadUrl) {
-        window.open(downloadUrl, '_blank', 'noopener');
+        const resolvedUrl = /^https?:\/\//i.test(downloadUrl)
+          ? downloadUrl
+          : token
+            ? `${downloadUrl}${downloadUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
+            : downloadUrl;
+        window.open(resolvedUrl, '_blank', 'noopener');
         setExportSuccess('報表匯出完成，已在新分頁開啟下載。');
       } else {
         setExportSuccess('報表已產生。');
