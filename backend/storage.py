@@ -87,8 +87,12 @@ class S3Storage:
         region_name: Optional[str] = None,
         default_expiry: int = 3600,
         base_prefix: str = "uploads",
+        endpoint_url: Optional[str] = None,
     ) -> None:
-        self._client = boto3.client("s3", region_name=region_name)
+        client_kwargs = {"region_name": region_name}
+        if endpoint_url:
+            client_kwargs["endpoint_url"] = endpoint_url
+        self._client = boto3.client("s3", **client_kwargs)
         self._bucket = bucket
         self._expiry = default_expiry
         self._base_prefix = base_prefix.strip("/")
@@ -150,16 +154,35 @@ class S3Storage:
             raise StorageError("Failed to generate S3 download URL") from exc
 
 
+def _coerce_bool(value: Optional[str]) -> Optional[bool]:
+    if value is None:
+        return None
+    value = value.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
 def _should_use_s3(config: dict) -> bool:
+    flag = _coerce_bool(os.getenv("TASKGO_USE_S3"))
+    if flag is None:
+        flag = _coerce_bool(os.getenv("USE_S3"))
+    if flag is None:
+        config_flag = config.get("USE_S3")
+        if isinstance(config_flag, str):
+            flag = _coerce_bool(config_flag)
+        elif isinstance(config_flag, bool):
+            flag = config_flag
+    if flag is not None:
+        return bool(flag)
+
     mode = (config.get("STORAGE_MODE") or "").lower()
     if mode == "s3":
         return True
     if mode == "local":
         return False
-
-    env_flag = os.getenv("TASKGO_USE_S3")
-    if env_flag is not None:
-        return env_flag.lower() in {"1", "true", "yes"}
 
     return USE_S3
 
@@ -169,6 +192,7 @@ def create_storage(config: dict) -> LocalStorage | S3Storage:
         bucket = config.get("S3_BUCKET") or S3_BUCKET
         region = config.get("S3_REGION_NAME") or S3_REGION
         base_prefix = config.get("S3_BASE_PATH") or "uploads"
+        endpoint_url = config.get("S3_ENDPOINT_URL")
         if not bucket:
             raise StorageError("S3 bucket not found")
         return S3Storage(
@@ -176,6 +200,7 @@ def create_storage(config: dict) -> LocalStorage | S3Storage:
             region_name=region,
             default_expiry=config.get("S3_URL_EXPIRY", 3600),
             base_prefix=base_prefix,
+            endpoint_url=endpoint_url,
         )
 
     uploads_dir = config.get("UPLOAD_FOLDER")
