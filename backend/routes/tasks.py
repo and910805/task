@@ -3,12 +3,13 @@ import uuid
 from datetime import datetime
 
 from flask import Blueprint, current_app, jsonify, request, send_from_directory
-from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
+from flask_jwt_extended import get_jwt, jwt_required
 from sqlalchemy import or_
 
 from decorators import role_required
 from extensions import db
 from models import Attachment, Task, TaskUpdate, User
+from utils import get_current_user_id
 
 
 tasks_bp = Blueprint("tasks", __name__)
@@ -20,7 +21,9 @@ ALLOWED_ATTACHMENT_TYPES = {"image", "audio", "signature", "other"}
 @tasks_bp.get("/")
 @jwt_required()
 def list_tasks():
-    user_id = get_jwt_identity()
+    user_id = get_current_user_id()
+    if user_id is None:
+        return jsonify({"msg": "Invalid authentication token"}), 401
     role = (get_jwt() or {}).get("role")
 
     query = Task.query
@@ -38,6 +41,10 @@ def list_tasks():
 @tasks_bp.post("/")
 @role_required("site_supervisor", "hq_staff")
 def create_task():
+    creator_id = get_current_user_id()
+    if creator_id is None:
+        return jsonify({"msg": "Invalid authentication token"}), 401
+
     data = request.get_json() or {}
     title = (data.get("title") or "").strip()
     description = data.get("description")
@@ -63,7 +70,7 @@ def create_task():
         title=title,
         description=description,
         assigned_to_id=assigned_to_id,
-        assigned_by_id=get_jwt_identity(),
+        assigned_by_id=creator_id,
         due_date=due_date,
     )
     db.session.add(task)
@@ -77,7 +84,9 @@ def create_task():
 def get_task(task_id: int):
     task = Task.query.get_or_404(task_id)
     role = (get_jwt() or {}).get("role")
-    user_id = get_jwt_identity()
+    user_id = get_current_user_id()
+    if user_id is None:
+        return jsonify({"msg": "Invalid authentication token"}), 401
 
     if role == "worker" and task.assigned_to_id != user_id:
         return jsonify({"msg": "You do not have access to this task"}), 403
@@ -132,7 +141,9 @@ def add_update(task_id: int):
     status = data.get("status")
     note = data.get("note")
 
-    user_id = get_jwt_identity()
+    user_id = get_current_user_id()
+    if user_id is None:
+        return jsonify({"msg": "Invalid authentication token"}), 401
     role = (get_jwt() or {}).get("role")
 
     if role == "worker" and task.assigned_to_id != user_id:
@@ -159,7 +170,9 @@ def add_update(task_id: int):
 def upload_attachment(task_id: int):
     task = Task.query.get_or_404(task_id)
     role = (get_jwt() or {}).get("role")
-    user_id = get_jwt_identity()
+    user_id = get_current_user_id()
+    if user_id is None:
+        return jsonify({"msg": "Invalid authentication token"}), 401
 
     if role == "worker" and task.assigned_to_id != user_id:
         return jsonify({"msg": "You cannot upload for this task"}), 403

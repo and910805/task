@@ -4,7 +4,6 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import (
     create_access_token,
     get_jwt,
-    get_jwt_identity,
     jwt_required,
 )
 
@@ -13,6 +12,7 @@ from extensions import db
 from sqlalchemy.orm import selectinload
 
 from models import Attachment, Task, TaskUpdate, User
+from utils import get_current_user_id
 
 
 VALID_ROLES = {"worker", "site_supervisor", "hq_staff", "admin"}
@@ -43,7 +43,7 @@ def register():
 
     user_count = User.query.count()
     current_role = None
-    current_user_id = get_jwt_identity()
+    current_user_id = get_current_user_id()
     if current_user_id:
         claims = get_jwt()
         current_role = claims.get("role")
@@ -97,7 +97,7 @@ def login():
         return jsonify({"msg": "Invalid credentials"}), 401
 
     additional_claims = {"role": user.role}
-    token = create_access_token(identity=user.id, additional_claims=additional_claims)
+    token = create_access_token(identity=str(user.id), additional_claims=additional_claims)
 
     return jsonify({"token": token, "user": user.to_dict()})
 
@@ -105,7 +105,10 @@ def login():
 @auth_bp.get("/me")
 @jwt_required()
 def me():
-    user_id = get_jwt_identity()
+    user_id = get_current_user_id()
+    if user_id is None:
+        return jsonify({"msg": "Invalid authentication token"}), 401
+
     user = User.query.get_or_404(user_id)
     return jsonify(user.to_dict())
 
@@ -186,7 +189,10 @@ def delete_user(user_id: int):
 @auth_bp.post("/change-password")
 @jwt_required()
 def change_password():
-    user_id = get_jwt_identity()
+    user_id = get_current_user_id()
+    if user_id is None:
+        return jsonify({"msg": "Invalid authentication token"}), 401
+
     user = User.query.get_or_404(user_id)
 
     data = request.get_json() or {}
