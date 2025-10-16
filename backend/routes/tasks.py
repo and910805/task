@@ -12,6 +12,7 @@ from services.attachments import (
     create_file_attachment,
     create_signature_attachment,
 )
+from storage import StorageError
 from utils import get_current_user_id
 
 
@@ -331,6 +332,30 @@ def update_task_patch(task_id: int):
         return error
 
     return _update_task_response(task)
+
+
+@tasks_bp.delete("/<int:task_id>")
+@role_required("site_supervisor", "hq_staff")
+def delete_task(task_id: int):
+    task = Task.query.get_or_404(task_id)
+
+    storage = current_app.extensions.get("storage")
+    if storage:
+        for attachment in list(task.attachments):
+            try:
+                storage.delete(attachment.file_path)
+            except StorageError as exc:
+                current_app.logger.warning(
+                    "Failed to delete attachment %s for task %s: %s",
+                    attachment.file_path,
+                    task.id,
+                    exc,
+                )
+
+    db.session.delete(task)
+    db.session.commit()
+
+    return jsonify({"msg": "Task deleted"})
 
 
 @tasks_bp.post("/<int:task_id>/updates")

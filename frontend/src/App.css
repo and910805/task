@@ -256,6 +256,12 @@ button:disabled {
   gap: 0.5rem;
 }
 
+.task-actions {
+  margin-top: 0.75rem;
+  display: flex;
+  gap: 0.5rem;
+}
+
 .task-toolbar {
   display: flex;
   align-items: center;

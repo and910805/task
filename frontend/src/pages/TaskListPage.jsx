@@ -37,6 +37,7 @@ const TaskListPage = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [statusFilter, setStatusFilter] = useState('all');
   const [assigningTaskId, setAssigningTaskId] = useState(null);
+  const [deletingTaskId, setDeletingTaskId] = useState(null);
 
   const isManager = managerRoles.has(user?.role);
 
@@ -150,6 +151,25 @@ const TaskListPage = () => {
       await loadTasks({ showLoading: false });
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const handleDeleteTask = async (taskId, taskTitle) => {
+    const confirmed = window.confirm(`確定要刪除「${taskTitle}」任務嗎？`);
+    if (!confirmed) {
+      return;
+    }
+
+    setError('');
+    setDeletingTaskId(taskId);
+    try {
+      await api.delete(`/tasks/${taskId}`);
+      await loadTasks({ showLoading: false });
+    } catch (err) {
+      const message = err.response?.data?.msg || '刪除任務失敗。';
+      setError(message);
+    } finally {
+      setDeletingTaskId(null);
     }
   };
 
@@ -364,6 +384,18 @@ const TaskListPage = () => {
                         task.assigned_to || '未指派'
                       )}
                     </p>
+                    {isManager && (
+                      <div className="task-actions">
+                        <button
+                          type="button"
+                          className="danger-button"
+                          onClick={() => handleDeleteTask(task.id, task.title)}
+                          disabled={deletingTaskId === task.id}
+                        >
+                          {deletingTaskId === task.id ? '刪除中…' : '刪除任務'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </li>
               );
