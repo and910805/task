@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 
+import brandFallback from '../assets/brand-logo.svg';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useBranding } from '../context/BrandingContext.jsx';
 import { useRoleLabels } from '../context/RoleLabelContext.jsx';
@@ -12,16 +13,15 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
   const { preference, setPreference } = useTheme();
   const isAdmin = user?.role === 'admin';
   const brandName = branding.name || '立翔水電行';
+  const logoSrc = branding.logoUrl || brandFallback;
 
   return (
     <header className="page-header">
       <div className="page-header__lead">
         <div className="header-brand header-brand--banner">
-          {branding.logoUrl ? (
-            <div className="header-brand__logo">
-              <img src={branding.logoUrl} alt={`${brandName} Logo`} />
-            </div>
-          ) : null}
+          <div className="header-brand__logo">
+            <img src={logoSrc} alt={`${brandName} Logo`} />
+          </div>
           <span className="header-brand__name">{brandName}</span>
         </div>
         <div className="page-header__titles">

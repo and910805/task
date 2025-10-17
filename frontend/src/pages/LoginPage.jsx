@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 
+import brandFallback from '../assets/brand-logo.svg';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useBranding } from '../context/BrandingContext.jsx';
 
@@ -12,6 +13,7 @@ const LoginPage = () => {
   const [mode, setMode] = useState('login');
   const [form, setForm] = useState({ username: '', password: '' });
   const brandName = branding.name || '立翔水電行';
+  const logoSrc = branding.logoUrl || brandFallback;
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -45,11 +47,9 @@ const LoginPage = () => {
       <form className="login-card login-card--animated" onSubmit={handleSubmit}>
         <div className="card-header">
           <div className="login-brand">
-            {branding.logoUrl ? (
-              <div className="login-brand__logo">
-                <img src={branding.logoUrl} alt={`${brandName} Logo`} />
-              </div>
-            ) : null}
+            <div className="login-brand__logo">
+              <img src={logoSrc} alt={`${brandName} Logo`} />
+            </div>
             <h1 className="login-brand__name">{brandName}</h1>
           </div>
           <p className="login-card__subtitle">

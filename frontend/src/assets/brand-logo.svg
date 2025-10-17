@@ -1,0 +1,27 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title">
+  <title>立翔水電行標誌</title>
+  <defs>
+    <linearGradient id="steelGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f97316" />
+      <stop offset="100%" stop-color="#c2410c" />
+    </linearGradient>
+    <linearGradient id="boltGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1f2937" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#boltGradient)" />
+  <path
+    d="M74.5 24L38 76h24l-9.5 28 37-52H65.5z"
+    fill="url(#steelGradient)"
+  />
+  <circle cx="46" cy="44" r="10" fill="#fde68a" opacity="0.8" />
+  <path
+    d="M36 94c8 6 18 10 28 10s20-4 28-10"
+    stroke="#fbbf24"
+    stroke-width="6"
+    stroke-linecap="round"
+    fill="none"
+    opacity="0.55"
+  />
+</svg>
