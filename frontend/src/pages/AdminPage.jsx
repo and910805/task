@@ -287,257 +287,319 @@ const AdminPage = () => {
       .join('、');
   };
 
-  return (
-    <div className="page">
-      <AppHeader title="使用者管理" subtitle="建立、檢視與移除系統帳號" />
-      <section className="panel">
-        <h2>品牌設定</h2>
-        <p className="panel-hint">自訂登入畫面標題與網站 Logo，將同步套用於登入頁與後台。</p>
-        <div className="branding-settings">
-          <div className="branding-preview">
-            {branding.logoUrl ? (
-              <img src={branding.logoUrl} alt={`${branding.name} Logo`} />
-            ) : (
-              <div className="branding-placeholder">尚未設定 Logo</div>
-            )}
-            <span className="branding-preview__name">{branding.name}</span>
-          </div>
-          <div className="branding-controls">
-            <label>
-              登入畫面名稱
-              <input
-                value={brandingName}
-                onChange={(event) => {
-                  setBrandingName(event.target.value);
-                  setBrandingMessage(null);
-                }}
-                placeholder="顯示在登入畫面的標題"
-                disabled={brandingBusy || brandingLoading}
-              />
-            </label>
-            {brandingMessage ? (
-              <p className={brandingMessage.type === 'error' ? 'error-text' : 'success-text'}>
-                {brandingMessage.text}
-              </p>
-            ) : null}
-            <div className="branding-actions">
-              <button
-                type="button"
-                onClick={handleBrandingNameSave}
-                disabled={brandingBusy || brandingLoading}
-              >
-                {brandingBusy ? '儲存中…' : '儲存名稱'}
-              </button>
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => {
-                  setBrandingName(branding.name);
-                  setBrandingMessage(null);
-                }}
-                disabled={brandingBusy || brandingLoading}
-              >
-                回復目前設定
-              </button>
-            </div>
-            <label className="branding-upload">
-              <span>網站 Logo</span>
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/jpg,image/gif,image/webp,image/svg+xml"
-                onChange={handleLogoUpload}
-                disabled={logoBusy || brandingLoading}
-              />
-            </label>
-            <p className="panel-hint">建議使用透明背景 PNG 或 SVG，檔案大小請低於 5MB。</p>
-            {logoMessage ? (
-              <p className={logoMessage.type === 'error' ? 'error-text' : 'success-text'}>
-                {logoMessage.text}
-              </p>
-            ) : null}
-            <div className="branding-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={handleLogoRemove}
-                disabled={
-                  logoBusy || brandingLoading || (!branding.logoUrl && !branding.logoPath)
-                }
-              >
-                {logoBusy ? '處理中…' : '移除 Logo'}
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
-      <section className="panel">
-        <h2>匯出報表</h2>
-        <p className="panel-hint">產出任務、附件與工時的 Excel 報表。</p>
-        {exportError && <p className="error-text">{exportError}</p>}
-        {exportSuccess && <p className="success-text">{exportSuccess}</p>}
-        <button type="button" onClick={handleExport} disabled={exporting}>
-          {exporting ? '匯出中…' : '匯出任務報表'}
-        </button>
-      </section>
-      <section className="panel">
-        <div className="panel-header">
-          <h2>新增帳號</h2>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => setForm((prev) => ({ ...prev, role: 'worker' }))}
-          >
-            新增
-            {workerLabel}
-          </button>
-        </div>
-        <p className="panel-hint">
-          快速建立
-          {workerLabel}
-          帳號時預設角色為
-          {workerLabel}
-          ，其餘角色請自行選擇。
-        </p>
-        {formError && <p className="error-text">{formError}</p>}
-        {formSuccess && <p className="success-text">{formSuccess}</p>}
-        <form className="stack" onSubmit={handleSubmit}>
-          <label>
-            名稱（選填）
-            <input
-              name="name"
-              value={form.name}
-              onChange={handleFormChange}
-              placeholder="可輸入人員顯示名稱"
-            />
-          </label>
-          <label>
-            帳號
-            <input
-              name="username"
-              value={form.username}
-              onChange={handleFormChange}
-              placeholder="登入帳號"
-              required
-            />
-          </label>
-          <label>
-            密碼
-            <input
-              type="password"
-              name="password"
-              value={form.password}
-              onChange={handleFormChange}
-              placeholder="設定登入密碼"
-              required
-            />
-          </label>
-          <label>
-            角色
-            <select name="role" value={form.role} onChange={handleFormChange}>
-              {options.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button type="submit">建立帳號</button>
-        </form>
-      </section>
-      <section className="panel">
-        <h2>角色顯示名稱</h2>
-        <p className="panel-hint">自訂角色在系統中顯示的名稱，例如將「工人」改為「水電工」。</p>
-        <div className="role-label-list">
-          {options.map((option) => {
-            const role = option.value;
-            const busy = Boolean(roleLabelBusy[role]);
-            const feedback = roleLabelMessages[role];
-            const currentValue = roleNameEdits[role] ?? '';
-            const isCustomized = Boolean(overrides[role]);
+  const roleTotals = options.reduce((acc, option) => {
+    const count = users.filter((item) => item.role === option.value).length;
+    acc[option.value] = count;
+    return acc;
+  }, {});
 
-            return (
-              <div key={role} className="role-label-item">
-                <div className="role-label-item__meta">
-                  <span>
-                    預設名稱：
-                    <strong>{defaultRoleLabels[role]}</strong>
-                  </span>
-                  {isCustomized ? <span className="role-label-tag">已自訂</span> : null}
-                </div>
+  const customizedCount = Object.keys(overrides).filter((key) => overrides[key]).length;
+
+  const adminMetrics = [
+    {
+      title: '總人員',
+      value: userCount,
+      hint: '包含所有角色帳號',
+    },
+    {
+      title: labels.worker || defaultRoleLabels.worker,
+      value: roleTotals.worker ?? 0,
+      hint: '目前系統內的現場人員數量',
+    },
+    {
+      title: labels.admin || defaultRoleLabels.admin,
+      value: roleTotals.admin ?? 0,
+      hint: '擁有最高權限的管理帳號',
+    },
+    {
+      title: '自訂角色名稱',
+      value: customizedCount,
+      hint: '已調整顯示名稱的角色數量',
+    },
+  ];
+
+  return (
+    <div className="page admin-page">
+      <AppHeader title="使用者管理" subtitle="建立、檢視與移除系統帳號" />
+      <div className="admin-layout">
+        <section className="panel panel--metrics panel--wide">
+          <h2>後台概況</h2>
+          <p className="panel-hint">
+            快速掌握目前帳號分佈與客製化設定狀態。
+          </p>
+          <div className="metric-grid">
+            {adminMetrics.map((metric) => (
+              <div key={metric.title} className="metric-card">
+                <span className="metric-card__value">{metric.value}</span>
+                <span className="metric-card__title">{metric.title}</span>
+                <span className="metric-card__hint">{metric.hint}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <div className="admin-grid">
+          <section className="panel panel--accent panel--wide">
+            <div className="panel-header">
+              <h2>品牌設定</h2>
+              <span className="panel-tag">登入與後台同步更新</span>
+            </div>
+            <p className="panel-hint">自訂登入畫面標題與網站 Logo，將同步套用於登入頁與後台。</p>
+            <div className="branding-settings">
+              <div className="branding-preview">
+                {branding.logoUrl ? (
+                  <img src={branding.logoUrl} alt={`${branding.name} Logo`} />
+                ) : (
+                  <div className="branding-placeholder">尚未設定 Logo</div>
+                )}
+                <span className="branding-preview__name">{branding.name}</span>
+              </div>
+              <div className="branding-controls">
                 <label>
-                  顯示名稱
+                  登入畫面名稱
                   <input
-                    value={currentValue}
-                    onChange={(event) => handleRoleNameChange(role, event.target.value)}
-                    placeholder="輸入顯示名稱"
-                    disabled={busy}
+                    value={brandingName}
+                    onChange={(event) => {
+                      setBrandingName(event.target.value);
+                      setBrandingMessage(null);
+                    }}
+                    placeholder="顯示在登入畫面的標題"
+                    disabled={brandingBusy || brandingLoading}
                   />
                 </label>
-                {feedback ? (
-                  <p className={feedback.type === 'error' ? 'error-text' : 'success-text'}>
-                    {feedback.text}
+                {brandingMessage ? (
+                  <p className={brandingMessage.type === 'error' ? 'error-text' : 'success-text'}>
+                    {brandingMessage.text}
                   </p>
                 ) : null}
-                <div className="role-label-item__actions">
-                  <button type="button" onClick={() => handleRoleLabelSave(role)} disabled={busy}>
-                    {busy ? '儲存中…' : '儲存變更'}
+                <div className="branding-actions">
+                  <button
+                    type="button"
+                    onClick={handleBrandingNameSave}
+                    disabled={brandingBusy || brandingLoading}
+                  >
+                    {brandingBusy ? '儲存中…' : '儲存名稱'}
                   </button>
                   <button
                     type="button"
                     className="secondary-button"
-                    onClick={() => handleRoleLabelReset(role)}
-                    disabled={busy || (!isCustomized && currentValue === defaultRoleLabels[role])}
+                    onClick={() => {
+                      setBrandingName(branding.name);
+                      setBrandingMessage(null);
+                    }}
+                    disabled={brandingBusy || brandingLoading}
                   >
-                    恢復預設
+                    回復目前設定
+                  </button>
+                </div>
+                <label className="branding-upload">
+                  <span>網站 Logo</span>
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/jpg,image/gif,image/webp,image/svg+xml"
+                    onChange={handleLogoUpload}
+                    disabled={logoBusy || brandingLoading}
+                  />
+                </label>
+                <p className="panel-hint">建議使用透明背景 PNG 或 SVG，檔案大小請低於 5MB。</p>
+                {logoMessage ? (
+                  <p className={logoMessage.type === 'error' ? 'error-text' : 'success-text'}>
+                    {logoMessage.text}
+                  </p>
+                ) : null}
+                <div className="branding-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={handleLogoRemove}
+                    disabled={
+                      logoBusy || brandingLoading || (!branding.logoUrl && !branding.logoPath)
+                    }
+                  >
+                    {logoBusy ? '處理中…' : '移除 Logo'}
                   </button>
                 </div>
               </div>
-            );
-          })}
-        </div>
-      </section>
-      <section className="panel">
-        <h2>使用者清單（{userCount}）</h2>
-        {error && <p className="error-text">{error}</p>}
-        {loading ? (
-          <p>載入中...</p>
-        ) : users.length === 0 ? (
-          <p>目前沒有其他使用者。</p>
-        ) : (
-          <div className="table-wrapper">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>帳號</th>
-                  <th>角色</th>
-                  <th>指派任務</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.id}</td>
-                    <td>{item.username}</td>
-                    <td>{labels[item.role] || item.role}</td>
-                    <td>{assignedTasksText(item.assigned_tasks)}</td>
-                    <td>
+            </div>
+          </section>
+
+          <section className="panel panel--contrast">
+            <div className="panel-header">
+              <h2>匯出報表</h2>
+              <span className="panel-tag">Excel</span>
+            </div>
+            <p className="panel-hint">產出任務、附件與工時的 Excel 報表。</p>
+            {exportError && <p className="error-text">{exportError}</p>}
+            {exportSuccess && <p className="success-text">{exportSuccess}</p>}
+            <button type="button" onClick={handleExport} disabled={exporting}>
+              {exporting ? '匯出中…' : '匯出任務報表'}
+            </button>
+          </section>
+
+          <section className="panel panel--contrast">
+            <div className="panel-header">
+              <h2>新增帳號</h2>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setForm((prev) => ({ ...prev, role: 'worker' }))}
+              >
+                一鍵選擇{workerLabel}
+              </button>
+            </div>
+            <p className="panel-hint">
+              快速建立{workerLabel}帳號時預設角色為{workerLabel}，其餘角色請自行選擇。
+            </p>
+            {formError && <p className="error-text">{formError}</p>}
+            {formSuccess && <p className="success-text">{formSuccess}</p>}
+            <form className="stack" onSubmit={handleSubmit}>
+              <label>
+                名稱（選填）
+                <input
+                  name="name"
+                  value={form.name}
+                  onChange={handleFormChange}
+                  placeholder="可輸入人員顯示名稱"
+                />
+              </label>
+              <label>
+                帳號
+                <input
+                  name="username"
+                  value={form.username}
+                  onChange={handleFormChange}
+                  placeholder="登入帳號"
+                  required
+                />
+              </label>
+              <label>
+                密碼
+                <input
+                  type="password"
+                  name="password"
+                  value={form.password}
+                  onChange={handleFormChange}
+                  placeholder="設定登入密碼"
+                  required
+                />
+              </label>
+              <label>
+                角色
+                <select name="role" value={form.role} onChange={handleFormChange}>
+                  {options.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button type="submit">建立帳號</button>
+            </form>
+          </section>
+
+          <section className="panel panel--contrast panel--wide">
+            <div className="panel-header">
+              <h2>角色顯示名稱</h2>
+              <span className="panel-tag">顯示調整</span>
+            </div>
+            <p className="panel-hint">自訂角色在系統中顯示的名稱，例如將「工人」改為「水電工」。</p>
+            <div className="role-label-list">
+              {options.map((option) => {
+                const role = option.value;
+                const busy = Boolean(roleLabelBusy[role]);
+                const feedback = roleLabelMessages[role];
+                const currentValue = roleNameEdits[role] ?? '';
+                const isCustomized = Boolean(overrides[role]);
+
+                return (
+                  <div key={role} className="role-label-item">
+                    <div className="role-label-item__meta">
+                      <span>
+                        預設名稱：
+                        <strong>{defaultRoleLabels[role]}</strong>
+                      </span>
+                      {isCustomized ? <span className="role-label-tag">已自訂</span> : null}
+                    </div>
+                    <label>
+                      顯示名稱
+                      <input
+                        value={currentValue}
+                        onChange={(event) => handleRoleNameChange(role, event.target.value)}
+                        placeholder="輸入顯示名稱"
+                        disabled={busy}
+                      />
+                    </label>
+                    {feedback ? (
+                      <p className={feedback.type === 'error' ? 'error-text' : 'success-text'}>
+                        {feedback.text}
+                      </p>
+                    ) : null}
+                    <div className="role-label-item__actions">
+                      <button type="button" onClick={() => handleRoleLabelSave(role)} disabled={busy}>
+                        {busy ? '儲存中…' : '儲存變更'}
+                      </button>
                       <button
                         type="button"
-                        className="danger-button"
-                        onClick={() => handleDelete(item)}
+                        className="secondary-button"
+                        onClick={() => handleRoleLabelReset(role)}
+                        disabled={busy || (!isCustomized && currentValue === defaultRoleLabels[role])}
                       >
-                        刪除
+                        恢復預設
                       </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        </div>
+
+        <section className="panel panel--wide panel--table">
+          <div className="panel-header">
+            <h2>使用者清單（{userCount}）</h2>
+            <span className="panel-tag">帳號管理</span>
           </div>
-        )}
-      </section>
+          {error && <p className="error-text">{error}</p>}
+          {loading ? (
+            <p>載入中...</p>
+          ) : users.length === 0 ? (
+            <p>目前沒有其他使用者。</p>
+          ) : (
+            <div className="table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>帳號</th>
+                    <th>角色</th>
+                    <th>指派任務</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.id}</td>
+                      <td>{item.username}</td>
+                      <td>{labels[item.role] || item.role}</td>
+                      <td>{assignedTasksText(item.assigned_tasks)}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="danger-button"
+                          onClick={() => handleDelete(item)}
+                        >
+                          刪除
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </div>
     </div>
   );
 };
