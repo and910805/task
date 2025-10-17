@@ -11,21 +11,26 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
   const { labels } = useRoleLabels();
   const { preference, setPreference } = useTheme();
   const isAdmin = user?.role === 'admin';
+  const brandName = branding.name || '立翔水電行';
 
   return (
     <header className="page-header">
-      <div className="page-header__titles">
-        <h1>{title}</h1>
-        {subtitle ? <p className="page-subtitle">{subtitle}</p> : null}
-        {children}
+      <div className="page-header__lead">
+        <div className="header-brand header-brand--banner">
+          {branding.logoUrl ? (
+            <div className="header-brand__logo">
+              <img src={branding.logoUrl} alt={`${brandName} Logo`} />
+            </div>
+          ) : null}
+          <span className="header-brand__name">{brandName}</span>
+        </div>
+        <div className="page-header__titles">
+          <h1>{title}</h1>
+          {subtitle ? <p className="page-subtitle">{subtitle}</p> : null}
+          {children}
+        </div>
       </div>
       <div className="header-actions">
-        <div className="header-brand">
-          {branding.logoUrl ? (
-            <img src={branding.logoUrl} alt={`${branding.name} Logo`} />
-          ) : null}
-          <span>{branding.name}</span>
-        </div>
         {actions ? <div className="header-extra">{actions}</div> : null}
         <select
           className="theme-toggle"

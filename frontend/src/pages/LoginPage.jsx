@@ -11,6 +11,7 @@ const LoginPage = () => {
   const { branding } = useBranding();
   const [mode, setMode] = useState('login');
   const [form, setForm] = useState({ username: '', password: '' });
+  const brandName = branding.name || '立翔水電行';
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -41,13 +42,17 @@ const LoginPage = () => {
 
   return (
     <div className="login-page">
-      <form className="login-card" onSubmit={handleSubmit}>
+      <form className="login-card login-card--animated" onSubmit={handleSubmit}>
         <div className="card-header">
-          {branding.logoUrl ? (
-            <img src={branding.logoUrl} alt={`${branding.name} Logo`} />
-          ) : null}
-          <p className="log">{branding.name}</p>
-          <p className="login-switch">
+          <div className="login-brand">
+            {branding.logoUrl ? (
+              <div className="login-brand__logo">
+                <img src={branding.logoUrl} alt={`${brandName} Logo`} />
+              </div>
+            ) : null}
+            <h1 className="login-brand__name">{brandName}</h1>
+          </div>
+          <p className="login-card__subtitle">
             {mode === 'login' ? '請輸入帳號密碼登入系統' : '建立新的工人帳號'}
           </p>
         </div>
