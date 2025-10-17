@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import Select from 'react-select';
 
 import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
@@ -55,7 +56,7 @@ const TaskDetailPage = () => {
   const [loading, setLoading] = useState(true);
   const [assignableUsers, setAssignableUsers] = useState([]);
   const [assignmentForm, setAssignmentForm] = useState({
-    assigned_to_id: '',
+    assignee_ids: [],
     due_date: '',
   });
   const [activeTab, setActiveTab] = useState('info');
@@ -107,10 +108,19 @@ const TaskDetailPage = () => {
     }
   }, [isManager]);
 
+  const assigneeOptions = useMemo(
+    () =>
+      assignableUsers.map((option) => ({
+        value: option.id,
+        label: `${option.username}（${labels[option.role] || option.role}）`,
+      })),
+    [assignableUsers, labels],
+  );
+
   useEffect(() => {
     if (!task) return;
     setAssignmentForm({
-      assigned_to_id: task.assigned_to_id ? String(task.assigned_to_id) : '',
+      assignee_ids: task.assignee_ids ? [...task.assignee_ids] : [],
       due_date: task.due_date ? toInputDatetimeValue(task.due_date) : '',
     });
   }, [task]);
@@ -164,6 +174,13 @@ const TaskDetailPage = () => {
     setAssignmentForm((prev) => ({ ...prev, [name]: value }));
   };
 
+  const handleAssigneeSelect = (selected) => {
+    setAssignmentForm((prev) => ({
+      ...prev,
+      assignee_ids: (selected || []).map((option) => option.value),
+    }));
+  };
+
   const handleStatusSubmit = async (event) => {
     event.preventDefault();
     if (!updateForm.status && !updateForm.note) return;
@@ -187,10 +204,8 @@ const TaskDetailPage = () => {
     setAssignmentSuccess('');
     try {
       const payload = {
-        assigned_to_id: assignmentForm.assigned_to_id
-          ? Number(assignmentForm.assigned_to_id)
-          : null,
-        due_date: assignmentForm.due_date,
+        assignee_ids: assignmentForm.assignee_ids.map(Number),
+        due_date: assignmentForm.due_date || null,
       };
       await api.put(`/tasks/${id}`, payload);
       setAssignmentSuccess('任務指派資訊已更新。');
@@ -412,7 +427,20 @@ const TaskDetailPage = () => {
           <section className="panel">
             <h2>任務資訊</h2>
             <p>狀態：{task.status}</p>
-            <p>指派給：{task.assigned_to || '未指派'}</p>
+            <div>
+              <strong>指派對象：</strong>
+              {task.assignees && task.assignees.length > 0 ? (
+                <div className="chip-list">
+                  {task.assignees.map((assignee) => (
+                    <span key={assignee.id} className="chip">
+                      {assignee.username}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <span className="hint-text">未指派</span>
+              )}
+            </div>
             <p>建立人：{task.assigned_by || '系統'}</p>
             <p>內容：{task.description || '沒有描述'}</p>
             <p>地點：{task.location}</p>
@@ -430,18 +458,18 @@ const TaskDetailPage = () => {
               <form className="stack" onSubmit={handleAssignmentSubmit}>
                 <label>
                   指派給
-                  <select
-                    name="assigned_to_id"
-                    value={assignmentForm.assigned_to_id}
-                    onChange={handleAssignmentChange}
-                  >
-                    <option value="">未指派</option>
-                    {assignableUsers.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.username}（{labels[option.role] || option.role}）
-                      </option>
-                    ))}
-                  </select>
+                  <Select
+                    isMulti
+                    classNamePrefix="assignee-select"
+                    placeholder="選擇負責人"
+                    options={assigneeOptions}
+                    value={assigneeOptions.filter((option) =>
+                      assignmentForm.assignee_ids.includes(option.value),
+                    )}
+                    onChange={handleAssigneeSelect}
+                    isClearable
+                    closeMenuOnSelect={false}
+                  />
                 </label>
                 <label>
                   截止時間

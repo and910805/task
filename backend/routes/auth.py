@@ -12,7 +12,7 @@ from extensions import db
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import selectinload
 
-from models import Attachment, Task, TaskUpdate, User
+from models import Attachment, Task, TaskAssignee, TaskUpdate, User
 from utils import get_current_user_id
 
 
@@ -245,6 +245,7 @@ def delete_user(user_id: int):
     Task.query.filter_by(assigned_by_id=user.id).update(
         {"assigned_by_id": None}, synchronize_session=False
     )
+    TaskAssignee.query.filter_by(user_id=user.id).delete(synchronize_session=False)
     TaskUpdate.query.filter_by(user_id=user.id).update(
         {"user_id": None}, synchronize_session=False
     )
@@ -254,6 +255,48 @@ def delete_user(user_id: int):
     db.session.delete(user)
     db.session.commit()
     return jsonify({"msg": "User deleted"})
+
+
+@auth_bp.put("/notification-settings")
+@jwt_required()
+def update_notification_settings():
+    user_id = get_current_user_id()
+    if user_id is None:
+        return jsonify({"msg": "Invalid authentication token"}), 401
+
+    user = User.query.get_or_404(user_id)
+    data = request.get_json() or {}
+
+    notification_type_raw = data.get("notification_type") or "none"
+    notification_type = (
+        notification_type_raw.strip().lower()
+        if isinstance(notification_type_raw, str)
+        else "none"
+    )
+
+    if notification_type not in {"none", "email", "line"}:
+        return jsonify({"msg": "Invalid notification type"}), 400
+
+    value_raw = data.get("notification_value") or ""
+    value = value_raw.strip() if isinstance(value_raw, str) else ""
+
+    if notification_type == "none":
+        user.notification_type = None
+        user.notification_value = None
+    elif notification_type == "email":
+        if not value or "@" not in value:
+            return jsonify({"msg": "請提供有效的 Email"}), 400
+        user.notification_type = "email"
+        user.notification_value = value
+    else:  # line
+        if len(value) < 10:
+            return jsonify({"msg": "LINE Notify Token 長度不足"}), 400
+        user.notification_type = "line"
+        user.notification_value = value
+
+    db.session.commit()
+
+    return jsonify({"msg": "Notification settings updated", "user": user.to_dict()})
 
 
 @auth_bp.post("/change-password")

@@ -3,11 +3,13 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useBranding } from '../context/BrandingContext.jsx';
 import { useRoleLabels } from '../context/RoleLabelContext.jsx';
+import { useTheme } from '../context/ThemeContext.jsx';
 
 const AppHeader = ({ title, subtitle, actions = null, children }) => {
   const { user, logout } = useAuth();
   const { branding } = useBranding();
   const { labels } = useRoleLabels();
+  const { preference, setPreference } = useTheme();
   const isAdmin = user?.role === 'admin';
 
   return (
@@ -25,6 +27,16 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
           <span>{branding.name}</span>
         </div>
         {actions ? <div className="header-extra">{actions}</div> : null}
+        <select
+          className="theme-toggle"
+          value={preference}
+          onChange={(event) => setPreference(event.target.value)}
+          aria-label="切換主題模式"
+        >
+          <option value="light">☀️ Light</option>
+          <option value="dark">🌙 Dark</option>
+          <option value="system">💻 System</option>
+        </select>
         <nav className="header-nav">
           <Link to="/">任務列表</Link>
           {isAdmin ? <Link to="/admin">使用者管理</Link> : null}

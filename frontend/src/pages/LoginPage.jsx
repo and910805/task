@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'react-hot-toast';
 
 import { useAuth } from '../context/AuthContext.jsx';
 import { useBranding } from '../context/BrandingContext.jsx';
@@ -9,9 +10,7 @@ const LoginPage = () => {
   const { login, register, loading } = useAuth();
   const { branding } = useBranding();
   const [mode, setMode] = useState('login');
-  const [error, setError] = useState('');
   const [form, setForm] = useState({ username: '', password: '' });
-  const [success, setSuccess] = useState('');
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -20,76 +19,73 @@ const LoginPage = () => {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    setError('');
-    setSuccess('');
     try {
       if (mode === 'login') {
         await login({ username: form.username, password: form.password });
         navigate('/');
       } else {
         await register({ username: form.username, password: form.password });
-        setSuccess('帳號建立成功，請使用該帳號登入。');
+        toast.success('帳號建立成功，請使用該帳號登入。');
         setForm({ username: '', password: '' });
         setMode('login');
       }
     } catch (err) {
       const message = err.response?.data?.msg || '操作失敗，請稍後再試。';
-      setError(message);
+      toast.error(message);
     }
   };
 
+  const switchMode = () => {
+    setMode((prev) => (prev === 'login' ? 'register' : 'login'));
+  };
+
   return (
-    <div className="auth-container">
-      <div className="auth-brand">
-        {branding.logoUrl ? (
-          <img
-            src={branding.logoUrl}
-            alt={`${branding.name} Logo`}
-            className="auth-brand__logo"
-          />
-        ) : null}
-        <h1>{branding.name}</h1>
-      </div>
-      <form className="auth-card" onSubmit={handleSubmit}>
-        <h2>{mode === 'login' ? '登入' : '建立帳號'}</h2>
-        {error && <p className="error-text">{error}</p>}
-        {success && <p className="success-text">{success}</p>}
-        <label>
-          帳號
+    <div className="login-page">
+      <form className="login-card" onSubmit={handleSubmit}>
+        <div className="card-header">
+          {branding.logoUrl ? (
+            <img src={branding.logoUrl} alt={`${branding.name} Logo`} />
+          ) : null}
+          <p className="log">{branding.name}</p>
+          <p className="login-switch">
+            {mode === 'login' ? '請輸入帳號密碼登入系統' : '建立新的工人帳號'}
+          </p>
+        </div>
+        <div className="form-group">
+          <label htmlFor="username">帳號</label>
           <input
+            id="username"
             type="text"
             name="username"
             value={form.username}
             onChange={handleChange}
             autoComplete="username"
             required
+            placeholder="輸入帳號"
           />
-        </label>
-        <label>
-          密碼
+        </div>
+        <div className="form-group">
+          <label htmlFor="password">密碼</label>
           <input
+            id="password"
             type="password"
             name="password"
             value={form.password}
             onChange={handleChange}
             autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
             required
+            placeholder="輸入密碼"
           />
-        </label>
+        </div>
         <button type="submit" disabled={loading}>
           {mode === 'login' ? '登入' : '註冊'}
         </button>
-        <button
-          type="button"
-          className="link-button"
-          onClick={() => {
-            setMode(mode === 'login' ? 'register' : 'login');
-            setError('');
-            setSuccess('');
-          }}
-        >
-          {mode === 'login' ? '沒有帳號？建立新帳號' : '已有帳號？立即登入'}
-        </button>
+        <p className="login-switch">
+          {mode === 'login' ? '沒有帳號？' : '已有帳號？'}{' '}
+          <button type="button" onClick={switchMode}>
+            {mode === 'login' ? '建立新帳號' : '立即登入'}
+          </button>
+        </p>
       </form>
     </div>
   );

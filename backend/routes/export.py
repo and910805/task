@@ -10,7 +10,7 @@ from openpyxl import Workbook
 from sqlalchemy.orm import selectinload
 
 from decorators import role_required
-from models import Task
+from models import Task, TaskAssignee
 
 
 export_bp = Blueprint("export", __name__)
@@ -51,6 +51,7 @@ def export_tasks():
             selectinload(Task.attachments),
             selectinload(Task.updates),
             selectinload(Task.assignee),
+            selectinload(Task.assignees).selectinload(TaskAssignee.user),
             selectinload(Task.assigner),
         )
         .order_by(Task.created_at.desc())
@@ -78,6 +79,14 @@ def export_tasks():
     )
 
     for task in tasks:
+        assigned_names = [
+            assignment.user.username
+            for assignment in task.assignees
+            if assignment.user is not None
+        ]
+        if not assigned_names and task.assignee:
+            assigned_names.append(task.assignee.username)
+
         tasks_sheet.append(
             [
                 task.id,
@@ -85,7 +94,7 @@ def export_tasks():
                 task.location,
                 task.status,
                 task.assigner.username if task.assigner else "",
-                task.assignee.username if task.assignee else "",
+                ", ".join(assigned_names),
                 task.expected_time.isoformat() if task.expected_time else "",
                 task.completed_at.isoformat() if task.completed_at else "",
                 task.total_work_hours(),

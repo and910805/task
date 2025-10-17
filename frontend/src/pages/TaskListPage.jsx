@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import Select from 'react-select';
 
 import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
@@ -19,7 +20,7 @@ const initialForm = {
   location: '',
   expected_time: '',
   status: '尚未接單',
-  assigned_to_id: '',
+  assignee_ids: [],
 };
 
 const statusFilterOptions = [
@@ -42,6 +43,15 @@ const TaskListPage = () => {
   const [deletingTaskId, setDeletingTaskId] = useState(null);
 
   const isManager = managerRoles.has(user?.role);
+
+  const assigneeOptions = useMemo(
+    () =>
+      users.map((item) => ({
+        value: item.id,
+        label: `${item.username}（${labels[item.role] || item.role}）`,
+      })),
+    [users, labels],
+  );
 
   const loadTasks = async ({ showLoading = true } = {}) => {
     if (showLoading) {
@@ -109,10 +119,10 @@ const TaskListPage = () => {
         location: trimmedLocation,
         expected_time: expectedDate.toISOString(),
         status: form.status,
-        assigned_to_id: form.assigned_to_id ? Number(form.assigned_to_id) : null,
+        assignee_ids: form.assignee_ids.map(Number),
       };
       await api.post('/tasks/create', payload);
-      setForm(initialForm);
+      setForm({ ...initialForm });
       setCreating(false);
       await loadTasks();
     } catch (err) {
@@ -132,12 +142,11 @@ const TaskListPage = () => {
     }
   };
 
-  const handleAssigneeChange = async (taskId, value) => {
+  const handleAssigneesChange = async (taskId, values) => {
     setError('');
     setAssigningTaskId(taskId);
-    const nextValue = value === '' ? null : Number(value);
     try {
-      await api.patch(`/tasks/update/${taskId}`, { assigned_to_id: nextValue });
+      await api.patch(`/tasks/update/${taskId}`, { assignee_ids: values });
       await loadTasks({ showLoading: false });
     } catch (err) {
       const message = err.response?.data?.msg || '更新指派對象失敗。';
@@ -284,21 +293,28 @@ const TaskListPage = () => {
                   ))}
                 </select>
               </label>
-              <label>
-                指派給
-                <select
-                  name="assigned_to_id"
-                  value={form.assigned_to_id}
-                  onChange={handleChange}
-                >
-                  <option value="">未指派</option>
-                  {users.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.username}（{labels[option.role] || option.role}）
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {isManager ? (
+                <label>
+                  指派給
+                  <Select
+                    isMulti
+                    classNamePrefix="assignee-select"
+                    placeholder="選擇負責人（可複選）"
+                    options={assigneeOptions}
+                    value={assigneeOptions.filter((option) =>
+                      form.assignee_ids.includes(option.value),
+                    )}
+                    onChange={(selected) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        assignee_ids: (selected || []).map((option) => option.value),
+                      }))
+                    }
+                    isClearable
+                    closeMenuOnSelect={false}
+                  />
+                </label>
+              ) : null}
               <button type="submit">建立任務</button>
             </form>
           )}
@@ -314,9 +330,14 @@ const TaskListPage = () => {
         ) : (
           <ul className="task-list">
             {filteredTasks.map((task) => {
-              const assigneeMissing =
-                task.assigned_to_id &&
-                !users.some((option) => option.id === task.assigned_to_id);
+              const taskAssigneeIds = task.assignee_ids || [];
+              const assignedUsers = task.assignees || [];
+              const selectValue = assigneeOptions.filter((option) =>
+                taskAssigneeIds.includes(option.value),
+              );
+              const hasMissingAssignee =
+                taskAssigneeIds.length > 0 &&
+                selectValue.length !== taskAssigneeIds.length;
               return (
                 <li key={task.id} className="task-item">
                   <div>
@@ -358,44 +379,53 @@ const TaskListPage = () => {
                         </span>
                       )}
                     </p>
-                    <p>
-                      指派給：
-                      {isManager ? (
-                        <span className="task-status-control">
-                          <select
-                            value={task.assigned_to_id ?? ''}
-                            onChange={(event) =>
-                              handleAssigneeChange(task.id, event.target.value)
-                            }
-                            disabled={assigningTaskId === task.id}
-                          >
-                            <option value="">未指派</option>
-                            {assigneeMissing ? (
-                              <option value={task.assigned_to_id}>
-                                {task.assigned_to || `使用者 #${task.assigned_to_id}`}
-                              </option>
-                            ) : null}
-                            {users.map((option) => (
-                              <option key={option.id} value={option.id}>
-                                {option.username}（{labels[option.role] || option.role}）
-                              </option>
-                            ))}
-                          </select>
-                        </span>
+                    <div>
+                      <strong>指派對象：</strong>
+                      {assignedUsers.length > 0 ? (
+                        <div className="chip-list">
+                          {assignedUsers.map((assignee) => (
+                            <span key={assignee.id} className="chip">
+                              {assignee.username}
+                            </span>
+                          ))}
+                        </div>
                       ) : (
-                        task.assigned_to || '未指派'
+                        <span className="hint-text">未指派</span>
                       )}
-                    </p>
+                      {hasMissingAssignee ? (
+                        <p className="error-text">部分指派對象已被移除</p>
+                      ) : null}
+                    </div>
                     {isManager && (
                       <div className="task-actions">
-                        <button
-                          type="button"
-                          className="danger-button"
-                          onClick={() => handleDeleteTask(task.id, task.title)}
-                          disabled={deletingTaskId === task.id}
-                        >
-                          {deletingTaskId === task.id ? '刪除中…' : '刪除任務'}
-                        </button>
+                        <div className="task-toolbar">
+                          <div style={{ minWidth: '220px' }}>
+                            <Select
+                              isMulti
+                              classNamePrefix="assignee-select"
+                              placeholder="選擇負責人"
+                              options={assigneeOptions}
+                              value={selectValue}
+                              onChange={(selected) =>
+                                handleAssigneesChange(
+                                  task.id,
+                                  (selected || []).map((option) => option.value),
+                                )
+                              }
+                              isDisabled={assigningTaskId === task.id}
+                              isLoading={assigningTaskId === task.id}
+                              closeMenuOnSelect={false}
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            className="danger-button"
+                            onClick={() => handleDeleteTask(task.id, task.title)}
+                            disabled={deletingTaskId === task.id}
+                          >
+                            {deletingTaskId === task.id ? '刪除中…' : '刪除任務'}
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>

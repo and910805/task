@@ -4,6 +4,8 @@ from typing import Optional
 from flask import current_app
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from sqlalchemy import UniqueConstraint
+
 from extensions import db
 
 
@@ -25,14 +27,26 @@ class User(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    assigned_tasks = db.relationship(
+    primary_assigned_tasks = db.relationship(
         "Task", back_populates="assignee", foreign_keys="Task.assigned_to_id"
+    )
+    assignments = db.relationship(
+        "TaskAssignee", back_populates="user", cascade="all, delete-orphan"
+    )
+    assigned_tasks = db.relationship(
+        "Task",
+        secondary="task_assignee",
+        viewonly=True,
+        back_populates="assigned_users",
+        overlaps="primary_assigned_tasks,assignee,assignments",
     )
     created_tasks = db.relationship(
         "Task", back_populates="assigner", foreign_keys="Task.assigned_by_id"
     )
     attachments = db.relationship("Attachment", back_populates="uploader")
     updates = db.relationship("TaskUpdate", back_populates="author")
+    notification_type = db.Column(db.String(16))
+    notification_value = db.Column(db.Text)
 
     def set_password(self, password: str) -> None:
         self.password_hash = generate_password_hash(password)
@@ -45,12 +59,26 @@ class User(db.Model):
             role_label = RoleLabel.get_labels().get(self.role, self.role)
         except Exception:
             role_label = ROLE_LABEL_DEFAULTS.get(self.role, self.role)
+
+        notification_value = None
+        notification_hint = None
+        if self.notification_type == "email":
+            notification_value = self.notification_value or None
+        elif self.notification_type == "line" and self.notification_value:
+            masked = self.notification_value
+            if len(masked) > 4:
+                masked = f"…{masked[-4:]}"
+            notification_hint = masked
+
         return {
             "id": self.id,
             "username": self.username,
             "role": self.role,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "role_label": role_label,
+            "notification_type": self.notification_type,
+            "notification_value": notification_value,
+            "notification_hint": notification_hint,
         }
 
 
@@ -70,7 +98,12 @@ class Task(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    assignee = db.relationship("User", foreign_keys=[assigned_to_id], back_populates="assigned_tasks")
+    assignee = db.relationship(
+        "User",
+        foreign_keys=[assigned_to_id],
+        back_populates="primary_assigned_tasks",
+        overlaps="assigned_tasks,assignments",
+    )
     assigner = db.relationship("User", foreign_keys=[assigned_by_id], back_populates="created_tasks")
     attachments = db.relationship("Attachment", back_populates="task", cascade="all, delete-orphan")
     updates = db.relationship(
@@ -78,6 +111,19 @@ class Task(db.Model):
         back_populates="task",
         cascade="all, delete-orphan",
         order_by="TaskUpdate.created_at.desc()",
+    )
+    assignees = db.relationship(
+        "TaskAssignee",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        overlaps="assigned_users,assignee",
+    )
+    assigned_users = db.relationship(
+        "User",
+        secondary="task_assignee",
+        viewonly=True,
+        back_populates="assigned_tasks",
+        overlaps="assignee,assignees,assignments,primary_assigned_tasks",
     )
 
     def total_work_hours(self) -> float:
@@ -91,6 +137,26 @@ class Task(db.Model):
         time_entries = [
             update.to_time_dict() for update in self.updates if update.start_time
         ]
+        try:
+            role_labels = RoleLabel.get_labels()
+        except Exception:
+            role_labels = ROLE_LABEL_DEFAULTS
+
+        assigned_users = []
+        for assignment in self.assignees:
+            user = assignment.user
+            if not user:
+                continue
+            assigned_users.append(
+                {
+                    "id": user.id,
+                    "username": user.username,
+                    "role": user.role,
+                    "role_label": role_labels.get(user.role, user.role),
+                }
+            )
+        if assigned_users:
+            assigned_users.sort(key=lambda item: item["username"].lower())
         return {
             "id": self.id,
             "title": self.title,
@@ -110,6 +176,37 @@ class Task(db.Model):
             "updates": [update.to_dict() for update in self.updates],
             "time_entries": time_entries,
             "total_work_hours": round(self.total_work_hours(), 2),
+            "assignees": assigned_users,
+            "assignee_ids": [user["id"] for user in assigned_users],
+        }
+
+
+class TaskAssignee(db.Model):
+    __tablename__ = "task_assignee"
+
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(
+        db.Integer, db.ForeignKey("task.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id = db.Column(
+        db.Integer, db.ForeignKey("user.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    task = db.relationship(
+        "Task", back_populates="assignees", overlaps="assigned_users,assignee"
+    )
+    user = db.relationship(
+        "User", back_populates="assignments", overlaps="assigned_tasks"
+    )
+
+    __table_args__ = (UniqueConstraint("task_id", "user_id", name="uq_task_assignee"),)
+
+    def to_dict(self) -> dict:
+        return {
+            "task_id": self.task_id,
+            "user_id": self.user_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
 

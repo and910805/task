@@ -1,8 +1,11 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 
+import { Toaster } from 'react-hot-toast';
+
 import { AuthProvider, useAuth } from './context/AuthContext.jsx';
 import { BrandingProvider } from './context/BrandingContext.jsx';
 import { RoleLabelProvider } from './context/RoleLabelContext.jsx';
+import { ThemeProvider } from './context/ThemeContext.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import TaskDetailPage from './pages/TaskDetailPage.jsx';
 import TaskListPage from './pages/TaskListPage.jsx';
@@ -67,15 +70,18 @@ const AppRoutes = () => (
 
 function App() {
   return (
-    <BrandingProvider>
-      <AuthProvider>
-        <RoleLabelProvider>
-          <BrowserRouter>
-            <AppRoutes />
-          </BrowserRouter>
-        </RoleLabelProvider>
-      </AuthProvider>
-    </BrandingProvider>
+    <ThemeProvider>
+      <BrandingProvider>
+        <AuthProvider>
+          <RoleLabelProvider>
+            <BrowserRouter>
+              <AppRoutes />
+            </BrowserRouter>
+            <Toaster position="top-center" toastOptions={{ duration: 3500 }} />
+          </RoleLabelProvider>
+        </AuthProvider>
+      </BrandingProvider>
+    </ThemeProvider>
   );
 }
 
