@@ -1,46 +1,75 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 
 import api from '../api/client.js';
 
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
-  const [token, setToken] = useState(() => localStorage.getItem('auth_token'));
   const [user, setUser] = useState(() => {
     const storedUser = localStorage.getItem('auth_user');
     return storedUser ? JSON.parse(storedUser) : null;
   });
   const [loading, setLoading] = useState(false);
+  const [initializing, setInitializing] = useState(true);
 
-  useEffect(() => {
-    if (token) {
-      localStorage.setItem('auth_token', token);
-    } else {
-      localStorage.removeItem('auth_token');
-    }
-  }, [token]);
-
-  useEffect(() => {
-    if (user) {
-      localStorage.setItem('auth_user', JSON.stringify(user));
+  const persistUser = useCallback((nextUser) => {
+    localStorage.removeItem('auth_token');
+    if (nextUser) {
+      localStorage.setItem('auth_user', JSON.stringify(nextUser));
+      setUser(nextUser);
     } else {
       localStorage.removeItem('auth_user');
+      setUser(null);
     }
-  }, [user]);
+  }, []);
 
-  const login = async (credentials) => {
-    setLoading(true);
-    try {
-      const { data } = await api.post('/auth/login', credentials);
-      setToken(data.token);
-      setUser(data.user);
-      return data;
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+    let active = true;
 
-  const register = async (payload) => {
+    const initialize = async () => {
+      try {
+        const { data } = await api.post('/auth/refresh');
+        if (!active) return;
+        persistUser(data.user);
+      } catch (error) {
+        if (!active) return;
+        persistUser(null);
+      } finally {
+        if (active) {
+          setInitializing(false);
+        }
+      }
+    };
+
+    initialize();
+
+    return () => {
+      active = false;
+    };
+  }, [persistUser]);
+
+  const login = useCallback(
+    async (credentials) => {
+      setLoading(true);
+      try {
+        const { data } = await api.post('/auth/login', credentials);
+        persistUser(data.user);
+        return data;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [persistUser],
+  );
+
+  const register = useCallback(async (payload) => {
     setLoading(true);
     try {
       const { data } = await api.post('/auth/register', {
@@ -51,32 +80,36 @@ export const AuthProvider = ({ children }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const logout = () => {
-    setToken(null);
-    setUser(null);
-  };
+  const logout = useCallback(() => {
+    api.post('/auth/logout').catch(() => {});
+    persistUser(null);
+  }, [persistUser]);
 
-  const refreshUser = async () => {
-    if (!token) return null;
-    const { data } = await api.get('/auth/me');
-    setUser(data);
-    return data;
-  };
+  const refreshUser = useCallback(async () => {
+    try {
+      const { data } = await api.post('/auth/refresh');
+      persistUser(data.user);
+      return data.user;
+    } catch (error) {
+      persistUser(null);
+      throw error;
+    }
+  }, [persistUser]);
 
   const value = useMemo(
     () => ({
-      token,
       user,
       loading,
-      isAuthenticated: Boolean(token),
+      initializing,
+      isAuthenticated: Boolean(user),
       login,
       logout,
       register,
       refreshUser,
     }),
-    [token, user, loading],
+    [user, loading, initializing, login, logout, register, refreshUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

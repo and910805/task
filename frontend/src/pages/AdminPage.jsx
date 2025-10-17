@@ -7,7 +7,7 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { useRoleLabels } from '../context/RoleLabelContext.jsx';
 
 const AdminPage = () => {
-  const { user, token, logout } = useAuth();
+  const { user, logout } = useAuth();
   const { labels, options, overrides, updateRoleLabel, resetRoleLabel } = useRoleLabels();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -71,9 +71,7 @@ const AdminPage = () => {
       if (downloadUrl) {
         const resolvedUrl = /^https?:\/\//i.test(downloadUrl)
           ? downloadUrl
-          : token
-            ? `${downloadUrl}${downloadUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
-            : downloadUrl;
+          : new URL(downloadUrl, window.location.origin).toString();
         window.open(resolvedUrl, '_blank', 'noopener');
         setExportSuccess('報表匯出完成，已在新分頁開啟下載。');
       } else {

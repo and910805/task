@@ -10,7 +10,12 @@ import ProfilePage from './pages/ProfilePage.jsx';
 import './App.css';
 
 const PrivateRoute = ({ children, roles }) => {
-  const { isAuthenticated, user } = useAuth();
+  const { isAuthenticated, user, initializing } = useAuth();
+
+  if (initializing) {
+    return <div className="page-loading">登入狀態確認中...</div>;
+  }
+
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }

@@ -29,7 +29,13 @@ def create_app() -> Flask:
         SQLALCHEMY_DATABASE_URI=f"sqlite:///{database_path}",
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
         JWT_SECRET_KEY="jwt-secret-key",
-        JWT_ACCESS_TOKEN_EXPIRES=timedelta(hours=8),
+        JWT_ACCESS_TOKEN_EXPIRES=timedelta(hours=1),
+        JWT_TOKEN_LOCATION=["cookies"],
+        JWT_ACCESS_COOKIE_NAME="access_token",
+        JWT_COOKIE_SECURE=os.environ.get("JWT_COOKIE_SECURE", "false").lower()
+        in {"1", "true", "yes", "on"},
+        JWT_COOKIE_SAMESITE=os.environ.get("JWT_COOKIE_SAMESITE", "Lax"),
+        JWT_COOKIE_CSRF_PROTECT=False,
         UPLOAD_FOLDER=uploads_path,
         UPLOAD_IMAGE_DIR=images_path,
         UPLOAD_AUDIO_DIR=audio_path,
@@ -54,7 +60,7 @@ def create_app() -> Flask:
     ):
         os.makedirs(folder, exist_ok=True)
 
-    CORS(app)
+    CORS(app, supports_credentials=True)
     db.init_app(app)
     jwt.init_app(app)
 
@@ -103,21 +109,20 @@ def create_app() -> Flask:
 
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
-    def serve_frontend(path: str):
+    def serve_react(path: str):
         if path.startswith("api/"):
-            # Allow API blueprints to handle these routes.
             abort(404)
 
-        static_folder = app.static_folder
-        if static_folder:
-            requested_path = os.path.join(static_folder, path)
+        dist_dir = app.static_folder
+        if dist_dir:
+            requested_path = os.path.join(dist_dir, path)
 
             if path and os.path.exists(requested_path):
-                return send_from_directory(static_folder, path)
+                return send_from_directory(dist_dir, path)
 
-            index_path = os.path.join(static_folder, "index.html")
+            index_path = os.path.join(dist_dir, "index.html")
             if os.path.exists(index_path):
-                return send_from_directory(static_folder, "index.html")
+                return send_from_directory(dist_dir, "index.html")
 
         return ("Frontend build not found", 404)
 

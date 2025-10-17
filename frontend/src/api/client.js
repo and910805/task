@@ -1,15 +1,10 @@
 import axios from 'axios';
 
+axios.defaults.withCredentials = true;
+
 const api = axios.create({
   baseURL: import.meta.env.PROD ? '/api' : 'http://localhost:5000/api',
-});
-
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('auth_token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
+  withCredentials: true,
 });
 
 export default api;

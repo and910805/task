@@ -45,7 +45,7 @@ const formatHours = (hours) => Number(hours ?? 0).toFixed(2);
 const TaskDetailPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { token, user } = useAuth();
+  const { user } = useAuth();
   const { labels } = useRoleLabels();
   const [task, setTask] = useState(null);
   const [error, setError] = useState('');
@@ -115,20 +115,17 @@ const TaskDetailPage = () => {
     });
   }, [task]);
 
-  const buildAttachmentUrl = useCallback(
-    (url) => {
-      if (!url) return url;
-      if (/^https?:\/\//i.test(url)) {
-        return url;
-      }
-      if (!token) {
-        return url;
-      }
-      const separator = url.includes('?') ? '&' : '?';
-      return `${url}${separator}token=${encodeURIComponent(token)}`;
-    },
-    [token],
-  );
+  const buildAttachmentUrl = useCallback((url) => {
+    if (!url) return '';
+    if (/^https?:\/\//i.test(url)) {
+      return url;
+    }
+    try {
+      return new URL(url, window.location.origin).toString();
+    } catch (error) {
+      return url;
+    }
+  }, []);
 
   const resolvedAttachments = useMemo(
     () =>

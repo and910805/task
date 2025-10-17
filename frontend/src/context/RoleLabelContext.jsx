@@ -15,7 +15,7 @@ const RoleLabelContext = createContext({
 });
 
 export const RoleLabelProvider = ({ children }) => {
-  const { token } = useAuth();
+  const { isAuthenticated, initializing } = useAuth();
   const [overrides, setOverrides] = useState({});
   const [loading, setLoading] = useState(false);
 
@@ -35,7 +35,11 @@ export const RoleLabelProvider = ({ children }) => {
   }, []);
 
   useEffect(() => {
-    if (!token) {
+    if (initializing) {
+      return;
+    }
+
+    if (!isAuthenticated) {
       setOverrides({});
       return;
     }
@@ -43,7 +47,7 @@ export const RoleLabelProvider = ({ children }) => {
     refresh().catch(() => {
       // 如果取得自訂角色名稱失敗，維持預設值即可。
     });
-  }, [token, refresh]);
+  }, [isAuthenticated, initializing, refresh]);
 
   const labels = useMemo(
     () => ({ ...defaultRoleLabels, ...overrides }),
