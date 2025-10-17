@@ -99,17 +99,20 @@ def create_app() -> Flask:
 
     @app.before_request
     def _check_auth_and_redirect():
-        path = request.path or "/"
-
         if request.method == "OPTIONS":
             return None
 
-        # Allow unauthenticated access to public pages, authentication endpoints,
-        # and static assets produced by the React build output.
-        public_exact = {"/", "/login", "/favicon.ico", "/index.html"}
-        public_prefixes = (
+        path = request.path or "/"
+
+        public_paths = {
+            "/",
+            "/login",
+            "/favicon.ico",
+            "/index.html",
             "/api/auth/login",
             "/api/auth/register",
+        }
+        public_prefixes = (
             "/static/",
             "/assets/",
             "/favicon.",
@@ -117,10 +120,7 @@ def create_app() -> Flask:
             "/robots",
         )
 
-        if path.lower() == "/login":
-            return None
-
-        if path in public_exact:
+        if path in public_paths:
             return None
 
         if path.startswith("/api/"):
@@ -145,7 +145,7 @@ def create_app() -> Flask:
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
     def serve_react(path: str):
-        if path.startswith("api/"):
+        if path.startswith("api/") or path.startswith("static/"):
             return jsonify({"error": "Not found"}), 404
 
         dist_dir = app.static_folder
@@ -155,7 +155,7 @@ def create_app() -> Flask:
                 return send_from_directory(dist_dir, path)
 
         try:
-            return app.send_static_file("index.html")
+            return send_from_directory(app.static_folder, "index.html")
         except FileNotFoundError:
             abort(404)
 

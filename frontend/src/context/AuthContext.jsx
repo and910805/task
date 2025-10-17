@@ -104,7 +104,7 @@ export const AuthProvider = ({ children }) => {
     api.post('/auth/logout').catch(() => {});
     persistToken(null);
     persistUser(null);
-    window.location.href = '/login';
+    window.location.href = '/';
   }, [persistToken, persistUser]);
 
   const refreshUser = useCallback(async () => {
