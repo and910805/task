@@ -1,8 +1,9 @@
 import os
 from datetime import timedelta
 
-from flask import Flask, abort, jsonify, redirect, send_from_directory
+from flask import Flask, abort, jsonify, redirect, request, send_from_directory
 from flask_cors import CORS
+from flask_jwt_extended import verify_jwt_in_request
 
 from extensions import db, jwt
 from storage import create_storage, StorageError
@@ -30,12 +31,7 @@ def create_app() -> Flask:
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
         JWT_SECRET_KEY="jwt-secret-key",
         JWT_ACCESS_TOKEN_EXPIRES=timedelta(hours=1),
-        JWT_TOKEN_LOCATION=["cookies"],
-        JWT_ACCESS_COOKIE_NAME="access_token",
-        JWT_COOKIE_SECURE=os.environ.get("JWT_COOKIE_SECURE", "false").lower()
-        in {"1", "true", "yes", "on"},
-        JWT_COOKIE_SAMESITE=os.environ.get("JWT_COOKIE_SAMESITE", "Lax"),
-        JWT_COOKIE_CSRF_PROTECT=False,
+        JWT_TOKEN_LOCATION=["headers"],
         UPLOAD_FOLDER=uploads_path,
         UPLOAD_IMAGE_DIR=images_path,
         UPLOAD_AUDIO_DIR=audio_path,
@@ -101,6 +97,45 @@ def create_app() -> Flask:
     app.register_blueprint(export_bp, url_prefix="/api/export")
     app.register_blueprint(settings_bp, url_prefix="/api/settings")
 
+    @app.before_request
+    def _check_auth_and_redirect():
+        path = request.path or "/"
+
+        if request.method == "OPTIONS":
+            return None
+
+        # Allow unauthenticated access to public pages, authentication endpoints,
+        # and static assets produced by the React build output.
+        public_exact = {"/", "/login", "/favicon.ico", "/index.html"}
+        public_prefixes = (
+            "/api/auth/login",
+            "/api/auth/register",
+            "/static/",
+            "/assets/",
+            "/favicon.",
+            "/manifest",
+            "/robots",
+        )
+
+        if path.lower() == "/login":
+            return None
+
+        if path in public_exact:
+            return None
+
+        if path.startswith("/api/"):
+            return None
+
+        if path.startswith(public_prefixes):
+            return None
+
+        try:
+            verify_jwt_in_request()
+        except Exception:
+            return redirect("/", code=302)
+
+        return None
+
     @app.route("/LOGIN")
     def _redirect_upper_login():
         """Redirect legacy uppercase login URLs to the SPA root."""
@@ -111,20 +146,18 @@ def create_app() -> Flask:
     @app.route("/<path:path>")
     def serve_react(path: str):
         if path.startswith("api/"):
-            abort(404)
+            return jsonify({"error": "Not found"}), 404
 
         dist_dir = app.static_folder
-        if dist_dir:
+        if dist_dir and path:
             requested_path = os.path.join(dist_dir, path)
-
-            if path and os.path.exists(requested_path):
+            if os.path.isfile(requested_path):
                 return send_from_directory(dist_dir, path)
 
-            index_path = os.path.join(dist_dir, "index.html")
-            if os.path.exists(index_path):
-                return send_from_directory(dist_dir, "index.html")
-
-        return ("Frontend build not found", 404)
+        try:
+            return app.send_static_file("index.html")
+        except FileNotFoundError:
+            abort(404)
 
     @app.errorhandler(TypeError)
     def _handle_type_error(error):

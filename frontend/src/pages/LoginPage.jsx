@@ -9,7 +9,7 @@ import { useBranding } from '../context/BrandingContext.jsx';
 const LoginPage = () => {
   const navigate = useNavigate();
   const { login, register, loading } = useAuth();
-  const { branding } = useBranding();
+  const { branding, refresh: refreshBranding } = useBranding();
   const [mode, setMode] = useState('login');
   const [form, setForm] = useState({ username: '', password: '' });
   const brandName = branding.name || '立翔水電行';
@@ -25,6 +25,7 @@ const LoginPage = () => {
     try {
       if (mode === 'login') {
         await login({ username: form.username, password: form.password });
+        refreshBranding().catch(() => {});
         navigate('/');
       } else {
         await register({ username: form.username, password: form.password });

@@ -1,11 +1,7 @@
 import secrets
 
-from flask import Blueprint, current_app, jsonify, make_response, request
-from flask_jwt_extended import (
-    create_access_token,
-    get_jwt,
-    jwt_required,
-)
+from flask import Blueprint, jsonify, request
+from flask_jwt_extended import create_access_token, get_jwt, jwt_required
 
 from decorators import role_required
 from extensions import db
@@ -26,39 +22,6 @@ def _generate_password() -> str:
 
     # 12-characters token encoded using URL-safe alphabet (~16 bytes entropy)
     return secrets.token_urlsafe(9)
-
-
-def _set_access_cookie(response, token: str):
-    """Attach the JWT to the response using an HttpOnly cookie."""
-
-    config = current_app.config
-    cookie_name = config.get("JWT_ACCESS_COOKIE_NAME", "access_token")
-    secure = config.get("JWT_COOKIE_SECURE", False)
-    samesite = config.get("JWT_COOKIE_SAMESITE", "Lax")
-    expires = config.get("JWT_ACCESS_TOKEN_EXPIRES")
-    max_age = None
-
-    if hasattr(expires, "total_seconds"):
-        max_age = int(expires.total_seconds())
-
-    response.set_cookie(
-        cookie_name,
-        token,
-        httponly=True,
-        secure=secure,
-        samesite=samesite,
-        max_age=max_age,
-        path="/",
-    )
-    return response
-
-
-def _clear_access_cookie(response):
-    cookie_name = current_app.config.get("JWT_ACCESS_COOKIE_NAME", "access_token")
-    response.delete_cookie(cookie_name, path="/")
-    return response
-
-
 @auth_bp.post("/register")
 @jwt_required(optional=True)
 def register():
@@ -129,11 +92,7 @@ def login():
     additional_claims = {"role": user.role}
     token = create_access_token(identity=str(user.id), additional_claims=additional_claims)
 
-    response = make_response(
-        jsonify({"msg": "login success", "user": user.to_dict()})
-    )
-    _set_access_cookie(response, token)
-    return response
+    return jsonify({"msg": "login success", "user": user.to_dict(), "token": token})
 
 
 @auth_bp.get("/me")
@@ -156,25 +115,17 @@ def refresh():
 
     user = User.query.get(user_id)
     if user is None:
-        response = make_response(jsonify({"msg": "User not found"}), 404)
-        _clear_access_cookie(response)
-        return response
+        return jsonify({"msg": "User not found"}), 404
     additional_claims = {"role": user.role}
     token = create_access_token(identity=str(user.id), additional_claims=additional_claims)
 
-    response = make_response(
-        jsonify({"msg": "token refreshed", "user": user.to_dict()})
-    )
-    _set_access_cookie(response, token)
-    return response
+    return jsonify({"msg": "token refreshed", "user": user.to_dict(), "token": token})
 
 
 @auth_bp.post("/logout")
 @jwt_required(optional=True)
 def logout():
-    response = make_response(jsonify({"msg": "logout success"}))
-    _clear_access_cookie(response)
-    return response
+    return jsonify({"msg": "logout success"})
 
 
 def _serialize_user_with_tasks(user: User) -> dict:

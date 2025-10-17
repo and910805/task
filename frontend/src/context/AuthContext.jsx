@@ -16,11 +16,11 @@ export const AuthProvider = ({ children }) => {
     const storedUser = localStorage.getItem('auth_user');
     return storedUser ? JSON.parse(storedUser) : null;
   });
+  const [token, setToken] = useState(() => localStorage.getItem('auth_token'));
   const [loading, setLoading] = useState(false);
   const [initializing, setInitializing] = useState(true);
 
   const persistUser = useCallback((nextUser) => {
-    localStorage.removeItem('auth_token');
     if (nextUser) {
       localStorage.setItem('auth_user', JSON.stringify(nextUser));
       setUser(nextUser);
@@ -30,16 +30,33 @@ export const AuthProvider = ({ children }) => {
     }
   }, []);
 
+  const persistToken = useCallback((nextToken) => {
+    if (nextToken) {
+      localStorage.setItem('auth_token', nextToken);
+      setToken(nextToken);
+    } else {
+      localStorage.removeItem('auth_token');
+      setToken(null);
+    }
+  }, []);
+
   useEffect(() => {
     let active = true;
 
     const initialize = async () => {
+      if (!token) {
+        persistUser(null);
+        setInitializing(false);
+        return;
+      }
+
       try {
-        const { data } = await api.post('/auth/refresh');
+        const { data } = await api.get('/auth/me');
         if (!active) return;
-        persistUser(data.user);
+        persistUser(data);
       } catch (error) {
         if (!active) return;
+        persistToken(null);
         persistUser(null);
       } finally {
         if (active) {
@@ -53,20 +70,21 @@ export const AuthProvider = ({ children }) => {
     return () => {
       active = false;
     };
-  }, [persistUser]);
+  }, [token, persistToken, persistUser]);
 
   const login = useCallback(
     async (credentials) => {
       setLoading(true);
       try {
         const { data } = await api.post('/auth/login', credentials);
+        persistToken(data.token);
         persistUser(data.user);
         return data;
       } finally {
         setLoading(false);
       }
     },
-    [persistUser],
+    [persistToken, persistUser],
   );
 
   const register = useCallback(async (payload) => {
@@ -84,32 +102,45 @@ export const AuthProvider = ({ children }) => {
 
   const logout = useCallback(() => {
     api.post('/auth/logout').catch(() => {});
+    persistToken(null);
     persistUser(null);
-  }, [persistUser]);
+    window.location.href = '/login';
+  }, [persistToken, persistUser]);
 
   const refreshUser = useCallback(async () => {
     try {
-      const { data } = await api.post('/auth/refresh');
-      persistUser(data.user);
-      return data.user;
+      const { data } = await api.get('/auth/me');
+      persistUser(data);
+      return data;
     } catch (error) {
+      persistToken(null);
       persistUser(null);
       throw error;
     }
-  }, [persistUser]);
+  }, [persistToken, persistUser]);
 
   const value = useMemo(
     () => ({
       user,
       loading,
       initializing,
+      token,
       isAuthenticated: Boolean(user),
       login,
       logout,
       register,
       refreshUser,
     }),
-    [user, loading, initializing, login, logout, register, refreshUser],
+    [
+      user,
+      loading,
+      initializing,
+      token,
+      login,
+      logout,
+      register,
+      refreshUser,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
