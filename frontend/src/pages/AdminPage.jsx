@@ -4,10 +4,18 @@ import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
 import { defaultRoleLabels } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useBranding } from '../context/BrandingContext.jsx';
 import { useRoleLabels } from '../context/RoleLabelContext.jsx';
 
 const AdminPage = () => {
   const { user, logout } = useAuth();
+  const {
+    branding,
+    loading: brandingLoading,
+    updateName: updateBrandingName,
+    uploadLogo: uploadBrandingLogo,
+    removeLogo: removeBrandingLogo,
+  } = useBranding();
   const { labels, options, overrides, updateRoleLabel, resetRoleLabel } = useRoleLabels();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -27,10 +35,19 @@ const AdminPage = () => {
   const [roleNameEdits, setRoleNameEdits] = useState({ ...labels });
   const [roleLabelMessages, setRoleLabelMessages] = useState({});
   const [roleLabelBusy, setRoleLabelBusy] = useState({});
+  const [brandingName, setBrandingName] = useState(branding.name);
+  const [brandingMessage, setBrandingMessage] = useState(null);
+  const [brandingBusy, setBrandingBusy] = useState(false);
+  const [logoMessage, setLogoMessage] = useState(null);
+  const [logoBusy, setLogoBusy] = useState(false);
 
   useEffect(() => {
     setRoleNameEdits({ ...labels });
   }, [labels]);
+
+  useEffect(() => {
+    setBrandingName(branding.name);
+  }, [branding.name]);
 
   const workerLabel = labels.worker || defaultRoleLabels.worker;
 
@@ -88,6 +105,70 @@ const AdminPage = () => {
   const handleFormChange = (event) => {
     const { name, value } = event.target;
     setForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleBrandingNameSave = async () => {
+    const value = (brandingName || '').trim();
+    if (!value) {
+      setBrandingMessage({ type: 'error', text: '請輸入登入畫面名稱' });
+      return;
+    }
+
+    setBrandingBusy(true);
+    setBrandingMessage(null);
+    try {
+      await updateBrandingName(value);
+      setBrandingMessage({ type: 'success', text: '已更新登入畫面名稱。' });
+    } catch (err) {
+      const message = err.response?.data?.msg || '更新登入名稱失敗。';
+      setBrandingMessage({ type: 'error', text: message });
+    } finally {
+      setBrandingBusy(false);
+    }
+  };
+
+  const handleLogoUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    setLogoBusy(true);
+    setLogoMessage(null);
+    try {
+      await uploadBrandingLogo(file);
+      setLogoMessage({ type: 'success', text: '已更新網站 Logo。' });
+    } catch (err) {
+      const message = err.response?.data?.msg || '上傳網站 Logo 失敗。';
+      setLogoMessage({ type: 'error', text: message });
+    } finally {
+      setLogoBusy(false);
+      event.target.value = '';
+    }
+  };
+
+  const handleLogoRemove = async () => {
+    if (!branding.logoUrl && !branding.logoPath) {
+      setLogoMessage({ type: 'error', text: '目前沒有可移除的 Logo。' });
+      return;
+    }
+
+    const confirmed = window.confirm('確定要移除目前的網站 Logo 嗎？');
+    if (!confirmed) {
+      return;
+    }
+
+    setLogoBusy(true);
+    setLogoMessage(null);
+    try {
+      await removeBrandingLogo();
+      setLogoMessage({ type: 'success', text: '已移除網站 Logo。' });
+    } catch (err) {
+      const message = err.response?.data?.msg || '移除網站 Logo 失敗。';
+      setLogoMessage({ type: 'error', text: message });
+    } finally {
+      setLogoBusy(false);
+    }
   };
 
   const handleSubmit = async (event) => {
@@ -209,6 +290,86 @@ const AdminPage = () => {
   return (
     <div className="page">
       <AppHeader title="使用者管理" subtitle="建立、檢視與移除系統帳號" />
+      <section className="panel">
+        <h2>品牌設定</h2>
+        <p className="panel-hint">自訂登入畫面標題與網站 Logo，將同步套用於登入頁與後台。</p>
+        <div className="branding-settings">
+          <div className="branding-preview">
+            {branding.logoUrl ? (
+              <img src={branding.logoUrl} alt={`${branding.name} Logo`} />
+            ) : (
+              <div className="branding-placeholder">尚未設定 Logo</div>
+            )}
+            <span className="branding-preview__name">{branding.name}</span>
+          </div>
+          <div className="branding-controls">
+            <label>
+              登入畫面名稱
+              <input
+                value={brandingName}
+                onChange={(event) => {
+                  setBrandingName(event.target.value);
+                  setBrandingMessage(null);
+                }}
+                placeholder="顯示在登入畫面的標題"
+                disabled={brandingBusy || brandingLoading}
+              />
+            </label>
+            {brandingMessage ? (
+              <p className={brandingMessage.type === 'error' ? 'error-text' : 'success-text'}>
+                {brandingMessage.text}
+              </p>
+            ) : null}
+            <div className="branding-actions">
+              <button
+                type="button"
+                onClick={handleBrandingNameSave}
+                disabled={brandingBusy || brandingLoading}
+              >
+                {brandingBusy ? '儲存中…' : '儲存名稱'}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => {
+                  setBrandingName(branding.name);
+                  setBrandingMessage(null);
+                }}
+                disabled={brandingBusy || brandingLoading}
+              >
+                回復目前設定
+              </button>
+            </div>
+            <label className="branding-upload">
+              <span>網站 Logo</span>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/jpg,image/gif,image/webp,image/svg+xml"
+                onChange={handleLogoUpload}
+                disabled={logoBusy || brandingLoading}
+              />
+            </label>
+            <p className="panel-hint">建議使用透明背景 PNG 或 SVG，檔案大小請低於 5MB。</p>
+            {logoMessage ? (
+              <p className={logoMessage.type === 'error' ? 'error-text' : 'success-text'}>
+                {logoMessage.text}
+              </p>
+            ) : null}
+            <div className="branding-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleLogoRemove}
+                disabled={
+                  logoBusy || brandingLoading || (!branding.logoUrl && !branding.logoPath)
+                }
+              >
+                {logoBusy ? '處理中…' : '移除 Logo'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
       <section className="panel">
         <h2>匯出報表</h2>
         <p className="panel-hint">產出任務、附件與工時的 Excel 報表。</p>

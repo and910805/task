@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { useAuth } from '../context/AuthContext.jsx';
+import { useBranding } from '../context/BrandingContext.jsx';
 
 const LoginPage = () => {
   const navigate = useNavigate();
   const { login, register, loading } = useAuth();
+  const { branding } = useBranding();
   const [mode, setMode] = useState('login');
   const [error, setError] = useState('');
   const [form, setForm] = useState({ username: '', password: '' });
@@ -39,7 +41,14 @@ const LoginPage = () => {
   return (
     <div className="auth-container">
       <div className="auth-brand">
-        <h1>立翔水電行</h1>
+        {branding.logoUrl ? (
+          <img
+            src={branding.logoUrl}
+            alt={`${branding.name} Logo`}
+            className="auth-brand__logo"
+          />
+        ) : null}
+        <h1>{branding.name}</h1>
       </div>
       <form className="auth-card" onSubmit={handleSubmit}>
         <h2>{mode === 'login' ? '登入' : '建立帳號'}</h2>

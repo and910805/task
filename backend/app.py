@@ -133,7 +133,7 @@ def create_app() -> Flask:
         raise error
 
     with app.app_context():
-        from models import Attachment, RoleLabel, Task, TaskUpdate, User  # noqa: F401
+        from models import Attachment, RoleLabel, SiteSetting, Task, TaskUpdate, User  # noqa: F401
 
         db.create_all()
 

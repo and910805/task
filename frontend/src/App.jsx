@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 
 import { AuthProvider, useAuth } from './context/AuthContext.jsx';
+import { BrandingProvider } from './context/BrandingContext.jsx';
 import { RoleLabelProvider } from './context/RoleLabelContext.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import TaskDetailPage from './pages/TaskDetailPage.jsx';
@@ -66,13 +67,15 @@ const AppRoutes = () => (
 
 function App() {
   return (
-    <AuthProvider>
-      <RoleLabelProvider>
-        <BrowserRouter>
-          <AppRoutes />
-        </BrowserRouter>
-      </RoleLabelProvider>
-    </AuthProvider>
+    <BrandingProvider>
+      <AuthProvider>
+        <RoleLabelProvider>
+          <BrowserRouter>
+            <AppRoutes />
+          </BrowserRouter>
+        </RoleLabelProvider>
+      </AuthProvider>
+    </BrandingProvider>
   );
 }
 

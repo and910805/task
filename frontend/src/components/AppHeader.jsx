@@ -1,10 +1,12 @@
 import { Link } from 'react-router-dom';
 
 import { useAuth } from '../context/AuthContext.jsx';
+import { useBranding } from '../context/BrandingContext.jsx';
 import { useRoleLabels } from '../context/RoleLabelContext.jsx';
 
 const AppHeader = ({ title, subtitle, actions = null, children }) => {
   const { user, logout } = useAuth();
+  const { branding } = useBranding();
   const { labels } = useRoleLabels();
   const isAdmin = user?.role === 'admin';
 
@@ -16,6 +18,12 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
         {children}
       </div>
       <div className="header-actions">
+        <div className="header-brand">
+          {branding.logoUrl ? (
+            <img src={branding.logoUrl} alt={`${branding.name} Logo`} />
+          ) : null}
+          <span>{branding.name}</span>
+        </div>
         {actions ? <div className="header-extra">{actions}</div> : null}
         <nav className="header-nav">
           <Link to="/">任務列表</Link>

@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 
 from flask import current_app
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -256,3 +257,45 @@ class RoleLabel(db.Model):
             "label": self.label,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class SiteSetting(db.Model):
+    __tablename__ = "site_setting"
+
+    key = db.Column(db.String(64), primary_key=True)
+    value = db.Column(db.Text, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @classmethod
+    def get_record(cls, key: str) -> Optional["SiteSetting"]:
+        try:
+            return cls.query.filter_by(key=key).first()
+        except Exception:
+            return None
+
+    @classmethod
+    def get_value(cls, key: str, default: Optional[str] = None) -> Optional[str]:
+        record = cls.get_record(key)
+        if record is None:
+            return default
+        return record.value
+
+    @classmethod
+    def set_value(cls, key: str, value: str) -> "SiteSetting":
+        record = cls.get_record(key)
+        if record is None:
+            record = cls(key=key, value=value)
+            db.session.add(record)
+        else:
+            record.value = value
+        db.session.commit()
+        return record
+
+    @classmethod
+    def delete_value(cls, key: str) -> bool:
+        record = cls.get_record(key)
+        if record is None:
+            return False
+        db.session.delete(record)
+        db.session.commit()
+        return True
