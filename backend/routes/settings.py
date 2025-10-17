@@ -1,7 +1,7 @@
 import os
 import uuid
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify, redirect, request, send_from_directory, url_for
 from flask_jwt_extended import jwt_required
 
 from decorators import role_required
@@ -51,7 +51,12 @@ def _serialize_branding():
                 if getattr(storage, "use_s3", False):
                     logo_url = storage.url_for(logo_path, expires_in=3600)
                 else:
-                    logo_url = storage.url_for(logo_path)
+                    version = logo_updated_at or "0"
+                    logo_url = url_for(
+                        "settings.serve_branding_logo",
+                        v=version,
+                        _external=False,
+                    )
             except StorageError:
                 logo_url = None
 
@@ -67,6 +72,41 @@ def _serialize_branding():
 @jwt_required(optional=True)
 def get_branding():
     return jsonify(_serialize_branding())
+
+
+@settings_bp.get("/branding/logo")
+def serve_branding_logo():
+    """Expose the configured branding logo without requiring authentication."""
+
+    logo_record = SiteSetting.get_record(BRANDING_LOGO_KEY)
+    logo_path = logo_record.value if logo_record else None
+
+    if not logo_path:
+        return jsonify({"msg": "Logo not configured"}), 404
+
+    try:
+        storage = _storage()
+    except RuntimeError:
+        storage = None
+
+    if storage is None:
+        return jsonify({"msg": "Storage backend is not configured"}), 500
+
+    if getattr(storage, "use_s3", False):
+        try:
+            url = storage.url_for(logo_path, expires_in=3600)
+        except StorageError:
+            return jsonify({"msg": "Unable to generate logo URL"}), 500
+        return redirect(url)
+
+    try:
+        path = storage.local_path(logo_path)
+    except FileNotFoundError:
+        return jsonify({"msg": "Logo not found"}), 404
+    except StorageError:
+        return jsonify({"msg": "Unable to locate logo"}), 500
+
+    return send_from_directory(path.parent, path.name)
 
 
 @settings_bp.put("/branding/name")
