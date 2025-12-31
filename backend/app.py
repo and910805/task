@@ -21,7 +21,7 @@ def create_app() -> Flask:
     app = Flask(__name__, static_folder=frontend_dist_path, static_url_path="/")
 
     base_dir = os.path.dirname(__file__)
-    database_path = os.path.join(base_dir, "task_manager.db")
+    database_path = os.path.join(uploads_path, "task_manager.db")
     uploads_path = os.path.join(base_dir, "uploads")
     reports_path = os.path.join(uploads_path, "reports")
     images_path = os.path.join(uploads_path, "images")
