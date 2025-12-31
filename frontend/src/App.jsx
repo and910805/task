@@ -1,23 +1,20 @@
-import { useState, useEffect } from 'react' // 加上 useEffect
-import axios from 'axios' // 引入 axios
+import { useState, useEffect } from 'react'
+import api from './api'
 import './App.css'
-
-// 1. 這裡填入妳在 Zeabur 後端服務拿到的那個「生成網域」
-const API_URL = 'https://task.zeabur.internal/api/hello' 
 
 function App() {
   const [message, setMessage] = useState('載入中...')
 
-  // 2. 當網頁開啟時，自動去叫 Flask 起床工作
   useEffect(() => {
-    axios.get(API_URL)
+    api.get('/api/health')
       .then(res => {
-        setMessage(res.data.message); // 假設 Flask 回傳 { "message": "Hi" }
+        const { status } = res.data
+        setMessage(status === 'ok' ? '後端連線正常' : '健康檢查回應異常')
       })
       .catch(err => {
-        console.error('連線失敗：', err);
-        setMessage('連不到後端 QQ');
-      });
+        console.error('連線失敗：', err)
+        setMessage('連不到後端 QQ')
+      })
   }, []);
 
   return (
