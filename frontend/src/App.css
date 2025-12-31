@@ -943,7 +943,7 @@ button:disabled {
 }
 
 .login-card {
-  width: min(360px, 100%);
+  width: min(640px, 100%);
   margin: 0 auto;
   padding: 2rem;
   border: 1px solid var(--login-card-border);

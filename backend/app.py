@@ -1,4 +1,6 @@
-import os
+import sys, os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from datetime import timedelta
 
 from flask import Flask, abort, jsonify, redirect, request, send_from_directory
@@ -10,10 +12,12 @@ from storage import create_storage, StorageError
 
 
 def create_app() -> Flask:
+    # 前端 dist 目錄位置
     frontend_dist_path = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
     )
 
+    # 建立 Flask app，靜態資源目錄指向 React build 結果
     app = Flask(__name__, static_folder=frontend_dist_path, static_url_path="/")
 
     base_dir = os.path.dirname(__file__)
@@ -25,6 +29,7 @@ def create_app() -> Flask:
     signature_path = os.path.join(uploads_path, "signature")
     other_path = os.path.join(uploads_path, "other")
 
+    # 基本設定
     app.config.update(
         SECRET_KEY="super-secret-key",
         SQLALCHEMY_DATABASE_URI=f"sqlite:///{database_path}",
@@ -46,6 +51,7 @@ def create_app() -> Flask:
         MAX_CONTENT_LENGTH=16 * 1024 * 1024,
     )
 
+    # 確保上傳資料夾存在
     for folder in (
         uploads_path,
         reports_path,
@@ -56,10 +62,12 @@ def create_app() -> Flask:
     ):
         os.makedirs(folder, exist_ok=True)
 
+    # 啟用 CORS / JWT / 資料庫
     CORS(app, supports_credentials=True)
     db.init_app(app)
     jwt.init_app(app)
 
+    # 初始化 Storage
     try:
         storage_backend = create_storage(app.config)
     except StorageError as exc:
@@ -67,10 +75,9 @@ def create_app() -> Flask:
 
     app.extensions["storage"] = storage_backend
 
+    # === JWT 錯誤處理 ===
     @jwt.user_identity_loader
     def _user_identity_lookup(identity):
-        """Ensure all JWT subjects are stored as strings."""
-
         return str(identity) if identity is not None else None
 
     @jwt.invalid_token_loader
@@ -85,6 +92,7 @@ def create_app() -> Flask:
     def _expired_token_callback(jwt_header, jwt_payload):
         return jsonify({"msg": "Authentication token has expired"}), 401
 
+    # === Blueprint ===
     from routes.auth import auth_bp
     from routes.export import export_bp
     from routes.settings import settings_bp
@@ -97,6 +105,7 @@ def create_app() -> Flask:
     app.register_blueprint(export_bp, url_prefix="/api/export")
     app.register_blueprint(settings_bp, url_prefix="/api/settings")
 
+    # === Before Request：JWT 驗證 ===
     @app.before_request
     def _check_auth_and_redirect():
         if request.method == "OPTIONS":
@@ -104,77 +113,65 @@ def create_app() -> Flask:
 
         path = request.path or "/"
 
+        # 可公開訪問的路徑
         public_paths = {
-            "/",
-            "/login",
-            "/favicon.ico",
-            "/index.html",
-            "/api/auth/login",
-            "/api/auth/register",
+            "/", "/login", "/favicon.ico", "/index.html",
+            "/api/auth/login", "/api/auth/register",
         }
         public_prefixes = (
-            "/static/",
-            "/assets/",
-            "/favicon.",
-            "/manifest",
-            "/robots",
+            "/static/", "/assets/", "/favicon.", "/manifest", "/robots",
         )
 
-        if path in public_paths:
-            return None
-
-        if path.startswith("/api/"):
-            return None
-
-        if path.startswith(public_prefixes):
+        if path in public_paths or path.startswith(public_prefixes) or path.startswith("/api/"):
             return None
 
         try:
             verify_jwt_in_request()
         except Exception:
+            # 未登入 → 導回首頁（React 登入頁）
             return redirect("/", code=302)
 
         return None
 
-    @app.route("/LOGIN")
-    def _redirect_upper_login():
-        """Redirect legacy uppercase login URLs to the SPA root."""
-
-        return redirect("/", code=302)
-
+    # === React Router fallback ===
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
     def serve_react(path: str):
-        if path.startswith("api/") or path.startswith("static/"):
+        """
+        處理所有非 API 路由，避免重新整理 /login、/admin 等頁面時 404。
+        """
+        # 排除 API 或明確靜態資源請求
+        if path.startswith(("api/", "uploads/", "static/", "favicon.", "manifest", "robots")):
             return jsonify({"error": "Not found"}), 404
 
         dist_dir = app.static_folder
-        if dist_dir and path:
-            requested_path = os.path.join(dist_dir, path)
-            if os.path.isfile(requested_path):
-                return send_from_directory(dist_dir, path)
+        requested_path = os.path.join(dist_dir, path)
 
-        try:
-            return send_from_directory(app.static_folder, "index.html")
-        except FileNotFoundError:
-            abort(404)
+        # 若請求對應到實際檔案（例如 .js, .css, .png），直接傳回
+        if os.path.exists(requested_path) and not os.path.isdir(requested_path):
+            return send_from_directory(dist_dir, path)
 
+        # 其他所有路由交給 React Router
+        return send_from_directory(dist_dir, "index.html")
+
+    # === TypeError 處理（舊 JWT 問題） ===
     @app.errorhandler(TypeError)
     def _handle_type_error(error):
         if str(error) == "Subject must be a string":
             return jsonify({"msg": "Invalid authentication token"}), 401
         raise error
 
+    # === 資料庫初始化 ===
     with app.app_context():
         from models import Attachment, RoleLabel, SiteSetting, Task, TaskUpdate, User  # noqa: F401
-
         db.create_all()
 
     return app
 
 
+# 建立 Flask app 實例
 app = create_app()
 
-
 if __name__ == "__main__":
+    # 使用 0.0.0.0，允許外部連線
     app.run(host="0.0.0.0", port=5000, debug=True)

@@ -336,6 +336,7 @@ const TaskListPage = () => {
                 taskAssigneeIds.includes(option.value),
               );
               const hasMissingAssignee =
+		isManager &&
                 taskAssigneeIds.length > 0 &&
                 selectValue.length !== taskAssigneeIds.length;
               return (
