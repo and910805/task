@@ -1,30 +1,25 @@
-import { useState, useEffect } from 'react'
-import api from './api'
-import './App.css'
+import { useNavigate } from 'react-router-dom';
+import api from './api'; // 假設這是您封裝好的 axios 實例
 
-function App() {
-  const [message, setMessage] = useState('載入中...')
+const LogoutButton = () => {
+  const navigate = useNavigate();
 
-  useEffect(() => {
-    api.get('/api/health')
-      .then(res => {
-        const { status } = res.data
-        setMessage(status === 'ok' ? '後端連線正常' : '健康檢查回應異常')
-      })
-      .catch(err => {
-        console.error('連線失敗：', err)
-        setMessage('連不到後端 QQ')
-      })
-  }, []);
+  const handleLogout = async () => {
+    try {
+      // 1. (選擇性) 呼叫後端登出 API，確認連線狀態
+      await api.post('/api/auth/logout');
+    } catch (error) {
+      console.error('後端登出回應異常', error);
+    } finally {
+      // 2. 務必清除本地儲存的 Token
+      localStorage.removeItem('token'); 
+      localStorage.removeItem('role');
 
-  return (
-    <div className="App">
-      <h1>全端測試</h1>
-      <div className="card">
-        <p>後端回傳的訊息：<strong>{message}</strong></p>
-      </div>
-    </div>
-  )
-}
+      // 3. 導向登入頁面
+      navigate('/login');
+      alert('您已成功登出');
+    }
+  };
 
-export default App
+  return <button onClick={handleLogout}>登出</button>;
+};
