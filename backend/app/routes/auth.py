@@ -35,9 +35,3 @@ def login():
 
     token = create_access_token(identity={'id': user.id, 'role': user.role})
     return jsonify({'token': token, 'role': user.role})
-@auth_bp.route('/logout', methods=['POST'])
-@jwt_required()
-def logout():
-    # 如果未來需要實作 Token 黑名單 (Blacklist)，會在這裡處理
-    # 目前僅回傳成功訊息，告知前端連線正常
-    return jsonify({'msg': '登出成功'}), 200
