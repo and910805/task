@@ -37,6 +37,7 @@ def create_app() -> Flask:
         REPORTS_DIR=reports_path,
         STORAGE_MODE=os.environ.get("STORAGE_MODE", "local"),
         MAX_CONTENT_LENGTH=16 * 1024 * 1024,
+        CORS_ORIGINS=["https://task.kuanlin.pro", "http://localhost:5173"],
     )
 
     for folder in (uploads_path, reports_path, images_path, audio_path, signature_path, other_path):
