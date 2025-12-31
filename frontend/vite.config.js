@@ -14,7 +14,7 @@ const spaFallbackPlugin = () => {
 
     const url = req.url ?? '';
 
-    // Skip API requests or assets (those containing a dot before query/hash segments)
+    // Skip API requests or assets
     if (url.startsWith('/api') || /\.[^/?#]+$/.test(url.split('?')[0])) {
       return false;
     }
@@ -44,7 +44,9 @@ const spaFallbackPlugin = () => {
 export default defineConfig({
   plugins: [react(), spaFallbackPlugin()],
   build: {
-    outDir: '../frontend/dist',
+    // 關鍵修正：將輸出目錄改回當前路徑下的 dist
+    // 這樣 Zeabur 才能在正確的位置找到編譯好的檔案
+    outDir: 'dist', 
     emptyOutDir: true,
   },
 });
