@@ -50,7 +50,7 @@ const ProfilePage = () => {
 
     setSubmitting(true);
     try {
-      await api.post('/auth/change-password', form);
+      await api.post('auth/change-password', form);
       setSuccess('密碼已更新，請使用新密碼登入。');
       setForm({ current_password: '', new_password: '', confirm_password: '' });
       await refreshUser();
@@ -81,7 +81,7 @@ const ProfilePage = () => {
     setNotificationSuccess('');
     setNotificationSubmitting(true);
     try {
-      await api.put('/auth/notification-settings', {
+      await api.put('auth/notification-settings', {
         notification_type: notificationForm.notification_type,
         notification_value: notificationForm.notification_value,
       });

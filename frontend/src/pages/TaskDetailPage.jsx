@@ -91,7 +91,7 @@ const TaskDetailPage = () => {
   const loadAssignableUsers = async () => {
     if (!isManager) return;
     try {
-      const { data } = await api.get('/auth/assignable-users');
+      const { data } = await api.get('auth/assignable-users');
       setAssignableUsers(data);
     } catch (err) {
       console.error('無法取得可指派使用者列表', err);

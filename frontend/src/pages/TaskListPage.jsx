@@ -74,7 +74,7 @@ const TaskListPage = () => {
   const loadUsers = async () => {
     if (!isManager) return;
     try {
-      const { data } = await api.get('/auth/assignable-users');
+      const { data } = await api.get('auth/assignable-users');
       setUsers(data);
     } catch (err) {
       console.error('無法取得使用者列表', err);
