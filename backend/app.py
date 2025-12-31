@@ -1,33 +1,59 @@
-import sys, os
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
+import os
+import sys
 from datetime import timedelta
-from flask import Flask, abort, jsonify, redirect, request, send_from_directory
+
+from flask import Flask, jsonify, redirect, request, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import verify_jwt_in_request
+
+# Ensure local imports work when gunicorn --chdir backend
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from extensions import db, jwt
-from storage import create_storage, StorageError
+from storage import StorageError, create_storage
+
+
+def _parse_cors_origins(raw: str | None) -> list[str]:
+    if not raw:
+        return ["http://localhost:5173"]
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _normalize_database_url(db_url: str | None) -> str | None:
+    if not db_url:
+        return None
+    if db_url.startswith("postgres://"):
+        return db_url.replace("postgres://", "postgresql://", 1)
+    return db_url
+
 
 def create_app() -> Flask:
     base_dir = os.path.dirname(os.path.abspath(__file__))
+
     uploads_path = os.path.join(base_dir, "uploads")
+    os.makedirs(uploads_path, exist_ok=True)
+
     database_path = os.path.join(uploads_path, "task_manager.db")
     frontend_dist_path = os.path.abspath(os.path.join(base_dir, "..", "frontend", "dist"))
 
     app = Flask(__name__, static_folder=frontend_dist_path, static_url_path="/")
 
-    # 定義子目錄
     reports_path = os.path.join(uploads_path, "reports")
     images_path = os.path.join(uploads_path, "images")
     audio_path = os.path.join(uploads_path, "audio")
     signature_path = os.path.join(uploads_path, "signature")
     other_path = os.path.join(uploads_path, "other")
 
+    secret_key = os.environ.get("SECRET_KEY", "dev-secret-key")
+    jwt_secret = os.environ.get("JWT_SECRET_KEY", secret_key)
+    database_url = _normalize_database_url(os.environ.get("DATABASE_URL"))
+    cors_origins = _parse_cors_origins(os.environ.get("CORS_ORIGINS"))
+
     app.config.update(
-        SECRET_KEY="super-secret-key",
-        SQLALCHEMY_DATABASE_URI=f"sqlite:///{database_path}",
+        SECRET_KEY=secret_key,
+        JWT_SECRET_KEY=jwt_secret,
+        SQLALCHEMY_DATABASE_URI=database_url or f"sqlite:///{database_path}",
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
-        JWT_SECRET_KEY="jwt-secret-key",
         JWT_ACCESS_TOKEN_EXPIRES=timedelta(hours=1),
         JWT_TOKEN_LOCATION=["headers"],
         UPLOAD_FOLDER=uploads_path,
@@ -37,13 +63,14 @@ def create_app() -> Flask:
         REPORTS_DIR=reports_path,
         STORAGE_MODE=os.environ.get("STORAGE_MODE", "local"),
         MAX_CONTENT_LENGTH=16 * 1024 * 1024,
-        CORS_ORIGINS=["https://task.kuanlin.pro", "http://localhost:5173"],
+        CORS_ORIGINS=cors_origins,
     )
 
     for folder in (uploads_path, reports_path, images_path, audio_path, signature_path, other_path):
         os.makedirs(folder, exist_ok=True)
 
-    CORS(app, supports_credentials=True)
+    CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": app.config["CORS_ORIGINS"]}})
+
     db.init_app(app)
     jwt.init_app(app)
 
@@ -53,7 +80,6 @@ def create_app() -> Flask:
         raise RuntimeError(f"Failed to configure storage backend: {exc}") from exc
     app.extensions["storage"] = storage_backend
 
-    # === 註冊 Blueprint ===
     from routes.auth import auth_bp
     from routes.export import export_bp
     from routes.settings import settings_bp
@@ -66,27 +92,27 @@ def create_app() -> Flask:
     app.register_blueprint(export_bp, url_prefix="/api/export")
     app.register_blueprint(settings_bp, url_prefix="/api/settings")
 
-    # === 新增：專門給臭寶測試的健康檢查路徑 ===
-    @app.route('/api/health')
+    @app.route("/api/health")
     def health_check():
-        return jsonify({"status": "ok", "message": "立翔水電行後端運作正常！"}), 200
+        return jsonify({"status": "ok"}), 200
 
     @app.before_request
     def _check_auth_and_redirect():
-        if request.method == "OPTIONS": return None
+        if request.method == "OPTIONS":
+            return None
         path = request.path or "/"
         public_paths = {"/", "/login", "/favicon.ico", "/index.html", "/api/auth/login", "/api/auth/register", "/api/health"}
-        if path in public_paths or path.startswith(("/static/", "/assets/", "/api/")): return None
+        if path in public_paths or path.startswith(("/static/", "/assets/", "/api/")):
+            return None
         try:
             verify_jwt_in_request()
-        except:
+        except Exception:
             return redirect("/", code=302)
 
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
     def serve_react(path: str):
         if path.startswith(("api/", "uploads/", "static/", "favicon.", "manifest", "robots")):
-            # 如果是 API 路徑但沒對到，回傳 JSON 404
             return jsonify({"error": "Not found"}), 404
         dist_dir = app.static_folder
         requested_path = os.path.join(dist_dir, path)
@@ -95,12 +121,15 @@ def create_app() -> Flask:
         return send_from_directory(dist_dir, "index.html")
 
     with app.app_context():
-        from models import Attachment, RoleLabel, SiteSetting, Task, TaskUpdate, User # noqa
+        from models import Attachment, RoleLabel, SiteSetting, Task, TaskUpdate, User
         db.create_all()
 
     return app
 
+
 app = create_app()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    port = int(os.environ.get("PORT", "5000"))
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(host="0.0.0.0", port=port, debug=debug)
