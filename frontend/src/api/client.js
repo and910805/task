@@ -1,7 +1,10 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: import.meta.env.PROD ? '/api' : 'http://localhost:5000/api',
+  // 如果是正式環境，直接寫死後端的 API 網址，最保險！
+  baseURL: import.meta.env.PROD 
+    ? 'https://api.kuanlin.pro/api' 
+    : 'http://localhost:5000/api',
 });
 
 api.interceptors.request.use((config) => {
@@ -10,8 +13,6 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers = config.headers ?? {};
     config.headers.Authorization = `Bearer ${token}`;
-  } else if (config.headers?.Authorization) {
-    delete config.headers.Authorization;
   }
 
   return config;
