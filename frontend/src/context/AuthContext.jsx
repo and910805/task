@@ -34,9 +34,15 @@ export const AuthProvider = ({ children }) => {
     if (nextToken) {
       localStorage.setItem('auth_token', nextToken);
       setToken(nextToken);
+
+      // ✅ 讓後續 request 立刻帶上 token（避免剛登入就打 /me 時沒帶到）
+      api.defaults.headers.common.Authorization = `Bearer ${nextToken}`;
     } else {
       localStorage.removeItem('auth_token');
       setToken(null);
+
+      // ✅ 清掉 default header
+      delete api.defaults.headers.common.Authorization;
     }
   }, []);
 
@@ -50,8 +56,13 @@ export const AuthProvider = ({ children }) => {
         return;
       }
 
+      // ✅ 若 token 是從 localStorage 讀回來，確保 axios defaults 也有帶到
+      api.defaults.headers.common.Authorization = `Bearer ${token}`;
+
       try {
-        const { data } = await api.get('/auth/me');
+        // ✅ 重點：不要用 /auth/me（會變成打到 /auth/me）
+        // baseURL=/api + 'auth/me' => /api/auth/me
+        const { data } = await api.get('auth/me');
         if (!active) return;
         persistUser(data);
       } catch (error) {
@@ -59,9 +70,7 @@ export const AuthProvider = ({ children }) => {
         persistToken(null);
         persistUser(null);
       } finally {
-        if (active) {
-          setInitializing(false);
-        }
+        if (active) setInitializing(false);
       }
     };
 
@@ -76,9 +85,12 @@ export const AuthProvider = ({ children }) => {
     async (credentials) => {
       setLoading(true);
       try {
-        const { data } = await api.post('/auth/login', credentials);
+        // ✅ 重點：改成 auth/login（不要前導 /）
+        const { data } = await api.post('auth/login', credentials);
+
         persistToken(data.token);
         persistUser(data.user);
+
         return data;
       } finally {
         setLoading(false);
@@ -90,7 +102,8 @@ export const AuthProvider = ({ children }) => {
   const register = useCallback(async (payload) => {
     setLoading(true);
     try {
-      const { data } = await api.post('/auth/register', {
+      // ✅ 重點：改成 auth/register（不要前導 /）
+      const { data } = await api.post('auth/register', {
         ...payload,
         role: 'worker',
       });
@@ -101,7 +114,8 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const logout = useCallback(() => {
-    api.post('/auth/logout').catch(() => {});
+    // ✅ 可留（就算 API 不存在也無所謂）
+    api.post('auth/logout').catch(() => {});
     persistToken(null);
     persistUser(null);
     window.location.href = '/';
@@ -109,7 +123,7 @@ export const AuthProvider = ({ children }) => {
 
   const refreshUser = useCallback(async () => {
     try {
-      const { data } = await api.get('/auth/me');
+      const { data } = await api.get('auth/me');
       persistUser(data);
       return data;
     } catch (error) {
@@ -131,16 +145,7 @@ export const AuthProvider = ({ children }) => {
       register,
       refreshUser,
     }),
-    [
-      user,
-      loading,
-      initializing,
-      token,
-      login,
-      logout,
-      register,
-      refreshUser,
-    ],
+    [user, loading, initializing, token, login, logout, register, refreshUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

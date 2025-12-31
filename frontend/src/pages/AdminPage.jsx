@@ -55,7 +55,7 @@ const AdminPage = () => {
     setLoading(true);
     setError('');
     try {
-      const { data } = await api.get('/auth/users');
+      const { data } = await api.get('auth/users');
       const list = Array.isArray(data) ? data : data?.users ?? [];
       const total = Array.isArray(data) ? data.length : data?.total;
       setUsers(list);
@@ -187,7 +187,7 @@ const AdminPage = () => {
         password: form.password,
         role: form.role,
       };
-      await api.post('/auth/register', payload);
+      await api.post('auth/register', payload);
       setFormSuccess('帳號建立成功。');
       setForm({ name: '', username: '', password: '', role: 'worker' });
       await loadUsers();
@@ -266,7 +266,7 @@ const AdminPage = () => {
     if (!confirmed) return;
 
     try {
-      await api.delete(`/auth/users/${targetUser.id}`);
+      await api.delete(`auth/users/${targetUser.id}`);
       await loadUsers();
     } catch (err) {
       const status = err.response?.status;
