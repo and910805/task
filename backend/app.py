@@ -44,7 +44,10 @@ def create_app() -> Flask:
     signature_path = os.path.join(uploads_path, "signature")
     other_path = os.path.join(uploads_path, "other")
 
-    secret_key = os.environ.get("SECRET_KEY", "dev-secret-key")
+    secret_key = os.getenv("SECRET_KEY")
+    if not secret_key:
+        raise RuntimeError("SECRET_KEY is required (set it in Zeabur Variables).")
+
     jwt_secret = os.environ.get("JWT_SECRET_KEY", secret_key)
     database_url = _normalize_database_url(os.environ.get("DATABASE_URL"))
     cors_origins = _parse_cors_origins(os.environ.get("CORS_ORIGINS"))
