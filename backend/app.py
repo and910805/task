@@ -12,17 +12,24 @@ from storage import create_storage, StorageError
 
 
 def create_app() -> Flask:
+    # 1. 取得基本目錄資訊
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # 2. 先定義 uploads_path (這行必須在 database_path 之前，才不會報錯)
+    uploads_path = os.path.join(base_dir, "uploads")
+    
+    # 3. 將資料庫路徑設在 uploads 資料夾內，確保 Volume 可以持久化保存它
+    database_path = os.path.join(uploads_path, "task_manager.db")
+
     # 前端 dist 目錄位置
     frontend_dist_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+        os.path.join(base_dir, "..", "frontend", "dist")
     )
 
     # 建立 Flask app，靜態資源目錄指向 React build 結果
     app = Flask(__name__, static_folder=frontend_dist_path, static_url_path="/")
 
-    base_dir = os.path.dirname(__file__)
-    database_path = os.path.join(uploads_path, "task_manager.db")
-    uploads_path = os.path.join(base_dir, "uploads")
+    # 定義其他子資料夾路徑
     reports_path = os.path.join(uploads_path, "reports")
     images_path = os.path.join(uploads_path, "images")
     audio_path = os.path.join(uploads_path, "audio")
@@ -51,7 +58,7 @@ def create_app() -> Flask:
         MAX_CONTENT_LENGTH=16 * 1024 * 1024,
     )
 
-    # 確保上傳資料夾存在
+    # 確保所有上傳資料夾存在
     for folder in (
         uploads_path,
         reports_path,
@@ -92,7 +99,7 @@ def create_app() -> Flask:
     def _expired_token_callback(jwt_header, jwt_payload):
         return jsonify({"msg": "Authentication token has expired"}), 401
 
-    # === Blueprint ===
+    # === Blueprint 註冊 ===
     from routes.auth import auth_bp
     from routes.export import export_bp
     from routes.settings import settings_bp
@@ -128,50 +135,48 @@ def create_app() -> Flask:
         try:
             verify_jwt_in_request()
         except Exception:
-            # 未登入 → 導回首頁（React 登入頁）
+            # 未登入者自動導回 React 登入首頁
             return redirect("/", code=302)
 
         return None
 
-    # === React Router fallback ===
+    # === React Router fallback：處理重新整理 404 問題 ===
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
     def serve_react(path: str):
-        """
-        處理所有非 API 路由，避免重新整理 /login、/admin 等頁面時 404。
-        """
-        # 排除 API 或明確靜態資源請求
+        # 排除 API 或明確的靜態資源請求
         if path.startswith(("api/", "uploads/", "static/", "favicon.", "manifest", "robots")):
             return jsonify({"error": "Not found"}), 404
 
         dist_dir = app.static_folder
         requested_path = os.path.join(dist_dir, path)
 
-        # 若請求對應到實際檔案（例如 .js, .css, .png），直接傳回
+        # 若對應到實際檔案（JS/CSS），直接傳回
         if os.path.exists(requested_path) and not os.path.isdir(requested_path):
             return send_from_directory(dist_dir, path)
 
-        # 其他所有路由交給 React Router
+        # 其他路由交給 React Router 控制
         return send_from_directory(dist_dir, "index.html")
 
-    # === TypeError 處理（舊 JWT 問題） ===
+    # === TypeError 處理 ===
     @app.errorhandler(TypeError)
     def _handle_type_error(error):
         if str(error) == "Subject must be a string":
             return jsonify({"msg": "Invalid authentication token"}), 401
         raise error
 
-    # === 資料庫初始化 ===
+    # === 資料庫自動初始化 ===
     with app.app_context():
+        # 確保 Model 已載入才進行 create_all
         from models import Attachment, RoleLabel, SiteSetting, Task, TaskUpdate, User  # noqa: F401
         db.create_all()
 
     return app
 
 
-# 建立 Flask app 實例
+# 建立 Flask 應用實例
 app = create_app()
 
 if __name__ == "__main__":
-    # 使用 0.0.0.0，允許外部連線
+    # 允許外部連線，預設 5000 埠號
     app.run(host="0.0.0.0", port=5000, debug=True)
