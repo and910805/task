@@ -1,9 +1,12 @@
 import axios from "axios";
 
-// ✅ 合一部署（同網域）：PROD 一律打 /api
+const envBase = (import.meta.env.VITE_API_BASE_URL || "").trim();
+
+// ✅ 防呆：如果 envBase 是 '' 或 '/'，視同沒設，改用預設 /api
 const apiBase =
-  import.meta.env.VITE_API_BASE_URL ??
-  (import.meta.env.PROD ? "/api" : "http://localhost:5000/api");
+  envBase && envBase !== "/"
+    ? envBase
+    : (import.meta.env.PROD ? "/api" : "http://localhost:5000/api");
 
 console.log("[apiBase]", apiBase);
 
@@ -13,7 +16,6 @@ api.interceptors.request.use((config) => {
   const token = localStorage.getItem("auth_token");
   if (token) {
     config.headers = config.headers ?? {};
-    // axios v1 compatibility
     if (typeof config.headers.set === "function") {
       config.headers.set("Authorization", `Bearer ${token}`);
     } else {
