@@ -1,63 +1,58 @@
+// frontend/src/api/client.js
 import axios from "axios";
 
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-const envBase = (import.meta.env.VITE_API_BASE_URL || "").trim();
+/**
+ * Normalize base URL from env.
+ * - If VITE_API_BASE_URL is empty or '/', treat as unset.
+ * - In production (same domain), default to '/api'.
+ * - In dev, default to 'http://localhost:5000/api'.
+ */
+function getApiBase() {
+  const rawApiBase = import.meta.env.VITE_API_BASE_URL;
+  const normalized = (rawApiBase ?? "").trim();
 
-// ✅ 防呆：如果 envBase 是 '' 或 '/'，視同沒設，改用預設 /api
-const apiBase =
-  envBase && envBase !== "/"
-    ? envBase
-    : (import.meta.env.PROD ? "/api" : "http://localhost:5000/api");
-=======
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
-// ✅ 合一部署（同網域）：PROD 一律打 /api
-const rawApiBase = import.meta.env.VITE_API_BASE_URL;
-const normalizedApiBase = rawApiBase?.trim();
-const hasCustomApiBase =
-  normalizedApiBase && normalizedApiBase !== "" && normalizedApiBase !== "/";
-let apiBase = hasCustomApiBase
-  ? normalizedApiBase
-  : import.meta.env.PROD
-    ? "/api"
-    : "http://localhost:5000/api";
+  const hasCustom =
+    normalized !== "" && normalized !== "/";
 
-// Avoid mixed-content when the page is served over HTTPS but VITE_API_BASE_URL
-// accidentally points to http://<same-host>/api. In that case, upgrade to the
-// current origin while preserving the path.
-if (typeof window !== "undefined" && window.location?.protocol === "https:") {
-  try {
-    const url = new URL(apiBase, window.location.origin);
-    const isHttpSameHost =
-      url.protocol === "http:" && url.hostname === window.location.hostname;
+  let apiBase = hasCustom
+    ? normalized
+    : import.meta.env.PROD
+      ? "/api"
+      : "http://localhost:5000/api";
 
-    if (isHttpSameHost) {
-      apiBase = `${window.location.origin}${url.pathname}${url.search}`;
+  // Avoid mixed-content:
+  // If page is served over HTTPS but apiBase resolves to http://same-host/api,
+  // upgrade to https current origin while keeping path.
+  if (typeof window !== "undefined" && window.location?.protocol === "https:") {
+    try {
+      const url = new URL(apiBase, window.location.origin);
+      const isHttpSameHost =
+        url.protocol === "http:" && url.hostname === window.location.hostname;
+
+      if (isHttpSameHost) {
+        apiBase = `${window.location.origin}${url.pathname}${url.search}`;
+      }
+    } catch {
+      // keep original apiBase if parsing fails
     }
-  } catch (error) {
-    // If parsing fails, keep the original apiBase.
   }
-}
-<<<<<<< ours
-<<<<<<< ours
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
 
+  return apiBase;
+}
+
+const apiBase = getApiBase();
 console.log("[apiBase]", apiBase);
 
-const api = axios.create({ baseURL: apiBase });
+const api = axios.create({
+  baseURL: apiBase,
+  // withCredentials: true, // 如果你用 cookie 才開
+});
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("auth_token");
   if (token) {
     config.headers = config.headers ?? {};
+    // axios v1 headers may be AxiosHeaders with .set()
     if (typeof config.headers.set === "function") {
       config.headers.set("Authorization", `Bearer ${token}`);
     } else {
