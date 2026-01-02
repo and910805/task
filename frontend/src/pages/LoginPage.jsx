@@ -34,7 +34,13 @@ const LoginPage = () => {
         setMode('login');
       }
     } catch (err) {
-      const message = err.response?.data?.msg || '操作失敗，請稍後再試。';
+      const isLogin = mode === 'login';
+      const notFoundUser = err.response?.status === 404 && isLogin;
+      const message =
+        (notFoundUser && '沒有這個使用者') ||
+        err.response?.data?.msg ||
+        '操作失敗，請稍後再試。';
+
       toast.error(message);
     }
   };

@@ -2,6 +2,7 @@ import axios from "axios";
 
 <<<<<<< ours
 <<<<<<< ours
+<<<<<<< ours
 const envBase = (import.meta.env.VITE_API_BASE_URL || "").trim();
 
 // ✅ 防呆：如果 envBase 是 '' 或 '/'，視同沒設，改用預設 /api
@@ -10,6 +11,8 @@ const apiBase =
     ? envBase
     : (import.meta.env.PROD ? "/api" : "http://localhost:5000/api");
 =======
+=======
+>>>>>>> theirs
 =======
 >>>>>>> theirs
 // ✅ 合一部署（同網域）：PROD 一律打 /api
@@ -40,6 +43,9 @@ if (typeof window !== "undefined" && window.location?.protocol === "https:") {
   }
 }
 <<<<<<< ours
+<<<<<<< ours
+>>>>>>> theirs
+=======
 >>>>>>> theirs
 =======
 >>>>>>> theirs
