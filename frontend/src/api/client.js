@@ -21,16 +21,14 @@ function getApiBase() {
       : "http://localhost:5000/api";
 
   // Avoid mixed-content:
-  // If page is served over HTTPS but apiBase resolves to http://same-host/api,
-  // upgrade to https current origin while keeping path.
+  // If page is served over HTTPS but apiBase resolves to http,
+  // upgrade protocol to https while keeping host + path.
   if (typeof window !== "undefined" && window.location?.protocol === "https:") {
     try {
       const url = new URL(apiBase, window.location.origin);
-      const isHttpSameHost =
-        url.protocol === "http:" && url.hostname === window.location.hostname;
-
-      if (isHttpSameHost) {
-        apiBase = `${window.location.origin}${url.pathname}${url.search}`;
+      if (url.protocol === "http:") {
+        url.protocol = "https:";
+        apiBase = url.toString();
       }
     } catch {
       // keep original apiBase if parsing fails
