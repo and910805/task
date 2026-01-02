@@ -1,5 +1,6 @@
 import os
 import uuid
+import json
 
 from flask import Blueprint, current_app, jsonify, redirect, request, send_from_directory, url_for
 from flask_jwt_extended import jwt_required
@@ -243,3 +244,55 @@ def reset_role_label(role: str):
 
     overrides, labels = _serialize_role_labels()
     return jsonify({"labels": labels, "overrides": overrides})
+
+
+
+def _task_status_options() -> list[str]:
+    try:
+        from routes.tasks import TASK_STATUS_OPTIONS
+        return list(TASK_STATUS_OPTIONS)
+    except Exception:
+        return ["尚未接單", "進行中", "已完成"]
+
+
+@settings_bp.get("/notifications/email")
+@role_required("admin")
+def get_email_notification_settings():
+    """Admin: read email-notification rules (LINE notifications are unaffected)."""
+    from services.notifications import get_email_notification_settings as _get
+    return jsonify(
+        {
+            "settings": _get(),
+            "status_options": _task_status_options(),
+        }
+    )
+
+
+@settings_bp.put("/notifications/email")
+@role_required("admin")
+def update_email_notification_settings():
+    """Admin: update email-notification rules."""
+    from services.notifications import save_email_notification_settings as _save
+    data = request.get_json(silent=True) or {}
+    # Let the service normalize/merge, but validate input here for better UX.
+    status_options = _task_status_options()
+
+    status_targets = data.get("status_targets")
+    if status_targets is not None:
+        if not isinstance(status_targets, list):
+            return jsonify({"msg": "status_targets 必須是陣列"}), 400
+        cleaned = [str(item).strip() for item in status_targets if str(item).strip()]
+        invalid = [s for s in cleaned if s not in status_options]
+        if invalid:
+            return jsonify({"msg": f"未知的狀態：{', '.join(invalid)}"}), 400
+        data["status_targets"] = cleaned
+
+    # Very light validation for URLs (optional field)
+    if "task_link_base_url" in data and data["task_link_base_url"] is not None:
+        data["task_link_base_url"] = str(data["task_link_base_url"]).strip()
+
+    if "subject_prefix" in data and data["subject_prefix"] is not None:
+        data["subject_prefix"] = str(data["subject_prefix"])
+
+    updated = _save(data)
+    return jsonify({"settings": updated, "status_options": status_options})

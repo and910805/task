@@ -7,6 +7,8 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { useBranding } from '../context/BrandingContext.jsx';
 import { useRoleLabels } from '../context/RoleLabelContext.jsx';
 
+const FALLBACK_TASK_STATUSES = ['尚未接單', '進行中', '已完成'];
+
 const AdminPage = () => {
   const { user, logout } = useAuth();
   const {
@@ -41,6 +43,19 @@ const AdminPage = () => {
   const [logoMessage, setLogoMessage] = useState(null);
   const [logoBusy, setLogoBusy] = useState(false);
 
+  const [emailSettings, setEmailSettings] = useState({
+  enabled: true,
+  send_on_assignment: true,
+  send_on_status_change: true,
+  status_targets: [...FALLBACK_TASK_STATUSES],
+  subject_prefix: '',
+  include_task_link: false,
+  task_link_base_url: '',
+});
+  const [emailStatusOptions, setEmailStatusOptions] = useState([...FALLBACK_TASK_STATUSES]);
+  const [emailSettingsBusy, setEmailSettingsBusy] = useState(false);
+  const [emailSettingsMessage, setEmailSettingsMessage] = useState(null);
+
   useEffect(() => {
     setRoleNameEdits({ ...labels });
   }, [labels]);
@@ -74,8 +89,100 @@ const AdminPage = () => {
     }
   };
 
+
+
+  const loadEmailSettings = async () => {
+  setEmailSettingsMessage(null);
+  try {
+    const { data } = await api.get('settings/notifications/email');
+    const incoming = data?.settings ?? {};
+    const statusOptions = Array.isArray(data?.status_options) && data.status_options.length > 0
+      ? data.status_options
+      : FALLBACK_TASK_STATUSES;
+
+    setEmailStatusOptions(statusOptions);
+    setEmailSettings((prev) => ({
+      ...prev,
+      ...incoming,
+      status_targets: Array.isArray(incoming.status_targets)
+        ? incoming.status_targets
+        : prev.status_targets,
+    }));
+  } catch (err) {
+    const status = err.response?.status;
+    if (status === 401) {
+      logout();
+      setEmailSettingsMessage({ type: 'error', text: '登入資訊已失效，請重新登入。' });
+    } else if (status === 403) {
+      setEmailSettingsMessage({ type: 'error', text: '權限不足，無法讀取信件設定。' });
+    } else {
+      const message = err.response?.data?.msg || '無法讀取信件設定。';
+      setEmailSettingsMessage({ type: 'error', text: message });
+    }
+  }
+};
+
+  const saveEmailSettings = async () => {
+  setEmailSettingsBusy(true);
+  setEmailSettingsMessage(null);
+  try {
+    const payload = {
+      enabled: Boolean(emailSettings.enabled),
+      send_on_assignment: Boolean(emailSettings.send_on_assignment),
+      send_on_status_change: Boolean(emailSettings.send_on_status_change),
+      status_targets: Array.isArray(emailSettings.status_targets) ? emailSettings.status_targets : [],
+      subject_prefix: emailSettings.subject_prefix ?? '',
+      include_task_link: Boolean(emailSettings.include_task_link),
+      task_link_base_url: emailSettings.task_link_base_url ?? '',
+    };
+
+    const { data } = await api.put('settings/notifications/email', payload);
+    const updated = data?.settings ?? payload;
+    const statusOptions = Array.isArray(data?.status_options) && data.status_options.length > 0
+      ? data.status_options
+      : emailStatusOptions;
+
+    setEmailStatusOptions(statusOptions);
+    setEmailSettings((prev) => ({
+      ...prev,
+      ...updated,
+      status_targets: Array.isArray(updated.status_targets) ? updated.status_targets : prev.status_targets,
+    }));
+    setEmailSettingsMessage({ type: 'success', text: '已更新信件通知設定。' });
+  } catch (err) {
+    const message = err.response?.data?.msg || '更新信件通知設定失敗。';
+    setEmailSettingsMessage({ type: 'error', text: message });
+  } finally {
+    setEmailSettingsBusy(false);
+  }
+};
+
+  const toggleEmailStatusTarget = (status) => {
+  setEmailSettingsMessage(null);
+  setEmailSettings((prev) => {
+    const current = new Set(Array.isArray(prev.status_targets) ? prev.status_targets : []);
+    if (current.has(status)) {
+      current.delete(status);
+    } else {
+      current.add(status);
+    }
+    return { ...prev, status_targets: Array.from(current) };
+  });
+};
+
+  const setEmailStatusAll = () => {
+  setEmailSettingsMessage(null);
+  setEmailSettings((prev) => ({ ...prev, status_targets: [] }));
+};
+
+  const setEmailStatusSelectAll = () => {
+  setEmailSettingsMessage(null);
+  setEmailSettings((prev) => ({ ...prev, status_targets: [...emailStatusOptions] }));
+};
+
   useEffect(() => {
     loadUsers();
+    loadEmailSettings();
   }, []);
 
   const handleExport = async () => {
@@ -435,6 +542,161 @@ const AdminPage = () => {
               {exporting ? '匯出中…' : '匯出任務報表'}
             </button>
           </section>
+
+<section className="panel panel--contrast panel--wide">
+  <div className="panel-header">
+    <h2>信件通知設定</h2>
+    <span className="panel-tag">Email</span>
+  </div>
+  <p className="panel-hint">
+    只有在「個人設定」選擇 <strong>Email</strong> 通知的使用者會收到信件；LINE 通知不受此設定影響。
+  </p>
+  {emailSettingsMessage ? (
+    <p className={emailSettingsMessage.type === 'error' ? 'error-text' : 'success-text'}>
+      {emailSettingsMessage.text}
+    </p>
+  ) : null}
+
+  <div className="stack">
+    <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 600 }}>
+      <input
+        type="checkbox"
+        checked={Boolean(emailSettings.enabled)}
+        onChange={(event) => setEmailSettings((prev) => ({
+          ...prev,
+          enabled: event.target.checked,
+        }))}
+        disabled={emailSettingsBusy}
+      />
+      <span>啟用 Email 通知</span>
+    </label>
+
+    <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 600 }}>
+      <input
+        type="checkbox"
+        checked={Boolean(emailSettings.send_on_assignment)}
+        onChange={(event) => setEmailSettings((prev) => ({
+          ...prev,
+          send_on_assignment: event.target.checked,
+        }))}
+        disabled={emailSettingsBusy || !emailSettings.enabled}
+      />
+      <span>使用者被指派任務時寄信</span>
+    </label>
+
+    <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 600 }}>
+      <input
+        type="checkbox"
+        checked={Boolean(emailSettings.send_on_status_change)}
+        onChange={(event) => setEmailSettings((prev) => ({
+          ...prev,
+          send_on_status_change: event.target.checked,
+        }))}
+        disabled={emailSettingsBusy || !emailSettings.enabled}
+      />
+      <span>任務狀態變更時寄信</span>
+    </label>
+
+    <div style={{ border: '1px solid var(--panel-border)', borderRadius: '14px', padding: '1rem', background: 'var(--panel-bg)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+        <strong>狀態變更寄信條件</strong>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={setEmailStatusSelectAll}
+            disabled={emailSettingsBusy || !emailSettings.enabled || !emailSettings.send_on_status_change}
+          >
+            全選
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={setEmailStatusAll}
+            disabled={emailSettingsBusy || !emailSettings.enabled || !emailSettings.send_on_status_change}
+          >
+            不限（全部）
+          </button>
+        </div>
+      </div>
+
+      <div className="chip-list" style={{ marginTop: '0.85rem' }}>
+        {emailStatusOptions.map((status) => {
+          const selected = Array.isArray(emailSettings.status_targets) && emailSettings.status_targets.includes(status);
+          const disabled = emailSettingsBusy || !emailSettings.enabled || !emailSettings.send_on_status_change;
+          return (
+            <label
+              key={status}
+              className="chip"
+              style={{
+                cursor: disabled ? 'not-allowed' : 'pointer',
+                opacity: disabled ? 0.65 : 1,
+                border: selected ? '1px solid var(--accent-color)' : '1px solid transparent',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={selected}
+                onChange={() => toggleEmailStatusTarget(status)}
+                disabled={disabled}
+                style={{ margin: 0 }}
+              />
+              <span>{status}</span>
+            </label>
+          );
+        })}
+      </div>
+
+      <p className="panel-hint" style={{ marginTop: '0.75rem' }}>
+        若按「不限（全部）」會在任何狀態變更時寄信；否則只在「新狀態」符合勾選項目時寄信。
+      </p>
+    </div>
+
+    <label>
+      信件標題前綴（選填）
+      <input
+        value={emailSettings.subject_prefix ?? ''}
+        onChange={(event) => setEmailSettings((prev) => ({
+          ...prev,
+          subject_prefix: event.target.value,
+        }))}
+        placeholder='例如：[Task] '
+        disabled={emailSettingsBusy}
+      />
+    </label>
+
+    <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 600 }}>
+      <input
+        type="checkbox"
+        checked={Boolean(emailSettings.include_task_link)}
+        onChange={(event) => setEmailSettings((prev) => ({
+          ...prev,
+          include_task_link: event.target.checked,
+        }))}
+        disabled={emailSettingsBusy}
+      />
+      <span>在信件內附上任務連結</span>
+    </label>
+
+    <label>
+      任務連結 Base URL（選填）
+      <input
+        value={emailSettings.task_link_base_url ?? ''}
+        onChange={(event) => setEmailSettings((prev) => ({
+          ...prev,
+          task_link_base_url: event.target.value,
+        }))}
+        placeholder="https://task.kuanlin.pro"
+        disabled={emailSettingsBusy || !emailSettings.include_task_link}
+      />
+    </label>
+
+    <button type="button" onClick={saveEmailSettings} disabled={emailSettingsBusy}>
+      {emailSettingsBusy ? '儲存中…' : '儲存信件設定'}
+    </button>
+  </div>
+</section>
+
 
           <section className="panel panel--contrast">
             <div className="panel-header">

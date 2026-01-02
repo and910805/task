@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import os
 import smtplib
 import ssl
@@ -18,6 +20,134 @@ LINE_NOTIFY_ENDPOINT = "https://notify-api.line.me/api/notify"
 # A small shared pool for async email sending. This keeps API requests snappy.
 _EMAIL_POOL: ThreadPoolExecutor | None = None
 
+# ---- Email notification rules (admin configurable) ----
+# Stored in SiteSetting as JSON under this key.
+EMAIL_NOTIFICATION_SETTINGS_KEY = "email_notification_settings"
+
+DEFAULT_EMAIL_NOTIFICATION_SETTINGS = {
+    # Global switch for email notifications (LINE notifications are unaffected).
+    "enabled": True,
+    # Send email when a user is newly assigned to a task.
+    "send_on_assignment": True,
+    # Send email when task status changes.
+    "send_on_status_change": True,
+    # If non-empty, only send status-change emails when the new status is in this list.
+    # Empty list means "all statuses".
+    "status_targets": ["尚未接單", "進行中", "已完成"],
+    # Optional subject prefix, e.g. "[TaskGo] "
+    "subject_prefix": "",
+    # Optionally append a task link at the bottom of emails.
+    "include_task_link": False,
+    # If empty, will fallback to APP_BASE_URL env var. Example: "https://task.kuanlin.pro"
+    "task_link_base_url": "",
+}
+
+
+def _load_email_settings() -> dict:
+    """Load and normalize email notification settings from SiteSetting."""
+    try:
+        from models import SiteSetting  # local import to avoid import cycles
+    except Exception:
+        return dict(DEFAULT_EMAIL_NOTIFICATION_SETTINGS)
+
+    raw = SiteSetting.get_value(EMAIL_NOTIFICATION_SETTINGS_KEY)
+    data = {}
+    if raw:
+        try:
+            data = json.loads(raw)
+        except Exception:
+            data = {}
+
+    if not isinstance(data, dict):
+        data = {}
+
+    merged = {**DEFAULT_EMAIL_NOTIFICATION_SETTINGS, **data}
+
+    merged["enabled"] = _bool(merged.get("enabled"), True)
+    merged["send_on_assignment"] = _bool(merged.get("send_on_assignment"), True)
+    merged["send_on_status_change"] = _bool(merged.get("send_on_status_change"), True)
+    merged["include_task_link"] = _bool(merged.get("include_task_link"), False)
+
+    targets = merged.get("status_targets")
+    if targets is None:
+        targets = []
+    if not isinstance(targets, list):
+        targets = []
+    merged["status_targets"] = [str(item).strip() for item in targets if str(item).strip()]
+
+    merged["subject_prefix"] = str(merged.get("subject_prefix") or "")
+    merged["task_link_base_url"] = str(merged.get("task_link_base_url") or "")
+    return merged
+
+
+def get_email_notification_settings() -> dict:
+    """Public helper for routes to read current settings."""
+    return _load_email_settings()
+
+
+def save_email_notification_settings(settings: dict) -> dict:
+    """Persist email notification settings to SiteSetting (returns normalized settings)."""
+    try:
+        from models import SiteSetting  # local import to avoid import cycles
+    except Exception:
+        return _load_email_settings()
+
+    normalized = {**_load_email_settings(), **(settings or {})}
+    SiteSetting.set_value(
+        EMAIL_NOTIFICATION_SETTINGS_KEY,
+        json.dumps(normalized, ensure_ascii=False),
+    )
+    return _load_email_settings()
+
+
+def _email_subject(base_subject: str) -> str:
+    settings = _load_email_settings()
+    prefix = (settings.get("subject_prefix") or "").strip()
+    return f"{prefix}{base_subject}" if prefix else base_subject
+
+
+def _append_task_link(message: str, task: "Task") -> str:
+    settings = _load_email_settings()
+    if not settings.get("include_task_link"):
+        return message
+
+    base = (settings.get("task_link_base_url") or "").strip().rstrip("/")
+    if not base:
+        base = (os.getenv("APP_BASE_URL") or "").strip().rstrip("/")
+    if not base:
+        return message
+
+    try:
+        url = f"{base}/tasks/{task.id}"
+    except Exception:
+        return message
+    return f"{message}\n\n任務連結：{url}"
+
+
+def _should_send_email(kind: str | None, *, status: str | None = None) -> bool:
+    """Check email rules. kind: 'assignment' | 'status_change' | None."""
+    if kind is None:
+        return True
+    settings = _load_email_settings()
+    if not settings.get("enabled"):
+        return False
+    if not has_email_config():
+        return False
+
+    if kind == "assignment":
+        return bool(settings.get("send_on_assignment"))
+
+    if kind == "status_change":
+        if not settings.get("send_on_status_change"):
+            return False
+        targets: list[str] = settings.get("status_targets") or []
+        if targets and status:
+            return status in targets
+        if targets and not status:
+            return False
+        return True
+
+    return True
 
 def _send_line_notify(token: str, message: str) -> None:
     headers = {"Authorization": f"Bearer {token}"}
@@ -224,12 +354,31 @@ def _format_task_summary(task: "Task") -> str:
     return base
 
 
-def _dispatch_notifications(users: Sequence["User"], subject: str, message: str) -> None:
+def _dispatch_notifications(
+    users: Sequence["User"],
+    subject: str,
+    message: str,
+    *,
+    email_kind: str | None = None,
+    email_status: str | None = None,
+    html: str | None = None,
+    task: "Task" | None = None,
+) -> None:
+    resolved_message = _append_task_link(message, task) if task is not None else message
+    resolved_subject = _email_subject(subject)
+
     for user in _iter_unique_users(users):
         if user.notification_type == "line" and user.notification_value:
-            _send_line_notify(user.notification_value, message)
+            _send_line_notify(user.notification_value, resolved_message)
         elif user.notification_type == "email" and user.notification_value:
-            _send_email(user.notification_value, subject, message)
+            if not _should_send_email(email_kind, status=email_status):
+                continue
+            send_email_async(
+                user.notification_value,
+                resolved_subject,
+                resolved_message,
+                html=html,
+            )
 
 
 def notify_task_assignment(task: "Task", users: Sequence["User"], *, assigned_by: "User" | None = None) -> None:
@@ -238,7 +387,7 @@ def notify_task_assignment(task: "Task", users: Sequence["User"], *, assigned_by
     actor = f"{assigned_by.username} 指派給你一個任務" if assigned_by else "你被指派了一個任務"
     summary = _format_task_summary(task)
     message = f"{actor}。\n{summary}"
-    _dispatch_notifications(users, "任務指派通知", message)
+    _dispatch_notifications(users, "任務指派通知", message, email_kind="assignment", task=task)
 
 
 def notify_task_status_change(
@@ -252,4 +401,4 @@ def notify_task_status_change(
     actor = f"{updated_by.username} 更新了任務狀態" if updated_by else "任務狀態已更新"
     summary = _format_task_summary(task)
     message = f"{actor}。\n{summary}"
-    _dispatch_notifications(users, "任務狀態更新", message)
+    _dispatch_notifications(users, "任務狀態更新", message, email_kind="status_change", email_status=getattr(task, "status", None), task=task)

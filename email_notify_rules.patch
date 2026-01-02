@@ -1,0 +1,561 @@
+diff --git a/backend/routes/settings.py b/backend/routes/settings.py
+index 69185bb..32708da 100644
+--- a/backend/routes/settings.py
++++ b/backend/routes/settings.py
+@@ -1,5 +1,6 @@
+ import os
+ import uuid
++import json
+ 
+ from flask import Blueprint, current_app, jsonify, redirect, request, send_from_directory, url_for
+ from flask_jwt_extended import jwt_required
+@@ -243,3 +244,55 @@ def reset_role_label(role: str):
+ 
+     overrides, labels = _serialize_role_labels()
+     return jsonify({"labels": labels, "overrides": overrides})
++
++
++
++def _task_status_options() -> list[str]:
++    try:
++        from routes.tasks import TASK_STATUS_OPTIONS
++        return list(TASK_STATUS_OPTIONS)
++    except Exception:
++        return ["尚未接單", "進行中", "已完成"]
++
++
++@settings_bp.get("/notifications/email")
++@role_required("admin")
++def get_email_notification_settings():
++    """Admin: read email-notification rules (LINE notifications are unaffected)."""
++    from services.notifications import get_email_notification_settings as _get
++    return jsonify(
++        {
++            "settings": _get(),
++            "status_options": _task_status_options(),
++        }
++    )
++
++
++@settings_bp.put("/notifications/email")
++@role_required("admin")
++def update_email_notification_settings():
++    """Admin: update email-notification rules."""
++    from services.notifications import save_email_notification_settings as _save
++    data = request.get_json(silent=True) or {}
++    # Let the service normalize/merge, but validate input here for better UX.
++    status_options = _task_status_options()
++
++    status_targets = data.get("status_targets")
++    if status_targets is not None:
++        if not isinstance(status_targets, list):
++            return jsonify({"msg": "status_targets 必須是陣列"}), 400
++        cleaned = [str(item).strip() for item in status_targets if str(item).strip()]
++        invalid = [s for s in cleaned if s not in status_options]
++        if invalid:
++            return jsonify({"msg": f"未知的狀態：{', '.join(invalid)}"}), 400
++        data["status_targets"] = cleaned
++
++    # Very light validation for URLs (optional field)
++    if "task_link_base_url" in data and data["task_link_base_url"] is not None:
++        data["task_link_base_url"] = str(data["task_link_base_url"]).strip()
++
++    if "subject_prefix" in data and data["subject_prefix"] is not None:
++        data["subject_prefix"] = str(data["subject_prefix"])
++
++    updated = _save(data)
++    return jsonify({"settings": updated, "status_options": status_options})
+diff --git a/backend/services/notifications.py b/backend/services/notifications.py
+index 8abaa36..60df802 100644
+--- a/backend/services/notifications.py
++++ b/backend/services/notifications.py
+@@ -2,6 +2,8 @@
+ 
+ from __future__ import annotations
+ 
++import json
++
+ import os
+ import smtplib
+ import ssl
+@@ -18,6 +20,134 @@ LINE_NOTIFY_ENDPOINT = "https://notify-api.line.me/api/notify"
+ # A small shared pool for async email sending. This keeps API requests snappy.
+ _EMAIL_POOL: ThreadPoolExecutor | None = None
+ 
++# ---- Email notification rules (admin configurable) ----
++# Stored in SiteSetting as JSON under this key.
++EMAIL_NOTIFICATION_SETTINGS_KEY = "email_notification_settings"
++
++DEFAULT_EMAIL_NOTIFICATION_SETTINGS = {
++    # Global switch for email notifications (LINE notifications are unaffected).
++    "enabled": True,
++    # Send email when a user is newly assigned to a task.
++    "send_on_assignment": True,
++    # Send email when task status changes.
++    "send_on_status_change": True,
++    # If non-empty, only send status-change emails when the new status is in this list.
++    # Empty list means "all statuses".
++    "status_targets": ["尚未接單", "進行中", "已完成"],
++    # Optional subject prefix, e.g. "[TaskGo] "
++    "subject_prefix": "",
++    # Optionally append a task link at the bottom of emails.
++    "include_task_link": False,
++    # If empty, will fallback to APP_BASE_URL env var. Example: "https://task.kuanlin.pro"
++    "task_link_base_url": "",
++}
++
++
++def _load_email_settings() -> dict:
++    """Load and normalize email notification settings from SiteSetting."""
++    try:
++        from models import SiteSetting  # local import to avoid import cycles
++    except Exception:
++        return dict(DEFAULT_EMAIL_NOTIFICATION_SETTINGS)
++
++    raw = SiteSetting.get_value(EMAIL_NOTIFICATION_SETTINGS_KEY)
++    data = {}
++    if raw:
++        try:
++            data = json.loads(raw)
++        except Exception:
++            data = {}
++
++    if not isinstance(data, dict):
++        data = {}
++
++    merged = {**DEFAULT_EMAIL_NOTIFICATION_SETTINGS, **data}
++
++    merged["enabled"] = _bool(merged.get("enabled"), True)
++    merged["send_on_assignment"] = _bool(merged.get("send_on_assignment"), True)
++    merged["send_on_status_change"] = _bool(merged.get("send_on_status_change"), True)
++    merged["include_task_link"] = _bool(merged.get("include_task_link"), False)
++
++    targets = merged.get("status_targets")
++    if targets is None:
++        targets = []
++    if not isinstance(targets, list):
++        targets = []
++    merged["status_targets"] = [str(item).strip() for item in targets if str(item).strip()]
++
++    merged["subject_prefix"] = str(merged.get("subject_prefix") or "")
++    merged["task_link_base_url"] = str(merged.get("task_link_base_url") or "")
++    return merged
++
++
++def get_email_notification_settings() -> dict:
++    """Public helper for routes to read current settings."""
++    return _load_email_settings()
++
++
++def save_email_notification_settings(settings: dict) -> dict:
++    """Persist email notification settings to SiteSetting (returns normalized settings)."""
++    try:
++        from models import SiteSetting  # local import to avoid import cycles
++    except Exception:
++        return _load_email_settings()
++
++    normalized = {**_load_email_settings(), **(settings or {})}
++    SiteSetting.set_value(
++        EMAIL_NOTIFICATION_SETTINGS_KEY,
++        json.dumps(normalized, ensure_ascii=False),
++    )
++    return _load_email_settings()
++
++
++def _email_subject(base_subject: str) -> str:
++    settings = _load_email_settings()
++    prefix = (settings.get("subject_prefix") or "").strip()
++    return f"{prefix}{base_subject}" if prefix else base_subject
++
++
++def _append_task_link(message: str, task: "Task") -> str:
++    settings = _load_email_settings()
++    if not settings.get("include_task_link"):
++        return message
++
++    base = (settings.get("task_link_base_url") or "").strip().rstrip("/")
++    if not base:
++        base = (os.getenv("APP_BASE_URL") or "").strip().rstrip("/")
++    if not base:
++        return message
++
++    try:
++        url = f"{base}/tasks/{task.id}"
++    except Exception:
++        return message
++    return f"{message}\n\n任務連結：{url}"
++
++
++def _should_send_email(kind: str | None, *, status: str | None = None) -> bool:
++    """Check email rules. kind: 'assignment' | 'status_change' | None."""
++    if kind is None:
++        return True
++    settings = _load_email_settings()
++    if not settings.get("enabled"):
++        return False
++    if not has_email_config():
++        return False
++
++    if kind == "assignment":
++        return bool(settings.get("send_on_assignment"))
++
++    if kind == "status_change":
++        if not settings.get("send_on_status_change"):
++            return False
++        targets: list[str] = settings.get("status_targets") or []
++        if targets and status:
++            return status in targets
++        if targets and not status:
++            return False
++        return True
++
++    return True
+ 
+ def _send_line_notify(token: str, message: str) -> None:
+     headers = {"Authorization": f"Bearer {token}"}
+@@ -224,12 +354,31 @@ def _format_task_summary(task: "Task") -> str:
+     return base
+ 
+ 
+-def _dispatch_notifications(users: Sequence["User"], subject: str, message: str) -> None:
++def _dispatch_notifications(
++    users: Sequence["User"],
++    subject: str,
++    message: str,
++    *,
++    email_kind: str | None = None,
++    email_status: str | None = None,
++    html: str | None = None,
++    task: "Task" | None = None,
++) -> None:
++    resolved_message = _append_task_link(message, task) if task is not None else message
++    resolved_subject = _email_subject(subject)
++
+     for user in _iter_unique_users(users):
+         if user.notification_type == "line" and user.notification_value:
+-            _send_line_notify(user.notification_value, message)
++            _send_line_notify(user.notification_value, resolved_message)
+         elif user.notification_type == "email" and user.notification_value:
+-            _send_email(user.notification_value, subject, message)
++            if not _should_send_email(email_kind, status=email_status):
++                continue
++            send_email_async(
++                user.notification_value,
++                resolved_subject,
++                resolved_message,
++                html=html,
++            )
+ 
+ 
+ def notify_task_assignment(task: "Task", users: Sequence["User"], *, assigned_by: "User" | None = None) -> None:
+@@ -238,7 +387,7 @@ def notify_task_assignment(task: "Task", users: Sequence["User"], *, assigned_by
+     actor = f"{assigned_by.username} 指派給你一個任務" if assigned_by else "你被指派了一個任務"
+     summary = _format_task_summary(task)
+     message = f"{actor}。\n{summary}"
+-    _dispatch_notifications(users, "任務指派通知", message)
++    _dispatch_notifications(users, "任務指派通知", message, email_kind="assignment", task=task)
+ 
+ 
+ def notify_task_status_change(
+@@ -252,4 +401,4 @@ def notify_task_status_change(
+     actor = f"{updated_by.username} 更新了任務狀態" if updated_by else "任務狀態已更新"
+     summary = _format_task_summary(task)
+     message = f"{actor}。\n{summary}"
+-    _dispatch_notifications(users, "任務狀態更新", message)
++    _dispatch_notifications(users, "任務狀態更新", message, email_kind="status_change", email_status=getattr(task, "status", None), task=task)
+diff --git a/frontend/src/pages/AdminPage.jsx b/frontend/src/pages/AdminPage.jsx
+index e4bed19..1ede0d8 100644
+--- a/frontend/src/pages/AdminPage.jsx
++++ b/frontend/src/pages/AdminPage.jsx
+@@ -7,6 +7,8 @@ import { useAuth } from '../context/AuthContext.jsx';
+ import { useBranding } from '../context/BrandingContext.jsx';
+ import { useRoleLabels } from '../context/RoleLabelContext.jsx';
+ 
++const FALLBACK_TASK_STATUSES = ['尚未接單', '進行中', '已完成'];
++
+ const AdminPage = () => {
+   const { user, logout } = useAuth();
+   const {
+@@ -41,6 +43,19 @@ const AdminPage = () => {
+   const [logoMessage, setLogoMessage] = useState(null);
+   const [logoBusy, setLogoBusy] = useState(false);
+ 
++  const [emailSettings, setEmailSettings] = useState({
++  enabled: true,
++  send_on_assignment: true,
++  send_on_status_change: true,
++  status_targets: [...FALLBACK_TASK_STATUSES],
++  subject_prefix: '',
++  include_task_link: false,
++  task_link_base_url: '',
++});
++  const [emailStatusOptions, setEmailStatusOptions] = useState([...FALLBACK_TASK_STATUSES]);
++  const [emailSettingsBusy, setEmailSettingsBusy] = useState(false);
++  const [emailSettingsMessage, setEmailSettingsMessage] = useState(null);
++
+   useEffect(() => {
+     setRoleNameEdits({ ...labels });
+   }, [labels]);
+@@ -74,8 +89,100 @@ const AdminPage = () => {
+     }
+   };
+ 
++
++
++  const loadEmailSettings = async () => {
++  setEmailSettingsMessage(null);
++  try {
++    const { data } = await api.get('settings/notifications/email');
++    const incoming = data?.settings ?? {};
++    const statusOptions = Array.isArray(data?.status_options) && data.status_options.length > 0
++      ? data.status_options
++      : FALLBACK_TASK_STATUSES;
++
++    setEmailStatusOptions(statusOptions);
++    setEmailSettings((prev) => ({
++      ...prev,
++      ...incoming,
++      status_targets: Array.isArray(incoming.status_targets)
++        ? incoming.status_targets
++        : prev.status_targets,
++    }));
++  } catch (err) {
++    const status = err.response?.status;
++    if (status === 401) {
++      logout();
++      setEmailSettingsMessage({ type: 'error', text: '登入資訊已失效，請重新登入。' });
++    } else if (status === 403) {
++      setEmailSettingsMessage({ type: 'error', text: '權限不足，無法讀取信件設定。' });
++    } else {
++      const message = err.response?.data?.msg || '無法讀取信件設定。';
++      setEmailSettingsMessage({ type: 'error', text: message });
++    }
++  }
++};
++
++  const saveEmailSettings = async () => {
++  setEmailSettingsBusy(true);
++  setEmailSettingsMessage(null);
++  try {
++    const payload = {
++      enabled: Boolean(emailSettings.enabled),
++      send_on_assignment: Boolean(emailSettings.send_on_assignment),
++      send_on_status_change: Boolean(emailSettings.send_on_status_change),
++      status_targets: Array.isArray(emailSettings.status_targets) ? emailSettings.status_targets : [],
++      subject_prefix: emailSettings.subject_prefix ?? '',
++      include_task_link: Boolean(emailSettings.include_task_link),
++      task_link_base_url: emailSettings.task_link_base_url ?? '',
++    };
++
++    const { data } = await api.put('settings/notifications/email', payload);
++    const updated = data?.settings ?? payload;
++    const statusOptions = Array.isArray(data?.status_options) && data.status_options.length > 0
++      ? data.status_options
++      : emailStatusOptions;
++
++    setEmailStatusOptions(statusOptions);
++    setEmailSettings((prev) => ({
++      ...prev,
++      ...updated,
++      status_targets: Array.isArray(updated.status_targets) ? updated.status_targets : prev.status_targets,
++    }));
++    setEmailSettingsMessage({ type: 'success', text: '已更新信件通知設定。' });
++  } catch (err) {
++    const message = err.response?.data?.msg || '更新信件通知設定失敗。';
++    setEmailSettingsMessage({ type: 'error', text: message });
++  } finally {
++    setEmailSettingsBusy(false);
++  }
++};
++
++  const toggleEmailStatusTarget = (status) => {
++  setEmailSettingsMessage(null);
++  setEmailSettings((prev) => {
++    const current = new Set(Array.isArray(prev.status_targets) ? prev.status_targets : []);
++    if (current.has(status)) {
++      current.delete(status);
++    } else {
++      current.add(status);
++    }
++    return { ...prev, status_targets: Array.from(current) };
++  });
++};
++
++  const setEmailStatusAll = () => {
++  setEmailSettingsMessage(null);
++  setEmailSettings((prev) => ({ ...prev, status_targets: [] }));
++};
++
++  const setEmailStatusSelectAll = () => {
++  setEmailSettingsMessage(null);
++  setEmailSettings((prev) => ({ ...prev, status_targets: [...emailStatusOptions] }));
++};
++
+   useEffect(() => {
+     loadUsers();
++    loadEmailSettings();
+   }, []);
+ 
+   const handleExport = async () => {
+@@ -436,6 +543,161 @@ const AdminPage = () => {
+             </button>
+           </section>
+ 
++<section className="panel panel--contrast panel--wide">
++  <div className="panel-header">
++    <h2>信件通知設定</h2>
++    <span className="panel-tag">Email</span>
++  </div>
++  <p className="panel-hint">
++    只有在「個人設定」選擇 <strong>Email</strong> 通知的使用者會收到信件；LINE 通知不受此設定影響。
++  </p>
++  {emailSettingsMessage ? (
++    <p className={emailSettingsMessage.type === 'error' ? 'error-text' : 'success-text'}>
++      {emailSettingsMessage.text}
++    </p>
++  ) : null}
++
++  <div className="stack">
++    <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 600 }}>
++      <input
++        type="checkbox"
++        checked={Boolean(emailSettings.enabled)}
++        onChange={(event) => setEmailSettings((prev) => ({
++          ...prev,
++          enabled: event.target.checked,
++        }))}
++        disabled={emailSettingsBusy}
++      />
++      <span>啟用 Email 通知</span>
++    </label>
++
++    <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 600 }}>
++      <input
++        type="checkbox"
++        checked={Boolean(emailSettings.send_on_assignment)}
++        onChange={(event) => setEmailSettings((prev) => ({
++          ...prev,
++          send_on_assignment: event.target.checked,
++        }))}
++        disabled={emailSettingsBusy || !emailSettings.enabled}
++      />
++      <span>使用者被指派任務時寄信</span>
++    </label>
++
++    <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 600 }}>
++      <input
++        type="checkbox"
++        checked={Boolean(emailSettings.send_on_status_change)}
++        onChange={(event) => setEmailSettings((prev) => ({
++          ...prev,
++          send_on_status_change: event.target.checked,
++        }))}
++        disabled={emailSettingsBusy || !emailSettings.enabled}
++      />
++      <span>任務狀態變更時寄信</span>
++    </label>
++
++    <div style={{ border: '1px solid var(--panel-border)', borderRadius: '14px', padding: '1rem', background: 'var(--panel-bg)' }}>
++      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
++        <strong>狀態變更寄信條件</strong>
++        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
++          <button
++            type="button"
++            className="secondary-button"
++            onClick={setEmailStatusSelectAll}
++            disabled={emailSettingsBusy || !emailSettings.enabled || !emailSettings.send_on_status_change}
++          >
++            全選
++          </button>
++          <button
++            type="button"
++            className="secondary-button"
++            onClick={setEmailStatusAll}
++            disabled={emailSettingsBusy || !emailSettings.enabled || !emailSettings.send_on_status_change}
++          >
++            不限（全部）
++          </button>
++        </div>
++      </div>
++
++      <div className="chip-list" style={{ marginTop: '0.85rem' }}>
++        {emailStatusOptions.map((status) => {
++          const selected = Array.isArray(emailSettings.status_targets) && emailSettings.status_targets.includes(status);
++          const disabled = emailSettingsBusy || !emailSettings.enabled || !emailSettings.send_on_status_change;
++          return (
++            <label
++              key={status}
++              className="chip"
++              style={{
++                cursor: disabled ? 'not-allowed' : 'pointer',
++                opacity: disabled ? 0.65 : 1,
++                border: selected ? '1px solid var(--accent-color)' : '1px solid transparent',
++              }}
++            >
++              <input
++                type="checkbox"
++                checked={selected}
++                onChange={() => toggleEmailStatusTarget(status)}
++                disabled={disabled}
++                style={{ margin: 0 }}
++              />
++              <span>{status}</span>
++            </label>
++          );
++        })}
++      </div>
++
++      <p className="panel-hint" style={{ marginTop: '0.75rem' }}>
++        若按「不限（全部）」會在任何狀態變更時寄信；否則只在「新狀態」符合勾選項目時寄信。
++      </p>
++    </div>
++
++    <label>
++      信件標題前綴（選填）
++      <input
++        value={emailSettings.subject_prefix ?? ''}
++        onChange={(event) => setEmailSettings((prev) => ({
++          ...prev,
++          subject_prefix: event.target.value,
++        }))}
++        placeholder='例如：[Task] '
++        disabled={emailSettingsBusy}
++      />
++    </label>
++
++    <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 600 }}>
++      <input
++        type="checkbox"
++        checked={Boolean(emailSettings.include_task_link)}
++        onChange={(event) => setEmailSettings((prev) => ({
++          ...prev,
++          include_task_link: event.target.checked,
++        }))}
++        disabled={emailSettingsBusy}
++      />
++      <span>在信件內附上任務連結</span>
++    </label>
++
++    <label>
++      任務連結 Base URL（選填）
++      <input
++        value={emailSettings.task_link_base_url ?? ''}
++        onChange={(event) => setEmailSettings((prev) => ({
++          ...prev,
++          task_link_base_url: event.target.value,
++        }))}
++        placeholder="https://task.kuanlin.pro"
++        disabled={emailSettingsBusy || !emailSettings.include_task_link}
++      />
++    </label>
++
++    <button type="button" onClick={saveEmailSettings} disabled={emailSettingsBusy}>
++      {emailSettingsBusy ? '儲存中…' : '儲存信件設定'}
++    </button>
++  </div>
++</section>
++
++
+           <section className="panel panel--contrast">
+             <div className="panel-header">
+               <h2>新增帳號</h2>
