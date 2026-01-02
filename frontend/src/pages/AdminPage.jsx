@@ -83,7 +83,7 @@ const AdminPage = () => {
     setExportSuccess('');
     setExporting(true);
     try {
-      const { data } = await api.get('/export/tasks');
+      const { data } = await api.get('export/tasks');
       const downloadUrl = data?.url;
       if (downloadUrl) {
         const resolvedUrl = /^https?:\/\//i.test(downloadUrl)

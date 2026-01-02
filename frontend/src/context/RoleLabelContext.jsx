@@ -22,7 +22,7 @@ export const RoleLabelProvider = ({ children }) => {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await api.get('/settings/roles');
+      const { data } = await api.get('settings/roles');
       const fetchedOverrides = data?.overrides ?? {};
       setOverrides(fetchedOverrides);
       return data;
@@ -59,7 +59,7 @@ export const RoleLabelProvider = ({ children }) => {
   const updateRoleLabel = useCallback(
     async (role, label) => {
       const trimmed = (label || '').trim();
-      const { data } = await api.put(`/settings/roles/${role}`, { label: trimmed });
+      const { data } = await api.put(`settings/roles/${role}`, { label: trimmed });
       const nextOverrides = data?.overrides ?? {};
       setOverrides(nextOverrides);
       return data;
@@ -69,7 +69,7 @@ export const RoleLabelProvider = ({ children }) => {
 
   const resetRoleLabel = useCallback(
     async (role) => {
-      const { data } = await api.delete(`/settings/roles/${role}`);
+      const { data } = await api.delete(`settings/roles/${role}`);
       const nextOverrides = data?.overrides ?? {};
       setOverrides(nextOverrides);
       return data;

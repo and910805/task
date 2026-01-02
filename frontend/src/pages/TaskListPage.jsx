@@ -59,7 +59,7 @@ const TaskListPage = () => {
     }
     setError('');
     try {
-      const { data } = await api.get('/tasks');
+      const { data } = await api.get('tasks');
       setTasks(data);
     } catch (err) {
       const message = err.response?.data?.msg || '無法取得任務列表。';
@@ -121,7 +121,7 @@ const TaskListPage = () => {
         status: form.status,
         assignee_ids: form.assignee_ids.map(Number),
       };
-      await api.post('/tasks/create', payload);
+      await api.post('tasks/create', payload);
       setForm({ ...initialForm });
       setCreating(false);
       await loadTasks();
@@ -134,7 +134,7 @@ const TaskListPage = () => {
   const handleStatusChange = async (taskId, nextStatus) => {
     setError('');
     try {
-      await api.patch(`/tasks/update/${taskId}`, { status: nextStatus });
+      await api.patch(`tasks/update/${taskId}`, { status: nextStatus });
       await loadTasks({ showLoading: false });
     } catch (err) {
       const message = err.response?.data?.msg || '更新任務狀態失敗。';
@@ -146,7 +146,7 @@ const TaskListPage = () => {
     setError('');
     setAssigningTaskId(taskId);
     try {
-      await api.patch(`/tasks/update/${taskId}`, { assignee_ids: values });
+      await api.patch(`tasks/update/${taskId}`, { assignee_ids: values });
       await loadTasks({ showLoading: false });
     } catch (err) {
       const message = err.response?.data?.msg || '更新指派對象失敗。';
@@ -174,7 +174,7 @@ const TaskListPage = () => {
     setError('');
     setDeletingTaskId(taskId);
     try {
-      await api.delete(`/tasks/${taskId}`);
+      await api.delete(`tasks/${taskId}`);
       await loadTasks({ showLoading: false });
     } catch (err) {
       const message = err.response?.data?.msg || '刪除任務失敗。';

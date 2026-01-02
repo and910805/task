@@ -39,7 +39,7 @@ export const BrandingProvider = ({ children }) => {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await api.get('/settings/branding');
+      const { data } = await api.get('settings/branding');
       const payload = normaliseBranding(data);
       setBranding(payload);
       return payload;
@@ -60,7 +60,7 @@ export const BrandingProvider = ({ children }) => {
   const updateName = useCallback(
     async (name) => {
       const trimmed = (name || '').trim();
-      const { data } = await api.put('/settings/branding/name', { name: trimmed });
+      const { data } = await api.put('settings/branding/name', { name: trimmed });
       const payload = normaliseBranding(data);
       setBranding(payload);
       return payload;
@@ -71,7 +71,7 @@ export const BrandingProvider = ({ children }) => {
   const uploadLogo = useCallback(async (file) => {
     const formData = new FormData();
     formData.append('file', file);
-    const { data } = await api.post('/settings/branding/logo', formData, {
+    const { data } = await api.post('settings/branding/logo', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
     const payload = normaliseBranding(data);
@@ -80,7 +80,7 @@ export const BrandingProvider = ({ children }) => {
   }, []);
 
   const removeLogo = useCallback(async () => {
-    const { data } = await api.delete('/settings/branding/logo');
+    const { data } = await api.delete('settings/branding/logo');
     const payload = normaliseBranding(data);
     setBranding(payload);
     return payload;

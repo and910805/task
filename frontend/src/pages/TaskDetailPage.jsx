@@ -78,7 +78,7 @@ const TaskDetailPage = () => {
     setLoading(true);
     setError('');
     try {
-      const { data } = await api.get(`/tasks/${id}`);
+      const { data } = await api.get(`tasks/${id}`);
       setTask(data);
     } catch (err) {
       const message = err.response?.data?.msg || '找不到該任務。';
@@ -189,7 +189,7 @@ const TaskDetailPage = () => {
         status: updateForm.status || undefined,
         note: updateForm.note || undefined,
       };
-      await api.post(`/tasks/${id}/updates`, payload);
+      await api.post(`tasks/${id}/updates`, payload);
       setUpdateForm({ status: '', note: '' });
       await loadTask();
     } catch (err) {
@@ -207,7 +207,7 @@ const TaskDetailPage = () => {
         assignee_ids: assignmentForm.assignee_ids.map(Number),
         due_date: assignmentForm.due_date || null,
       };
-      await api.put(`/tasks/${id}`, payload);
+      await api.put(`tasks/${id}`, payload);
       setAssignmentSuccess('任務指派資訊已更新。');
       await loadTask();
     } catch (err) {
@@ -231,7 +231,7 @@ const TaskDetailPage = () => {
       if (photoForm.note) {
         formData.append('note', photoForm.note);
       }
-      await api.post(`/upload/tasks/${id}/images`, formData, {
+      await api.post(`upload/tasks/${id}/images`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setPhotoForm({ file: null, note: '' });
@@ -283,7 +283,7 @@ const TaskDetailPage = () => {
       if (audioForm.transcript) {
         formData.append('transcript', audioForm.transcript);
       }
-      await api.post(`/upload/tasks/${id}/audio`, formData, {
+      await api.post(`upload/tasks/${id}/audio`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setAudioForm({ file: null, note: '', transcript: '' });
@@ -335,7 +335,7 @@ const TaskDetailPage = () => {
     if (!dataUrl) return;
     setUploadingSignature(true);
     try {
-      await api.post(`/upload/tasks/${id}/signature`, {
+      await api.post(`upload/tasks/${id}/signature`, {
         data_url: dataUrl,
         note: signatureNote || undefined,
       });
@@ -354,7 +354,7 @@ const TaskDetailPage = () => {
     setTimeMessage('');
     setTimeLoading(true);
     try {
-      await api.post(`/tasks/${id}/time/start`);
+      await api.post(`tasks/${id}/time/start`);
       setTimeMessage('工時紀錄已開始。');
       await loadTask();
     } catch (err) {
@@ -370,7 +370,7 @@ const TaskDetailPage = () => {
     setTimeMessage('');
     setTimeLoading(true);
     try {
-      await api.post(`/tasks/${id}/time/stop`);
+      await api.post(`tasks/${id}/time/stop`);
       setTimeMessage('工時紀錄已結束。');
       await loadTask();
     } catch (err) {
