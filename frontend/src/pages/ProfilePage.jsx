@@ -24,6 +24,8 @@ const ProfilePage = () => {
   const [notificationError, setNotificationError] = useState('');
   const [notificationSuccess, setNotificationSuccess] = useState('');
   const [notificationSubmitting, setNotificationSubmitting] = useState(false);
+  const [emailTestSubmitting, setEmailTestSubmitting] = useState(false);
+  const [emailTestMessage, setEmailTestMessage] = useState('');
 
   useEffect(() => {
     setNotificationForm({
@@ -95,6 +97,20 @@ const ProfilePage = () => {
     }
   };
 
+
+  const handleSendTestEmail = async () => {
+    setEmailTestMessage('');
+    setEmailTestSubmitting(true);
+    try {
+      await api.post('auth/test-email');
+      setEmailTestMessage('已送出測試信，請至信箱（含垃圾郵件）確認。');
+    } catch (err) {
+      const msg = err?.response?.data?.msg || '寄送測試信失敗，請稍後再試。';
+      setEmailTestMessage(msg);
+    } finally {
+      setEmailTestSubmitting(false);
+    }
+  };
   return (
     <div className="page">
       <AppHeader title="個人資料" subtitle="查看帳號資訊並更新登入密碼" />
@@ -201,6 +217,18 @@ const ProfilePage = () => {
           <button type="submit" disabled={notificationSubmitting}>
             {notificationSubmitting ? '儲存中…' : '儲存通知設定'}
           </button>
+          {notificationForm.notification_type === 'email' ? (
+            <>
+              <button
+                type="button"
+                onClick={handleSendTestEmail}
+                disabled={emailTestSubmitting || !notificationForm.notification_value}
+              >
+                {emailTestSubmitting ? '寄送中…' : '寄送測試信'}
+              </button>
+              {emailTestMessage ? <p className="hint-text">{emailTestMessage}</p> : null}
+            </>
+          ) : null}
         </form>
       </section>
     </div>

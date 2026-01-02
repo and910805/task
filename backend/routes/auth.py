@@ -11,6 +11,8 @@ from sqlalchemy.orm import selectinload
 from models import Attachment, Task, TaskAssignee, TaskUpdate, User
 from utils import get_current_user_id
 
+from services.notifications import has_email_config, send_email_async
+
 
 VALID_ROLES = {"worker", "site_supervisor", "hq_staff", "admin"}
 
@@ -248,6 +250,36 @@ def update_notification_settings():
     db.session.commit()
 
     return jsonify({"msg": "Notification settings updated", "user": user.to_dict()})
+
+@auth_bp.post("/test-email")
+@jwt_required()
+def test_email():
+    """Send a test email to the current user's configured email address."""
+    user_id = get_current_user_id()
+    if user_id is None:
+        return jsonify({"msg": "Invalid authentication token"}), 401
+
+    user = User.query.get_or_404(user_id)
+    if user.notification_type != "email" or not user.notification_value:
+        return jsonify({"msg": "尚未設定 Email 通知（請先在個人資料綁定 Email）"}), 400
+
+    if not has_email_config():
+        return jsonify({
+            "msg": "SMTP 尚未設定（請在 Zeabur Variables 設 EMAIL_SMTP_HOST / EMAIL_SENDER / EMAIL_SMTP_USERNAME / EMAIL_SMTP_PASSWORD 等）"
+        }), 400
+
+    subject = "TaskGo 測試信"
+    body = (
+        "這是一封測試信，用來確認你的 SMTP 設定可正常寄送。\n\n"
+        "如果你有收到這封信，代表 Email 通知功能已啟用 ✅"
+    )
+    html = (
+        "<p>這是一封<strong>測試信</strong>，用來確認你的 SMTP 設定可正常寄送。</p>"
+        "<p>如果你有收到這封信，代表 Email 通知功能已啟用 ✅</p>"
+    )
+
+    send_email_async(user.notification_value, subject, body, html=html)
+    return jsonify({"msg": "Test email queued"})
 
 
 @auth_bp.post("/change-password")
