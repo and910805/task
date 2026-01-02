@@ -59,7 +59,7 @@ const TaskListPage = () => {
     }
     setError('');
     try {
-      const { data } = await api.get('tasks');
+      const { data } = await api.get('tasks/');
       setTasks(data);
     } catch (err) {
       const message = err.response?.data?.msg || '無法取得任務列表。';

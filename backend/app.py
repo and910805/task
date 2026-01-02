@@ -5,7 +5,7 @@ from datetime import timedelta
 from flask import Flask, jsonify, redirect, request, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import verify_jwt_in_request
-
+from werkzeug.middleware.proxy_fix import ProxyFix
 # Ensure local imports work when gunicorn --chdir backend
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -37,7 +37,8 @@ def create_app() -> Flask:
     frontend_dist_path = os.path.abspath(os.path.join(base_dir, "..", "frontend", "dist"))
 
     app = Flask(__name__, static_folder=frontend_dist_path, static_url_path="/")
-
+    app.url_map.strict_slashes = False
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
     reports_path = os.path.join(uploads_path, "reports")
     images_path = os.path.join(uploads_path, "images")
     audio_path = os.path.join(uploads_path, "audio")
