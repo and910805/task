@@ -1,0 +1,978 @@
+diff --git a/backend/app.py b/backend/app.py
+index fb2649c..cc8bf4d 100644
+--- a/backend/app.py
++++ b/backend/app.py
+@@ -89,12 +89,14 @@ def create_app() -> Flask:
+     from routes.settings import settings_bp
+     from routes.tasks import tasks_bp
+     from routes.uploads import upload_bp
++    from routes.line import line_bp
+ 
+     app.register_blueprint(auth_bp, url_prefix="/api/auth")
+     app.register_blueprint(tasks_bp, url_prefix="/api/tasks")
+     app.register_blueprint(upload_bp, url_prefix="/api/upload")
+     app.register_blueprint(export_bp, url_prefix="/api/export")
+     app.register_blueprint(settings_bp, url_prefix="/api/settings")
++    app.register_blueprint(line_bp, url_prefix="/api/line")
+ 
+     @app.route("/api/health")
+     def health_check():
+diff --git a/backend/routes/auth.py b/backend/routes/auth.py
+index d981991..2ced0a2 100644
+--- a/backend/routes/auth.py
++++ b/backend/routes/auth.py
+@@ -12,6 +12,7 @@ from models import Attachment, Task, TaskAssignee, TaskUpdate, User
+ from utils import get_current_user_id
+ 
+ from services.notifications import has_email_config, send_email_async
++from services.line_messaging import has_line_bot_config, push_text
+ from datetime import datetime, timedelta
+ 
+ 
+@@ -243,10 +244,24 @@ def update_notification_settings():
+         user.notification_type = "email"
+         user.notification_value = value
+     else:  # line
+-        if len(value) < 10:
+-            return jsonify({"msg": "LINE Notify Token 長度不足"}), 400
+-        user.notification_type = "line"
+-        user.notification_value = value
++        # LINE 通知：支援兩種格式
++        # 1) LINE Messaging API 的 userId（通常以 'U' 開頭）
++        # 2) 舊版 LINE Notify Token（相容保留）
++
++        if value:
++            if value.startswith('U'):
++                user.notification_type = 'line'
++                user.notification_value = value
++            else:
++                if len(value) < 10:
++                    return jsonify({'msg': 'LINE Notify Token 長度不足'}), 400
++                user.notification_type = 'line'
++                user.notification_value = value
++        else:
++            # 沒有提供 value 時：僅切換通知方式，不覆蓋既有綁定
++            user.notification_type = 'line'
++            if not user.notification_value:
++                user.notification_value = None
+ 
+     db.session.commit()
+ 
+@@ -283,6 +298,80 @@ def test_email():
+     return jsonify({"msg": "Test email queued"})
+ 
+ 
++
++
++# ---- LINE Messaging API binding (Bot) ----
++LINE_BIND_CODE_TTL_MINUTES = int(os.getenv("LINE_BIND_CODE_TTL_MINUTES") or "10")
++
++
++def _line_bind_key(code: str) -> str:
++    return f"line_bind:{code}"
++
++
++@auth_bp.post("/line/bind-code")
++@jwt_required()
++def create_line_bind_code():
++    """Create a short-lived code that can be bound by sending `bind <code>` to the LINE bot."""
++    user_id = get_current_user_id()
++    if user_id is None:
++        return jsonify({"msg": "Invalid authentication token"}), 401
++
++    if not has_line_bot_config():
++        return jsonify({
++            "msg": "LINE Bot 尚未設定（請在 Zeabur Variables 設 LINE_CHANNEL_ACCESS_TOKEN / LINE_CHANNEL_SECRET）"
++        }), 400
++
++    # 6 hex chars is enough for short-lived binding, and is easy to type.
++    code = secrets.token_hex(3).upper()
++    expires_at = datetime.utcnow() + timedelta(minutes=max(1, LINE_BIND_CODE_TTL_MINUTES))
++
++    payload = {
++        "user_id": user_id,
++        "expires_at": expires_at.isoformat() + "Z",
++    }
++
++    SiteSetting.set_value(_line_bind_key(code), json.dumps(payload, ensure_ascii=False))
++
++    return jsonify({"code": code, "expires_at": payload["expires_at"]})
++
++
++@auth_bp.post("/line/unbind")
++@jwt_required()
++def unbind_line():
++    user_id = get_current_user_id()
++    if user_id is None:
++        return jsonify({"msg": "Invalid authentication token"}), 401
++
++    user = User.query.get_or_404(user_id)
++    if user.notification_type == "line":
++        user.notification_type = None
++        user.notification_value = None
++        db.session.commit()
++
++    return jsonify({"msg": "Line unbound", "user": user.to_dict()})
++
++
++@auth_bp.post("/test-line")
++@jwt_required()
++def test_line():
++    user_id = get_current_user_id()
++    if user_id is None:
++        return jsonify({"msg": "Invalid authentication token"}), 401
++
++    user = User.query.get_or_404(user_id)
++    if user.notification_type != "line" or not user.notification_value:
++        return jsonify({"msg": "尚未綁定 LINE（請先在個人資料產生綁定碼，並傳給 LINE Bot）"}), 400
++
++    if not has_line_bot_config():
++        return jsonify({
++            "msg": "LINE Bot 尚未設定（請在 Zeabur Variables 設 LINE_CHANNEL_ACCESS_TOKEN / LINE_CHANNEL_SECRET）"
++        }), 400
++
++    if not str(user.notification_value).startswith("U"):
++        return jsonify({"msg": "目前綁定的是 LINE Notify Token（非 LINE Bot userId），無法測試 push"}), 400
++
++    push_text(str(user.notification_value), "✅ TaskGo LINE 測試通知：如果你看到這則訊息，代表綁定成功。")
++    return jsonify({"msg": "Test LINE message sent"})
+ @auth_bp.post("/change-password")
+ @jwt_required()
+ def change_password():
+diff --git a/mnt/data/task_line_lf/backend/routes/line.py b/backend/routes/line.py
+new file mode 100644
+index 0000000..420a958
+--- /dev/null
++++ b/backend/routes/line.py
+@@ -0,0 +1,131 @@
++from __future__ import annotations
++
++import json
++import os
++from datetime import datetime
++
++from flask import Blueprint, current_app, jsonify, request
++
++from extensions import db
++from models import SiteSetting, User
++from services.line_messaging import reply_text, verify_signature
++
++line_bp = Blueprint("line", __name__)
++
++
++def _parse_dt(value: str | None) -> datetime | None:
++    if not value:
++        return None
++    try:
++        return datetime.fromisoformat(value.rstrip("Z"))
++    except Exception:
++        return None
++
++
++def _help_text() -> str:
++    return (
++        "可用指令：\n"
++        "1) bind <綁定碼>  → 綁定網站帳號\n"
++        "2) unbind        → 解除綁定\n\n"
++        "綁定碼請到網站『個人資料』產生。"
++    )
++
++
++def _verify_request() -> bool:
++    # If LINE_CHANNEL_SECRET is not set, skip verification (useful for local dev).
++    secret = (os.getenv("LINE_CHANNEL_SECRET") or "").strip()
++    if not secret:
++        return True
++    signature = request.headers.get("X-Line-Signature", "")
++    body = request.get_data() or b""
++    return verify_signature(body, signature, secret)
++
++
++def _handle_bind(line_user_id: str, reply_token: str, code: str) -> None:
++    key = f"line_bind:{code}"
++    record = SiteSetting.get_record(key)
++    if record is None:
++        reply_text(reply_token, "綁定碼不存在或已過期，請回到網站重新產生。")
++        return
++
++    try:
++        payload = json.loads(record.value or "{}")
++    except Exception:
++        payload = {}
++
++    user_id = payload.get("user_id")
++    expires_at = _parse_dt(payload.get("expires_at"))
++
++    if expires_at and expires_at < datetime.utcnow():
++        SiteSetting.delete_value(key)
++        reply_text(reply_token, "綁定碼已過期，請回到網站重新產生。")
++        return
++
++    user = User.query.get(user_id) if user_id else None
++    if user is None:
++        SiteSetting.delete_value(key)
++        reply_text(reply_token, "找不到對應帳號，請回到網站重新產生。")
++        return
++
++    user.notification_type = "line"
++    user.notification_value = line_user_id
++    db.session.commit()
++
++    SiteSetting.delete_value(key)
++    reply_text(reply_token, f"✅ 綁定完成！已連結到帳號：{user.username}")
++
++
++def _handle_unbind(line_user_id: str, reply_token: str) -> None:
++    user = User.query.filter_by(notification_type="line", notification_value=line_user_id).first()
++    if user is None:
++        reply_text(reply_token, "目前沒有綁定任何帳號。")
++        return
++
++    user.notification_type = None
++    user.notification_value = None
++    db.session.commit()
++    reply_text(reply_token, "✅ 已解除綁定。")
++
++
++@line_bp.post("/webhook")
++def webhook():
++    if not _verify_request():
++        return jsonify({"msg": "invalid signature"}), 400
++
++    payload = request.get_json(silent=True) or {}
++    events = payload.get("events") or []
++
++    for event in events:
++        try:
++            reply_token = event.get("replyToken")
++            source = event.get("source") or {}
++            line_user_id = source.get("userId")
++            if not reply_token or not line_user_id:
++                continue
++
++            etype = event.get("type")
++            if etype == "follow":
++                reply_text(reply_token, _help_text())
++                continue
++
++            if etype != "message":
++                continue
++
++            message = event.get("message") or {}
++            if message.get("type") != "text":
++                continue
++
++            text = (message.get("text") or "").strip()
++            lower = text.lower()
++
++            if lower.startswith("bind "):
++                code = text.split(None, 1)[1].strip()
++                _handle_bind(line_user_id, reply_token, code)
++            elif lower in {"unbind", "解除", "解除綁定"}:
++                _handle_unbind(line_user_id, reply_token)
++            elif lower in {"help", "?", "指令", "幫助"}:
++                reply_text(reply_token, _help_text())
++        except Exception as exc:  # pragma: no cover
++            current_app.logger.warning("LINE webhook error: %s", exc)
++
++    return jsonify({"ok": True})
+diff --git a/backend/routes/settings.py b/backend/routes/settings.py
+index 32708da..fbc4a6d 100644
+--- a/backend/routes/settings.py
++++ b/backend/routes/settings.py
+@@ -296,3 +296,42 @@ def update_email_notification_settings():
+ 
+     updated = _save(data)
+     return jsonify({"settings": updated, "status_options": status_options})
++
++
++@settings_bp.get("/notifications/line")
++@role_required("admin")
++def get_line_notification_settings():
++    """Admin: read LINE (Bot) notification rules."""
++    from services.notifications import get_line_notification_settings as _get
++    return jsonify(
++        {
++            "settings": _get(),
++            "status_options": _task_status_options(),
++            "has_line_bot": bool((os.getenv("LINE_CHANNEL_ACCESS_TOKEN") or "").strip()),
++        }
++    )
++
++
++@settings_bp.put("/notifications/line")
++@role_required("admin")
++def update_line_notification_settings():
++    """Admin: update LINE (Bot) notification rules."""
++    from services.notifications import save_line_notification_settings as _save
++    data = request.get_json(silent=True) or {}
++    status_options = _task_status_options()
++
++    status_targets = data.get("status_targets")
++    if status_targets is not None:
++        if not isinstance(status_targets, list):
++            return jsonify({"msg": "status_targets 必須是陣列"}), 400
++        cleaned = [str(item).strip() for item in status_targets if str(item).strip()]
++        invalid = [s for s in cleaned if s not in status_options]
++        if invalid:
++            return jsonify({"msg": f"未知的狀態：{', '.join(invalid)}"}), 400
++        data["status_targets"] = cleaned
++
++    if "task_link_base_url" in data and data["task_link_base_url"] is not None:
++        data["task_link_base_url"] = str(data["task_link_base_url"]).strip()
++
++    updated = _save(data)
++    return jsonify({"settings": updated, "status_options": status_options})
+diff --git a/mnt/data/task_line_lf/backend/services/line_messaging.py b/backend/services/line_messaging.py
+new file mode 100644
+index 0000000..9190893
+--- /dev/null
++++ b/backend/services/line_messaging.py
+@@ -0,0 +1,73 @@
++from __future__ import annotations
++
++import base64
++import hashlib
++import hmac
++import os
++from typing import Any
++
++import requests
++from flask import current_app
++
++LINE_API_BASE = "https://api.line.me/v2/bot/message"
++_MAX_TEXT_LEN = 1800
++
++
++def has_line_bot_config() -> bool:
++    """Return True if the LINE Messaging API token is configured."""
++    return bool((os.getenv("LINE_CHANNEL_ACCESS_TOKEN") or "").strip())
++
++
++def _headers() -> dict[str, str]:
++    token = (os.getenv("LINE_CHANNEL_ACCESS_TOKEN") or "").strip()
++    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
++
++
++def verify_signature(body: bytes, signature: str, channel_secret: str) -> bool:
++    """Verify X-Line-Signature (HMAC-SHA256 base64)."""
++    if not signature or not channel_secret:
++        return False
++    mac = hmac.new(channel_secret.encode("utf-8"), body, hashlib.sha256).digest()
++    expected = base64.b64encode(mac).decode("utf-8")
++    return hmac.compare_digest(expected, signature)
++
++
++def _truncate_text(text: str) -> str:
++    text = text or ""
++    if len(text) <= _MAX_TEXT_LEN:
++        return text
++    return text[: _MAX_TEXT_LEN - 1] + "…"
++
++
++def reply_text(reply_token: str, text: str) -> None:
++    """Reply to a webhook event."""
++    if not has_line_bot_config() or not reply_token:
++        return
++    url = f"{LINE_API_BASE}/reply"
++    payload: dict[str, Any] = {
++        "replyToken": reply_token,
++        "messages": [{"type": "text", "text": _truncate_text(text)}],
++    }
++    try:
++        r = requests.post(url, headers=_headers(), json=payload, timeout=10)
++        if r.status_code >= 400:
++            current_app.logger.warning("LINE reply failed: %s %s", r.status_code, r.text)
++    except Exception as exc:  # pragma: no cover
++        current_app.logger.warning("LINE reply exception: %s", exc)
++
++
++def push_text(to_user_id: str, text: str) -> None:
++    """Push a text message to a LINE userId (starts with 'U')."""
++    if not has_line_bot_config() or not to_user_id:
++        return
++    url = f"{LINE_API_BASE}/push"
++    payload: dict[str, Any] = {
++        "to": to_user_id,
++        "messages": [{"type": "text", "text": _truncate_text(text)}],
++    }
++    try:
++        r = requests.post(url, headers=_headers(), json=payload, timeout=10)
++        if r.status_code >= 400:
++            current_app.logger.warning("LINE push failed: %s %s", r.status_code, r.text)
++    except Exception as exc:  # pragma: no cover
++        current_app.logger.warning("LINE push exception: %s", exc)
+diff --git a/backend/services/notifications.py b/backend/services/notifications.py
+index 60df802..1e37467 100644
+--- a/backend/services/notifications.py
++++ b/backend/services/notifications.py
+@@ -15,6 +15,8 @@ from typing import Iterable, Sequence
+ import requests
+ from flask import current_app
+ 
++from services.line_messaging import has_line_bot_config, push_text
++
+ LINE_NOTIFY_ENDPOINT = "https://notify-api.line.me/api/notify"
+ 
+ # A small shared pool for async email sending. This keeps API requests snappy.
+@@ -43,6 +45,19 @@ DEFAULT_EMAIL_NOTIFICATION_SETTINGS = {
+ }
+ 
+ 
++# ---- LINE Messaging (Bot) notification rules (admin configurable) ----
++LINE_NOTIFICATION_SETTINGS_KEY = "line_notification_settings"
++
++DEFAULT_LINE_NOTIFICATION_SETTINGS = {
++    "enabled": True,
++    "send_on_assignment": True,
++    "send_on_status_change": True,
++    "status_targets": [],  # empty means all statuses
++    "include_task_link": False,
++    "task_link_base_url": "",
++}
++
++
+ def _load_email_settings() -> dict:
+     """Load and normalize email notification settings from SiteSetting."""
+     try:
+@@ -100,6 +115,60 @@ def save_email_notification_settings(settings: dict) -> dict:
+     return _load_email_settings()
+ 
+ 
++
++
++def _load_line_settings() -> dict:
++    """Load and normalize LINE notification settings from SiteSetting."""
++    try:
++        from models import SiteSetting  # local import to avoid import cycles
++    except Exception:
++        return dict(DEFAULT_LINE_NOTIFICATION_SETTINGS)
++
++    raw = SiteSetting.get_value(LINE_NOTIFICATION_SETTINGS_KEY)
++    data = {}
++    if raw:
++        try:
++            data = json.loads(raw)
++        except Exception:
++            data = {}
++
++    if not isinstance(data, dict):
++        data = {}
++
++    merged = {**DEFAULT_LINE_NOTIFICATION_SETTINGS, **data}
++
++    merged["enabled"] = _bool(merged.get("enabled"), True)
++    merged["send_on_assignment"] = _bool(merged.get("send_on_assignment"), True)
++    merged["send_on_status_change"] = _bool(merged.get("send_on_status_change"), True)
++    merged["include_task_link"] = _bool(merged.get("include_task_link"), False)
++
++    targets = merged.get("status_targets")
++    if targets is None or not isinstance(targets, list):
++        targets = []
++    merged["status_targets"] = [str(item).strip() for item in targets if str(item).strip()]
++
++    merged["task_link_base_url"] = str(merged.get("task_link_base_url") or "")
++    return merged
++
++
++def get_line_notification_settings() -> dict:
++    return _load_line_settings()
++
++
++def save_line_notification_settings(settings: dict) -> dict:
++    try:
++        from models import SiteSetting  # local import to avoid import cycles
++    except Exception:
++        return _load_line_settings()
++
++    normalized = {**_load_line_settings(), **(settings or {})}
++    SiteSetting.set_value(
++        LINE_NOTIFICATION_SETTINGS_KEY,
++        json.dumps(normalized, ensure_ascii=False),
++    )
++    return _load_line_settings()
++
++
+ def _email_subject(base_subject: str) -> str:
+     settings = _load_email_settings()
+     prefix = (settings.get("subject_prefix") or "").strip()
+@@ -124,6 +193,47 @@ def _append_task_link(message: str, task: "Task") -> str:
+     return f"{message}\n\n任務連結：{url}"
+ 
+ 
++
++
++def _append_task_link_line(message: str, task: "Task") -> str:
++    settings = _load_line_settings()
++    if not settings.get("include_task_link"):
++        return message
++
++    base = (settings.get("task_link_base_url") or "").strip().rstrip("/")
++    if not base:
++        base = (os.getenv("APP_BASE_URL") or "").strip().rstrip("/")
++    if not base:
++        return message
++
++    try:
++        url = f"{base}/tasks/{task.id}"
++    except Exception:
++        return message
++    return f"{message}\n\n任務連結：{url}"
++
++
++def _should_send_line(kind: str | None, *, status: str | None = None) -> bool:
++    if kind is None:
++        return True
++    settings = _load_line_settings()
++    if not settings.get("enabled"):
++        return False
++
++    if kind == "assignment":
++        return bool(settings.get("send_on_assignment"))
++
++    if kind == "status_change":
++        if not settings.get("send_on_status_change"):
++            return False
++        targets: list[str] = settings.get("status_targets") or []
++        if targets and status:
++            return status in targets
++        if targets and not status:
++            return False
++        return True
++
++    return True
+ def _should_send_email(kind: str | None, *, status: str | None = None) -> bool:
+     """Check email rules. kind: 'assignment' | 'status_change' | None."""
+     if kind is None:
+@@ -166,6 +276,15 @@ def _send_line_notify(token: str, message: str) -> None:
+         current_app.logger.warning("Unable to send LINE notification: %s", exc)
+ 
+ 
++
++
++def _send_line_bot(user_id: str, message: str) -> None:
++    if not user_id:
++        return
++    if not has_line_bot_config():
++        current_app.logger.warning("LINE bot config missing; skip push")
++        return
++    push_text(user_id, message)
+ def _get_email_config() -> dict[str, str | int | None]:
+     """Read SMTP settings from environment first, then Flask config.
+ 
+@@ -369,7 +488,17 @@ def _dispatch_notifications(
+ 
+     for user in _iter_unique_users(users):
+         if user.notification_type == "line" and user.notification_value:
+-            _send_line_notify(user.notification_value, resolved_message)
++            if not _should_send_line(email_kind, status=email_status):
++                continue
++            # New: if notification_value looks like a LINE userId (starts with 'U'), use Messaging API push.
++            # Fallback: treat it as legacy LINE Notify token.
++            if str(user.notification_value).startswith("U"):
++                resolved_line_message = (
++                    _append_task_link_line(message, task) if task is not None else message
++                )
++                _send_line_bot(str(user.notification_value), resolved_line_message)
++            else:
++                _send_line_notify(user.notification_value, resolved_message)
+         elif user.notification_type == "email" and user.notification_value:
+             if not _should_send_email(email_kind, status=email_status):
+                 continue
+diff --git a/frontend/src/pages/AdminPage.jsx b/frontend/src/pages/AdminPage.jsx
+index 1ede0d8..5e96c12 100644
+--- a/frontend/src/pages/AdminPage.jsx
++++ b/frontend/src/pages/AdminPage.jsx
+@@ -56,6 +56,19 @@ const AdminPage = () => {
+   const [emailSettingsBusy, setEmailSettingsBusy] = useState(false);
+   const [emailSettingsMessage, setEmailSettingsMessage] = useState(null);
+ 
++  const [lineSettings, setLineSettings] = useState({
++    enabled: true,
++    send_on_assignment: true,
++    send_on_status_change: true,
++    status_targets: [],
++    include_task_link: false,
++    task_link_base_url: '',
++  });
++  const [lineStatusOptions, setLineStatusOptions] = useState([...FALLBACK_TASK_STATUSES]);
++  const [lineHasBot, setLineHasBot] = useState(false);
++  const [lineSettingsBusy, setLineSettingsBusy] = useState(false);
++  const [lineSettingsMessage, setLineSettingsMessage] = useState(null);
++
+   useEffect(() => {
+     setRoleNameEdits({ ...labels });
+   }, [labels]);
+@@ -180,9 +193,94 @@ const AdminPage = () => {
+   setEmailSettings((prev) => ({ ...prev, status_targets: [...emailStatusOptions] }));
+ };
+ 
++  const loadLineSettings = async () => {
++    setLineSettingsMessage(null);
++    try {
++      const { data } = await api.get('settings/notifications/line');
++      const incoming = data?.settings ?? {};
++      const statusOptions = Array.isArray(data?.status_options) && data.status_options.length > 0
++        ? data.status_options
++        : FALLBACK_TASK_STATUSES;
++
++      setLineHasBot(Boolean(data?.has_line_bot));
++      setLineStatusOptions(statusOptions);
++      setLineSettings((prev) => ({
++        ...prev,
++        ...incoming,
++        status_targets: Array.isArray(incoming.status_targets) ? incoming.status_targets : prev.status_targets,
++      }));
++    } catch (err) {
++      const status = err.response?.status;
++      if (status === 401) {
++        logout();
++        setLineSettingsMessage({ type: 'error', text: '登入資訊已失效，請重新登入。' });
++      } else if (status === 403) {
++        setLineSettingsMessage({ type: 'error', text: '權限不足，無法讀取 LINE 設定。' });
++      } else {
++        const message = err.response?.data?.msg || '無法讀取 LINE 設定。';
++        setLineSettingsMessage({ type: 'error', text: message });
++      }
++    }
++  };
++
++  const saveLineSettings = async () => {
++    setLineSettingsBusy(true);
++    setLineSettingsMessage(null);
++    try {
++      const payload = {
++        enabled: Boolean(lineSettings.enabled),
++        send_on_assignment: Boolean(lineSettings.send_on_assignment),
++        send_on_status_change: Boolean(lineSettings.send_on_status_change),
++        status_targets: Array.isArray(lineSettings.status_targets) ? lineSettings.status_targets : [],
++        include_task_link: Boolean(lineSettings.include_task_link),
++        task_link_base_url: lineSettings.task_link_base_url ?? '',
++      };
++
++      const { data } = await api.put('settings/notifications/line', payload);
++      const updated = data?.settings ?? payload;
++      const statusOptions = Array.isArray(data?.status_options) && data.status_options.length > 0
++        ? data.status_options
++        : lineStatusOptions;
++
++      setLineStatusOptions(statusOptions);
++      setLineSettings((prev) => ({
++        ...prev,
++        ...updated,
++        status_targets: Array.isArray(updated.status_targets) ? updated.status_targets : prev.status_targets,
++      }));
++      setLineSettingsMessage({ type: 'success', text: '已更新 LINE 通知設定。' });
++    } catch (err) {
++      const message = err.response?.data?.msg || '更新 LINE 通知設定失敗。';
++      setLineSettingsMessage({ type: 'error', text: message });
++    } finally {
++      setLineSettingsBusy(false);
++    }
++  };
++
++  const toggleLineStatusTarget = (status) => {
++    setLineSettingsMessage(null);
++    setLineSettings((prev) => {
++      const current = new Set(Array.isArray(prev.status_targets) ? prev.status_targets : []);
++      if (current.has(status)) current.delete(status);
++      else current.add(status);
++      return { ...prev, status_targets: Array.from(current) };
++    });
++  };
++
++  const setLineStatusAll = () => {
++    setLineSettingsMessage(null);
++    setLineSettings((prev) => ({ ...prev, status_targets: [] }));
++  };
++
++  const setLineStatusSelectAll = () => {
++    setLineSettingsMessage(null);
++    setLineSettings((prev) => ({ ...prev, status_targets: [...lineStatusOptions] }));
++  };
++
+   useEffect(() => {
+     loadUsers();
+     loadEmailSettings();
++    loadLineSettings();
+   }, []);
+ 
+   const handleExport = async () => {
+@@ -697,6 +795,136 @@ const AdminPage = () => {
+   </div>
+ </section>
+ 
++<section className="panel panel--contrast panel--wide">
++  <div className="panel-header">
++    <h2>LINE 通知設定</h2>
++    <span className="panel-tag">LINE</span>
++  </div>
++  <p className="panel-hint">
++    只有在「個人設定」選擇 <strong>LINE</strong> 通知且完成綁定的使用者會收到推播通知。
++    {lineHasBot ? null : (
++      <> <strong>提醒：</strong>後端尚未偵測到 LINE Bot 設定（請確認 Zeabur Variables 有 LINE_CHANNEL_ACCESS_TOKEN / LINE_CHANNEL_SECRET）。</>
++    )}
++  </p>
++
++  {lineSettingsMessage ? (
++    <p className={lineSettingsMessage.type === 'error' ? 'error-text' : 'success-text'}>
++      {lineSettingsMessage.text}
++    </p>
++  ) : null}
++
++  <div className="stack">
++    <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 600 }}>
++      <input
++        type="checkbox"
++        checked={Boolean(lineSettings.enabled)}
++        onChange={(event) => setLineSettings((prev) => ({ ...prev, enabled: event.target.checked }))}
++        disabled={lineSettingsBusy}
++      />
++      <span>啟用 LINE 通知</span>
++    </label>
++
++    <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 600 }}>
++      <input
++        type="checkbox"
++        checked={Boolean(lineSettings.send_on_assignment)}
++        onChange={(event) => setLineSettings((prev) => ({ ...prev, send_on_assignment: event.target.checked }))}
++        disabled={lineSettingsBusy || !lineSettings.enabled}
++      />
++      <span>使用者被指派任務時推播</span>
++    </label>
++
++    <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 600 }}>
++      <input
++        type="checkbox"
++        checked={Boolean(lineSettings.send_on_status_change)}
++        onChange={(event) => setLineSettings((prev) => ({ ...prev, send_on_status_change: event.target.checked }))}
++        disabled={lineSettingsBusy || !lineSettings.enabled}
++      />
++      <span>任務狀態變更時推播</span>
++    </label>
++
++    <div style={{ border: '1px solid var(--panel-border)', borderRadius: '14px', padding: '1rem', background: 'var(--panel-bg)' }}>
++      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
++        <strong>狀態變更推播條件</strong>
++        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
++          <button
++            type="button"
++            className="secondary-button"
++            onClick={setLineStatusSelectAll}
++            disabled={lineSettingsBusy || !lineSettings.enabled || !lineSettings.send_on_status_change}
++          >
++            全選
++          </button>
++          <button
++            type="button"
++            className="secondary-button"
++            onClick={setLineStatusAll}
++            disabled={lineSettingsBusy || !lineSettings.enabled || !lineSettings.send_on_status_change}
++          >
++            不限（全部）
++          </button>
++        </div>
++      </div>
++
++      <div className="chip-list" style={{ marginTop: '0.85rem' }}>
++        {lineStatusOptions.map((status) => {
++          const selected = Array.isArray(lineSettings.status_targets) && lineSettings.status_targets.includes(status);
++          const disabled = lineSettingsBusy || !lineSettings.enabled || !lineSettings.send_on_status_change;
++          return (
++            <label
++              key={status}
++              className="chip"
++              style={{
++                cursor: disabled ? 'not-allowed' : 'pointer',
++                opacity: disabled ? 0.65 : 1,
++                border: selected ? '1px solid var(--accent-color)' : '1px solid transparent',
++              }}
++            >
++              <input
++                type="checkbox"
++                checked={selected}
++                onChange={() => toggleLineStatusTarget(status)}
++                disabled={disabled}
++                style={{ margin: 0 }}
++              />
++              <span>{status}</span>
++            </label>
++          );
++        })}
++      </div>
++
++      <p className="panel-hint" style={{ marginTop: '0.75rem' }}>
++        若按「不限（全部）」會在任何狀態變更時推播；否則只在「新狀態」符合勾選項目時推播。
++      </p>
++    </div>
++
++    <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 600 }}>
++      <input
++        type="checkbox"
++        checked={Boolean(lineSettings.include_task_link)}
++        onChange={(event) => setLineSettings((prev) => ({ ...prev, include_task_link: event.target.checked }))}
++        disabled={lineSettingsBusy}
++      />
++      <span>在 LINE 訊息內附上任務連結</span>
++    </label>
++
++    <label>
++      任務連結 Base URL（選填）
++      <input
++        value={lineSettings.task_link_base_url ?? ''}
++        onChange={(event) => setLineSettings((prev) => ({ ...prev, task_link_base_url: event.target.value }))}
++        placeholder="https://task.kuanlin.pro"
++        disabled={lineSettingsBusy || !lineSettings.include_task_link}
++      />
++    </label>
++
++    <button type="button" onClick={saveLineSettings} disabled={lineSettingsBusy}>
++      {lineSettingsBusy ? '儲存中…' : '儲存 LINE 設定'}
++    </button>
++  </div>
++</section>
++
+ 
+           <section className="panel panel--contrast">
+             <div className="panel-header">
+diff --git a/frontend/src/pages/ProfilePage.jsx b/frontend/src/pages/ProfilePage.jsx
+index 97d23d1..9a6f24b 100644
+--- a/frontend/src/pages/ProfilePage.jsx
++++ b/frontend/src/pages/ProfilePage.jsx
+@@ -27,6 +27,11 @@ const ProfilePage = () => {
+   const [emailTestSubmitting, setEmailTestSubmitting] = useState(false);
+   const [emailTestMessage, setEmailTestMessage] = useState('');
+ 
++  const [lineBindInfo, setLineBindInfo] = useState(null);
++  const [lineBindBusy, setLineBindBusy] = useState(false);
++  const [lineTestBusy, setLineTestBusy] = useState(false);
++  const [lineMessage, setLineMessage] = useState('');
++
+   useEffect(() => {
+     setNotificationForm({
+       notification_type: user?.notification_type || 'none',
+@@ -111,6 +116,53 @@ const ProfilePage = () => {
+       setEmailTestSubmitting(false);
+     }
+   };
++
++
++  const handleCreateLineBindCode = async () => {
++    setLineMessage('');
++    setLineBindInfo(null);
++    setLineBindBusy(true);
++    try {
++      const { data } = await api.post('auth/line/bind-code');
++      setLineBindInfo({ code: data?.code, expires_at: data?.expires_at });
++      setLineMessage('已產生綁定碼，請到 LINE Bot 貼上 bind <綁定碼>');
++    } catch (err) {
++      const msg = err?.response?.data?.msg || '產生綁定碼失敗。';
++      setLineMessage(msg);
++    } finally {
++      setLineBindBusy(false);
++    }
++  };
++
++  const handleTestLine = async () => {
++    setLineMessage('');
++    setLineTestBusy(true);
++    try {
++      await api.post('auth/test-line');
++      setLineMessage('已送出 LINE 測試通知。');
++    } catch (err) {
++      const msg = err?.response?.data?.msg || '送出 LINE 測試通知失敗。';
++      setLineMessage(msg);
++    } finally {
++      setLineTestBusy(false);
++    }
++  };
++
++  const handleUnbindLine = async () => {
++    setLineMessage('');
++    setLineTestBusy(true);
++    try {
++      await api.post('auth/line/unbind');
++      setLineMessage('已解除 LINE 綁定。');
++      await refreshUser();
++    } catch (err) {
++      const msg = err?.response?.data?.msg || '解除綁定失敗。';
++      setLineMessage(msg);
++    } finally {
++      setLineTestBusy(false);
++    }
++  };
++
+   return (
+     <div className="page">
+       <AppHeader title="個人資料" subtitle="查看帳號資訊並更新登入密碼" />
+@@ -182,7 +234,7 @@ const ProfilePage = () => {
+             >
+               <option value="none">不接收通知</option>
+               <option value="email">Email</option>
+-              <option value="line">LINE Notify</option>
++              <option value="line">LINE</option>
+             </select>
+           </label>
+           {notificationForm.notification_type === 'email' ? (
+@@ -199,20 +251,47 @@ const ProfilePage = () => {
+             </label>
+           ) : null}
+           {notificationForm.notification_type === 'line' ? (
+-            <label>
+-              LINE Notify Token
+-              <input
+-                type="text"
+-                name="notification_value"
+-                value={notificationForm.notification_value}
+-                onChange={handleNotificationValueChange}
+-                placeholder="輸入 LINE Notify 權杖"
+-                required
+-              />
+-            </label>
+-          ) : null}
+-          {user?.notification_type === 'line' && user.notification_hint ? (
+-            <p className="hint-text">目前綁定 Token：{user.notification_hint}</p>
++            <div className="stack">
++              <p className="hint-text">
++                使用 LINE Bot 通知：請先加入 Bot 好友，並在這裡產生綁定碼。
++              </p>
++
++              <div className="row">
++                <button type="button" onClick={handleCreateLineBindCode} disabled={lineBindBusy}>
++                  {lineBindBusy ? '產生中…' : '產生綁定碼'}
++                </button>
++                <button
++                  type="button"
++                  onClick={handleTestLine}
++                  disabled={lineTestBusy || !(user?.notification_type === 'line' && user?.notification_hint)}
++                >
++                  {lineTestBusy ? '送出中…' : 'LINE 測試通知'}
++                </button>
++                <button
++                  type="button"
++                  onClick={handleUnbindLine}
++                  disabled={lineTestBusy || !(user?.notification_type === 'line' && user?.notification_hint)}
++                >
++                  解除綁定
++                </button>
++              </div>
++
++              {lineBindInfo?.code ? (
++                <div className="panel-sub">
++                  <p>綁定碼：<strong>{lineBindInfo.code}</strong></p>
++                  {lineBindInfo.expires_at ? <p className="hint-text">有效期限：{lineBindInfo.expires_at}</p> : null}
++                  <p className="hint-text">到 LINE 對 Bot 傳：<strong>bind {lineBindInfo.code}</strong></p>
++                </div>
++              ) : null}
++
++              {user?.notification_type === 'line' && user.notification_hint ? (
++                <p className="hint-text">目前已綁定：{user.notification_hint}</p>
++              ) : (
++                <p className="hint-text">尚未綁定（綁定後才會收到 LINE 通知）</p>
++              )}
++
++              {lineMessage ? <p className="hint-text">{lineMessage}</p> : null}
++            </div>
+           ) : null}
+           <button type="submit" disabled={notificationSubmitting}>
+             {notificationSubmitting ? '儲存中…' : '儲存通知設定'}
