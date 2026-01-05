@@ -92,7 +92,7 @@ const AdminPage = () => {
       const status = err.response?.status;
       if (status === 401) {
         logout();
-        setError('登入資訊已失效，請重新登入。');
+        setError('登入資訊已經失效，請重新登入。');
       } else {
         const message = err.response?.data?.msg || '無法取得使用者列表。';
         setError(message);
