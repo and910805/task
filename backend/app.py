@@ -89,12 +89,14 @@ def create_app() -> Flask:
     from routes.settings import settings_bp
     from routes.tasks import tasks_bp
     from routes.uploads import upload_bp
+    from routes.line import line_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(tasks_bp, url_prefix="/api/tasks")
     app.register_blueprint(upload_bp, url_prefix="/api/upload")
     app.register_blueprint(export_bp, url_prefix="/api/export")
     app.register_blueprint(settings_bp, url_prefix="/api/settings")
+    app.register_blueprint(line_bp, url_prefix="/api/line")
 
     @app.route("/api/health")
     def health_check():

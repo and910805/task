@@ -15,6 +15,8 @@ from typing import Iterable, Sequence
 import requests
 from flask import current_app
 
+from services.line_messaging import has_line_bot_config, push_text
+
 LINE_NOTIFY_ENDPOINT = "https://notify-api.line.me/api/notify"
 
 # A small shared pool for async email sending. This keeps API requests snappy.
@@ -39,6 +41,19 @@ DEFAULT_EMAIL_NOTIFICATION_SETTINGS = {
     # Optionally append a task link at the bottom of emails.
     "include_task_link": False,
     # If empty, will fallback to APP_BASE_URL env var. Example: "https://task.kuanlin.pro"
+    "task_link_base_url": "",
+}
+
+
+# ---- LINE Messaging (Bot) notification rules (admin configurable) ----
+LINE_NOTIFICATION_SETTINGS_KEY = "line_notification_settings"
+
+DEFAULT_LINE_NOTIFICATION_SETTINGS = {
+    "enabled": True,
+    "send_on_assignment": True,
+    "send_on_status_change": True,
+    "status_targets": [],  # empty means all statuses
+    "include_task_link": False,
     "task_link_base_url": "",
 }
 
@@ -100,6 +115,60 @@ def save_email_notification_settings(settings: dict) -> dict:
     return _load_email_settings()
 
 
+
+
+def _load_line_settings() -> dict:
+    """Load and normalize LINE notification settings from SiteSetting."""
+    try:
+        from models import SiteSetting  # local import to avoid import cycles
+    except Exception:
+        return dict(DEFAULT_LINE_NOTIFICATION_SETTINGS)
+
+    raw = SiteSetting.get_value(LINE_NOTIFICATION_SETTINGS_KEY)
+    data = {}
+    if raw:
+        try:
+            data = json.loads(raw)
+        except Exception:
+            data = {}
+
+    if not isinstance(data, dict):
+        data = {}
+
+    merged = {**DEFAULT_LINE_NOTIFICATION_SETTINGS, **data}
+
+    merged["enabled"] = _bool(merged.get("enabled"), True)
+    merged["send_on_assignment"] = _bool(merged.get("send_on_assignment"), True)
+    merged["send_on_status_change"] = _bool(merged.get("send_on_status_change"), True)
+    merged["include_task_link"] = _bool(merged.get("include_task_link"), False)
+
+    targets = merged.get("status_targets")
+    if targets is None or not isinstance(targets, list):
+        targets = []
+    merged["status_targets"] = [str(item).strip() for item in targets if str(item).strip()]
+
+    merged["task_link_base_url"] = str(merged.get("task_link_base_url") or "")
+    return merged
+
+
+def get_line_notification_settings() -> dict:
+    return _load_line_settings()
+
+
+def save_line_notification_settings(settings: dict) -> dict:
+    try:
+        from models import SiteSetting  # local import to avoid import cycles
+    except Exception:
+        return _load_line_settings()
+
+    normalized = {**_load_line_settings(), **(settings or {})}
+    SiteSetting.set_value(
+        LINE_NOTIFICATION_SETTINGS_KEY,
+        json.dumps(normalized, ensure_ascii=False),
+    )
+    return _load_line_settings()
+
+
 def _email_subject(base_subject: str) -> str:
     settings = _load_email_settings()
     prefix = (settings.get("subject_prefix") or "").strip()
@@ -124,6 +193,47 @@ def _append_task_link(message: str, task: "Task") -> str:
     return f"{message}\n\n任務連結：{url}"
 
 
+
+
+def _append_task_link_line(message: str, task: "Task") -> str:
+    settings = _load_line_settings()
+    if not settings.get("include_task_link"):
+        return message
+
+    base = (settings.get("task_link_base_url") or "").strip().rstrip("/")
+    if not base:
+        base = (os.getenv("APP_BASE_URL") or "").strip().rstrip("/")
+    if not base:
+        return message
+
+    try:
+        url = f"{base}/tasks/{task.id}"
+    except Exception:
+        return message
+    return f"{message}\n\n任務連結：{url}"
+
+
+def _should_send_line(kind: str | None, *, status: str | None = None) -> bool:
+    if kind is None:
+        return True
+    settings = _load_line_settings()
+    if not settings.get("enabled"):
+        return False
+
+    if kind == "assignment":
+        return bool(settings.get("send_on_assignment"))
+
+    if kind == "status_change":
+        if not settings.get("send_on_status_change"):
+            return False
+        targets: list[str] = settings.get("status_targets") or []
+        if targets and status:
+            return status in targets
+        if targets and not status:
+            return False
+        return True
+
+    return True
 def _should_send_email(kind: str | None, *, status: str | None = None) -> bool:
     """Check email rules. kind: 'assignment' | 'status_change' | None."""
     if kind is None:
@@ -166,6 +276,15 @@ def _send_line_notify(token: str, message: str) -> None:
         current_app.logger.warning("Unable to send LINE notification: %s", exc)
 
 
+
+
+def _send_line_bot(user_id: str, message: str) -> None:
+    if not user_id:
+        return
+    if not has_line_bot_config():
+        current_app.logger.warning("LINE bot config missing; skip push")
+        return
+    push_text(user_id, message)
 def _get_email_config() -> dict[str, str | int | None]:
     """Read SMTP settings from environment first, then Flask config.
 
@@ -369,7 +488,17 @@ def _dispatch_notifications(
 
     for user in _iter_unique_users(users):
         if user.notification_type == "line" and user.notification_value:
-            _send_line_notify(user.notification_value, resolved_message)
+            if not _should_send_line(email_kind, status=email_status):
+                continue
+            # New: if notification_value looks like a LINE userId (starts with 'U'), use Messaging API push.
+            # Fallback: treat it as legacy LINE Notify token.
+            if str(user.notification_value).startswith("U"):
+                resolved_line_message = (
+                    _append_task_link_line(message, task) if task is not None else message
+                )
+                _send_line_bot(str(user.notification_value), resolved_line_message)
+            else:
+                _send_line_notify(user.notification_value, resolved_message)
         elif user.notification_type == "email" and user.notification_value:
             if not _should_send_email(email_kind, status=email_status):
                 continue

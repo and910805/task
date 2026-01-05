@@ -56,6 +56,19 @@ const AdminPage = () => {
   const [emailSettingsBusy, setEmailSettingsBusy] = useState(false);
   const [emailSettingsMessage, setEmailSettingsMessage] = useState(null);
 
+  const [lineSettings, setLineSettings] = useState({
+    enabled: true,
+    send_on_assignment: true,
+    send_on_status_change: true,
+    status_targets: [],
+    include_task_link: false,
+    task_link_base_url: '',
+  });
+  const [lineStatusOptions, setLineStatusOptions] = useState([...FALLBACK_TASK_STATUSES]);
+  const [lineHasBot, setLineHasBot] = useState(false);
+  const [lineSettingsBusy, setLineSettingsBusy] = useState(false);
+  const [lineSettingsMessage, setLineSettingsMessage] = useState(null);
+
   useEffect(() => {
     setRoleNameEdits({ ...labels });
   }, [labels]);
@@ -180,9 +193,94 @@ const AdminPage = () => {
   setEmailSettings((prev) => ({ ...prev, status_targets: [...emailStatusOptions] }));
 };
 
+  const loadLineSettings = async () => {
+    setLineSettingsMessage(null);
+    try {
+      const { data } = await api.get('settings/notifications/line');
+      const incoming = data?.settings ?? {};
+      const statusOptions = Array.isArray(data?.status_options) && data.status_options.length > 0
+        ? data.status_options
+        : FALLBACK_TASK_STATUSES;
+
+      setLineHasBot(Boolean(data?.has_line_bot));
+      setLineStatusOptions(statusOptions);
+      setLineSettings((prev) => ({
+        ...prev,
+        ...incoming,
+        status_targets: Array.isArray(incoming.status_targets) ? incoming.status_targets : prev.status_targets,
+      }));
+    } catch (err) {
+      const status = err.response?.status;
+      if (status === 401) {
+        logout();
+        setLineSettingsMessage({ type: 'error', text: '登入資訊已失效，請重新登入。' });
+      } else if (status === 403) {
+        setLineSettingsMessage({ type: 'error', text: '權限不足，無法讀取 LINE 設定。' });
+      } else {
+        const message = err.response?.data?.msg || '無法讀取 LINE 設定。';
+        setLineSettingsMessage({ type: 'error', text: message });
+      }
+    }
+  };
+
+  const saveLineSettings = async () => {
+    setLineSettingsBusy(true);
+    setLineSettingsMessage(null);
+    try {
+      const payload = {
+        enabled: Boolean(lineSettings.enabled),
+        send_on_assignment: Boolean(lineSettings.send_on_assignment),
+        send_on_status_change: Boolean(lineSettings.send_on_status_change),
+        status_targets: Array.isArray(lineSettings.status_targets) ? lineSettings.status_targets : [],
+        include_task_link: Boolean(lineSettings.include_task_link),
+        task_link_base_url: lineSettings.task_link_base_url ?? '',
+      };
+
+      const { data } = await api.put('settings/notifications/line', payload);
+      const updated = data?.settings ?? payload;
+      const statusOptions = Array.isArray(data?.status_options) && data.status_options.length > 0
+        ? data.status_options
+        : lineStatusOptions;
+
+      setLineStatusOptions(statusOptions);
+      setLineSettings((prev) => ({
+        ...prev,
+        ...updated,
+        status_targets: Array.isArray(updated.status_targets) ? updated.status_targets : prev.status_targets,
+      }));
+      setLineSettingsMessage({ type: 'success', text: '已更新 LINE 通知設定。' });
+    } catch (err) {
+      const message = err.response?.data?.msg || '更新 LINE 通知設定失敗。';
+      setLineSettingsMessage({ type: 'error', text: message });
+    } finally {
+      setLineSettingsBusy(false);
+    }
+  };
+
+  const toggleLineStatusTarget = (status) => {
+    setLineSettingsMessage(null);
+    setLineSettings((prev) => {
+      const current = new Set(Array.isArray(prev.status_targets) ? prev.status_targets : []);
+      if (current.has(status)) current.delete(status);
+      else current.add(status);
+      return { ...prev, status_targets: Array.from(current) };
+    });
+  };
+
+  const setLineStatusAll = () => {
+    setLineSettingsMessage(null);
+    setLineSettings((prev) => ({ ...prev, status_targets: [] }));
+  };
+
+  const setLineStatusSelectAll = () => {
+    setLineSettingsMessage(null);
+    setLineSettings((prev) => ({ ...prev, status_targets: [...lineStatusOptions] }));
+  };
+
   useEffect(() => {
     loadUsers();
     loadEmailSettings();
+    loadLineSettings();
   }, []);
 
   const handleExport = async () => {
@@ -693,6 +791,136 @@ const AdminPage = () => {
 
     <button type="button" onClick={saveEmailSettings} disabled={emailSettingsBusy}>
       {emailSettingsBusy ? '儲存中…' : '儲存信件設定'}
+    </button>
+  </div>
+</section>
+
+<section className="panel panel--contrast panel--wide">
+  <div className="panel-header">
+    <h2>LINE 通知設定</h2>
+    <span className="panel-tag">LINE</span>
+  </div>
+  <p className="panel-hint">
+    只有在「個人設定」選擇 <strong>LINE</strong> 通知且完成綁定的使用者會收到推播通知。
+    {lineHasBot ? null : (
+      <> <strong>提醒：</strong>後端尚未偵測到 LINE Bot 設定（請確認 Zeabur Variables 有 LINE_CHANNEL_ACCESS_TOKEN / LINE_CHANNEL_SECRET）。</>
+    )}
+  </p>
+
+  {lineSettingsMessage ? (
+    <p className={lineSettingsMessage.type === 'error' ? 'error-text' : 'success-text'}>
+      {lineSettingsMessage.text}
+    </p>
+  ) : null}
+
+  <div className="stack">
+    <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 600 }}>
+      <input
+        type="checkbox"
+        checked={Boolean(lineSettings.enabled)}
+        onChange={(event) => setLineSettings((prev) => ({ ...prev, enabled: event.target.checked }))}
+        disabled={lineSettingsBusy}
+      />
+      <span>啟用 LINE 通知</span>
+    </label>
+
+    <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 600 }}>
+      <input
+        type="checkbox"
+        checked={Boolean(lineSettings.send_on_assignment)}
+        onChange={(event) => setLineSettings((prev) => ({ ...prev, send_on_assignment: event.target.checked }))}
+        disabled={lineSettingsBusy || !lineSettings.enabled}
+      />
+      <span>使用者被指派任務時推播</span>
+    </label>
+
+    <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 600 }}>
+      <input
+        type="checkbox"
+        checked={Boolean(lineSettings.send_on_status_change)}
+        onChange={(event) => setLineSettings((prev) => ({ ...prev, send_on_status_change: event.target.checked }))}
+        disabled={lineSettingsBusy || !lineSettings.enabled}
+      />
+      <span>任務狀態變更時推播</span>
+    </label>
+
+    <div style={{ border: '1px solid var(--panel-border)', borderRadius: '14px', padding: '1rem', background: 'var(--panel-bg)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+        <strong>狀態變更推播條件</strong>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={setLineStatusSelectAll}
+            disabled={lineSettingsBusy || !lineSettings.enabled || !lineSettings.send_on_status_change}
+          >
+            全選
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={setLineStatusAll}
+            disabled={lineSettingsBusy || !lineSettings.enabled || !lineSettings.send_on_status_change}
+          >
+            不限（全部）
+          </button>
+        </div>
+      </div>
+
+      <div className="chip-list" style={{ marginTop: '0.85rem' }}>
+        {lineStatusOptions.map((status) => {
+          const selected = Array.isArray(lineSettings.status_targets) && lineSettings.status_targets.includes(status);
+          const disabled = lineSettingsBusy || !lineSettings.enabled || !lineSettings.send_on_status_change;
+          return (
+            <label
+              key={status}
+              className="chip"
+              style={{
+                cursor: disabled ? 'not-allowed' : 'pointer',
+                opacity: disabled ? 0.65 : 1,
+                border: selected ? '1px solid var(--accent-color)' : '1px solid transparent',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={selected}
+                onChange={() => toggleLineStatusTarget(status)}
+                disabled={disabled}
+                style={{ margin: 0 }}
+              />
+              <span>{status}</span>
+            </label>
+          );
+        })}
+      </div>
+
+      <p className="panel-hint" style={{ marginTop: '0.75rem' }}>
+        若按「不限（全部）」會在任何狀態變更時推播；否則只在「新狀態」符合勾選項目時推播。
+      </p>
+    </div>
+
+    <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 600 }}>
+      <input
+        type="checkbox"
+        checked={Boolean(lineSettings.include_task_link)}
+        onChange={(event) => setLineSettings((prev) => ({ ...prev, include_task_link: event.target.checked }))}
+        disabled={lineSettingsBusy}
+      />
+      <span>在 LINE 訊息內附上任務連結</span>
+    </label>
+
+    <label>
+      任務連結 Base URL（選填）
+      <input
+        value={lineSettings.task_link_base_url ?? ''}
+        onChange={(event) => setLineSettings((prev) => ({ ...prev, task_link_base_url: event.target.value }))}
+        placeholder="https://task.kuanlin.pro"
+        disabled={lineSettingsBusy || !lineSettings.include_task_link}
+      />
+    </label>
+
+    <button type="button" onClick={saveLineSettings} disabled={lineSettingsBusy}>
+      {lineSettingsBusy ? '儲存中…' : '儲存 LINE 設定'}
     </button>
   </div>
 </section>

@@ -1,4 +1,7 @@
 import secrets
+import json
+import os
+from datetime import datetime, timedelta
 
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import create_access_token, get_jwt, jwt_required
@@ -8,10 +11,12 @@ from extensions import db
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import selectinload
 
-from models import Attachment, Task, TaskAssignee, TaskUpdate, User
+from models import Attachment, SiteSetting, Task, TaskAssignee, TaskUpdate, User
+
 from utils import get_current_user_id
 
 from services.notifications import has_email_config, send_email_async
+from services.line_messaging import has_line_config, push_text
 
 
 VALID_ROLES = {"worker", "site_supervisor", "hq_staff", "admin"}
@@ -312,3 +317,60 @@ def change_password():
     db.session.commit()
 
     return jsonify({"msg": "密碼已更新"})
+def _line_bind_key(code: str) -> str:
+    return f"line_bind:{code}"
+
+
+@auth_bp.post("/line/bind-code")
+@jwt_required()
+def create_line_bind_code():
+    """Create a short-lived bind code for LINE bot linking."""
+    user_id = get_current_user_id()
+
+    ttl_min_raw = (os.getenv("LINE_BIND_CODE_TTL_MINUTES") or "10").strip()
+    try:
+        ttl_min = max(1, int(ttl_min_raw))
+    except ValueError:
+        ttl_min = 10
+
+    code = secrets.token_hex(3).upper()  # 6 chars
+    expires_at = datetime.utcnow() + timedelta(minutes=ttl_min)
+
+    SiteSetting.set_value(
+        _line_bind_key(code),
+        json.dumps(
+            {"user_id": user_id, "expires_at": expires_at.isoformat()},
+            ensure_ascii=False,
+        ),
+    )
+
+    return jsonify({"ok": True, "code": code, "expires_at": expires_at.isoformat()})
+
+
+@auth_bp.post("/line/unbind")
+@jwt_required()
+def line_unbind():
+    """Unbind LINE from the current account."""
+    user_id = get_current_user_id()
+    user = User.query.get_or_404(user_id)
+    user.notification_type = None
+    user.notification_value = None
+    db.session.commit()
+    return jsonify({"ok": True, "msg": "LINE unbound", "user": user.to_dict()})
+
+
+@auth_bp.post("/test-line")
+@jwt_required()
+def test_line_push():
+    """Send a test LINE push to the bound LINE userId."""
+    user_id = get_current_user_id()
+    user = User.query.get_or_404(user_id)
+
+    if not has_line_config():
+        return jsonify({"ok": False, "msg": "LINE is not configured on server"}), 400
+
+    if user.notification_type != "line" or not (user.notification_value or "").startswith("U"):
+        return jsonify({"ok": False, "msg": "LINE not bound yet"}), 400
+
+    push_text(user.notification_value, "✅ 測試通知：LINE 推播正常！")
+    return jsonify({"ok": True, "msg": "Test LINE push sent"})

@@ -27,6 +27,11 @@ const ProfilePage = () => {
   const [emailTestSubmitting, setEmailTestSubmitting] = useState(false);
   const [emailTestMessage, setEmailTestMessage] = useState('');
 
+  const [lineBindInfo, setLineBindInfo] = useState(null);
+  const [lineBindBusy, setLineBindBusy] = useState(false);
+  const [lineTestBusy, setLineTestBusy] = useState(false);
+  const [lineMessage, setLineMessage] = useState('');
+
   useEffect(() => {
     setNotificationForm({
       notification_type: user?.notification_type || 'none',
@@ -111,6 +116,53 @@ const ProfilePage = () => {
       setEmailTestSubmitting(false);
     }
   };
+
+
+  const handleCreateLineBindCode = async () => {
+    setLineMessage('');
+    setLineBindInfo(null);
+    setLineBindBusy(true);
+    try {
+      const { data } = await api.post('auth/line/bind-code');
+      setLineBindInfo({ code: data?.code, expires_at: data?.expires_at });
+      setLineMessage('已產生綁定碼，請到 LINE Bot 貼上 bind <綁定碼>');
+    } catch (err) {
+      const msg = err?.response?.data?.msg || '產生綁定碼失敗。';
+      setLineMessage(msg);
+    } finally {
+      setLineBindBusy(false);
+    }
+  };
+
+  const handleTestLine = async () => {
+    setLineMessage('');
+    setLineTestBusy(true);
+    try {
+      await api.post('auth/test-line');
+      setLineMessage('已送出 LINE 測試通知。');
+    } catch (err) {
+      const msg = err?.response?.data?.msg || '送出 LINE 測試通知失敗。';
+      setLineMessage(msg);
+    } finally {
+      setLineTestBusy(false);
+    }
+  };
+
+  const handleUnbindLine = async () => {
+    setLineMessage('');
+    setLineTestBusy(true);
+    try {
+      await api.post('auth/line/unbind');
+      setLineMessage('已解除 LINE 綁定。');
+      await refreshUser();
+    } catch (err) {
+      const msg = err?.response?.data?.msg || '解除綁定失敗。';
+      setLineMessage(msg);
+    } finally {
+      setLineTestBusy(false);
+    }
+  };
+
   return (
     <div className="page">
       <AppHeader title="個人資料" subtitle="查看帳號資訊並更新登入密碼" />
@@ -182,7 +234,7 @@ const ProfilePage = () => {
             >
               <option value="none">不接收通知</option>
               <option value="email">Email</option>
-              <option value="line">LINE Notify</option>
+              <option value="line">LINE</option>
             </select>
           </label>
           {notificationForm.notification_type === 'email' ? (
@@ -199,20 +251,47 @@ const ProfilePage = () => {
             </label>
           ) : null}
           {notificationForm.notification_type === 'line' ? (
-            <label>
-              LINE Notify Token
-              <input
-                type="text"
-                name="notification_value"
-                value={notificationForm.notification_value}
-                onChange={handleNotificationValueChange}
-                placeholder="輸入 LINE Notify 權杖"
-                required
-              />
-            </label>
-          ) : null}
-          {user?.notification_type === 'line' && user.notification_hint ? (
-            <p className="hint-text">目前綁定 Token：{user.notification_hint}</p>
+            <div className="stack">
+              <p className="hint-text">
+                使用 LINE Bot 通知：請先加入 Bot 好友，並在這裡產生綁定碼。
+              </p>
+
+              <div className="row">
+                <button type="button" onClick={handleCreateLineBindCode} disabled={lineBindBusy}>
+                  {lineBindBusy ? '產生中…' : '產生綁定碼'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleTestLine}
+                  disabled={lineTestBusy || !(user?.notification_type === 'line' && user?.notification_hint)}
+                >
+                  {lineTestBusy ? '送出中…' : 'LINE 測試通知'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleUnbindLine}
+                  disabled={lineTestBusy || !(user?.notification_type === 'line' && user?.notification_hint)}
+                >
+                  解除綁定
+                </button>
+              </div>
+
+              {lineBindInfo?.code ? (
+                <div className="panel-sub">
+                  <p>綁定碼：<strong>{lineBindInfo.code}</strong></p>
+                  {lineBindInfo.expires_at ? <p className="hint-text">有效期限：{lineBindInfo.expires_at}</p> : null}
+                  <p className="hint-text">到 LINE 對 Bot 傳：<strong>bind {lineBindInfo.code}</strong></p>
+                </div>
+              ) : null}
+
+              {user?.notification_type === 'line' && user.notification_hint ? (
+                <p className="hint-text">目前已綁定：{user.notification_hint}</p>
+              ) : (
+                <p className="hint-text">尚未綁定（綁定後才會收到 LINE 通知）</p>
+              )}
+
+              {lineMessage ? <p className="hint-text">{lineMessage}</p> : null}
+            </div>
           ) : null}
           <button type="submit" disabled={notificationSubmitting}>
             {notificationSubmitting ? '儲存中…' : '儲存通知設定'}
