@@ -506,7 +506,7 @@ const TaskDetailPage = () => {
   }
 
   return (
-    <div className="page">
+    <div className="page task-detail-page mobile-tabs">
       <AppHeader title={task.title} subtitle={`任務編號：${task.id}`}>
         <Link to="/" className="link-button">
           ← 返回任務列表
@@ -514,7 +514,7 @@ const TaskDetailPage = () => {
       </AppHeader>
       {error && <p className="error-text">{error}</p>}
 
-      <nav className="tab-bar">
+      <nav className="tab-bar tab-bar--top">
         {detailTabs.map((tab) => (
           <button
             key={tab.key}
@@ -538,11 +538,32 @@ const TaskDetailPage = () => {
               </span>
               {isOverdue && <span className="status-badge status-overdue">⚠️ 逾期</span>}
             </p>
-            {canAcceptTask && (
-              <button type="button" onClick={handleAcceptTask} disabled={acceptingTask}>
-                {acceptingTask ? '接單中…' : '接單'}
-              </button>
-            )}
+            <div className="info-quick-actions">
+              <div className="info-quick-actions__buttons">
+                {canAcceptTask && (
+                  <button type="button" onClick={handleAcceptTask} disabled={acceptingTask}>
+                    {acceptingTask ? '接單中…' : '接單'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleStartTime}
+                  disabled={!!activeEntry || timeLoading}
+                >
+                  {activeEntry ? '已開始' : '開始工時'}
+                </button>
+                <button type="button" onClick={handleStopTime} disabled={!activeEntry || timeLoading}>
+                  結束工時
+                </button>
+              </div>
+              {timeError && <p className="error-text">{timeError}</p>}
+              {timeMessage && <p className="success-text">{timeMessage}</p>}
+              {activeEntry && (
+                <p className="hint-text">
+                  工時進行中（開始於 {formatDateTime(activeEntry.start_time)}）
+                </p>
+              )}
+            </div>
             <div>
               <strong>指派對象：</strong>
               {task.assignees && task.assignees.length > 0 ? (
@@ -868,6 +889,19 @@ const TaskDetailPage = () => {
           )}
         </section>
       )}
+
+      <nav className="tab-bar tab-bar--bottom">
+        {detailTabs.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            className={tab.key === activeTab ? 'tab active' : 'tab'}
+            onClick={() => setActiveTab(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
     </div>
   );
 };
