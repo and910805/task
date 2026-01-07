@@ -1002,6 +1002,23 @@ button:disabled {
   gap: 0.35rem;
 }
 
+.chip-button {
+  border: none;
+  cursor: pointer;
+  font: inherit;
+}
+
+.chip-button:focus-visible {
+  outline: 2px solid var(--brand-heading-color);
+  outline-offset: 2px;
+}
+
+.note-template-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
 .refresh-button {
   display: inline-flex;
   align-items: center;

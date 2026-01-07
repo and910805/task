@@ -30,6 +30,12 @@ const statusBadgeClass = {
   進行中: 'status-badge status-in-progress',
   已完成: 'status-badge status-completed',
 };
+const defaultNoteTemplates = [
+  '已到場，開始作業。',
+  '已完成檢修。',
+  '等待材料/零件中。',
+  '已完成並清潔收尾。',
+];
 const detailTabs = [
   { key: 'info', label: 'ℹ️ 任務資訊' },
   { key: 'photos', label: '📷 照片' },
@@ -120,6 +126,8 @@ const TaskDetailPage = () => {
   const [photoPreviewMeta, setPhotoPreviewMeta] = useState(null);
   const photoFileInputRef = useRef(null);
   const audioFileInputRef = useRef(null);
+  const noteInputRef = useRef(null);
+  const [noteTemplates, setNoteTemplates] = useState(defaultNoteTemplates);
 
   const isManager = useMemo(() => managerRoles.has(user?.role), [user?.role]);
   const isWorker = useMemo(() => user?.role === 'worker', [user?.role]);
@@ -129,6 +137,18 @@ const TaskDetailPage = () => {
   const getErrorMessage = (err, fallback) =>
     err?.networkMessage || err?.response?.data?.msg || fallback;
 
+  const loadNoteTemplates = useCallback(async () => {
+    try {
+      const { data } = await api.get('settings/task-update-templates');
+      if (Array.isArray(data?.templates)) {
+        setNoteTemplates(data.templates);
+        return;
+      }
+    } catch (err) {
+      console.error('無法取得備註模板', err);
+    }
+    setNoteTemplates(defaultNoteTemplates);
+  }, []);
 
   const loadTask = async () => {
     setLoading(true);
@@ -157,6 +177,10 @@ const TaskDetailPage = () => {
   useEffect(() => {
     loadTask();
   }, [id]);
+
+  useEffect(() => {
+    loadNoteTemplates();
+  }, [loadNoteTemplates]);
 
   useEffect(() => {
     if (isManager) {
@@ -262,6 +286,13 @@ const TaskDetailPage = () => {
   const handleUpdateChange = (event) => {
     const { name, value } = event.target;
     setUpdateForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleNoteTemplateClick = (template) => {
+    setUpdateForm((prev) => ({ ...prev, note: template }));
+    if (noteInputRef.current) {
+      noteInputRef.current.focus();
+    }
   };
 
   const handleAssignmentChange = (event) => {
@@ -812,12 +843,30 @@ const TaskDetailPage = () => {
               <label>
                 備註
                 <textarea
+                  ref={noteInputRef}
                   name="note"
                   value={updateForm.note}
                   onChange={handleUpdateChange}
                   placeholder="填寫回報內容"
                 />
               </label>
+              {noteTemplates.length > 0 && (
+                <div className="note-template-picker">
+                  <p className="hint-text">常用備註快速選單</p>
+                  <div className="chip-list">
+                    {noteTemplates.map((template, index) => (
+                      <button
+                        key={`${template}-${index}`}
+                        type="button"
+                        className="chip chip-button"
+                        onClick={() => handleNoteTemplateClick(template)}
+                      >
+                        {template}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <button type="submit">送出回報</button>
             </form>
           </section>

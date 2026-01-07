@@ -24,6 +24,13 @@ DEFAULT_BRANDING_NAME = "立翔水電行"
 BRANDING_NAME_KEY = "branding_name"
 BRANDING_LOGO_KEY = "branding_logo_path"
 LOGO_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+TASK_NOTE_TEMPLATES_KEY = "task_update_note_templates"
+DEFAULT_TASK_NOTE_TEMPLATES = [
+    "已到場，開始作業。",
+    "已完成檢修。",
+    "等待材料/零件中。",
+    "已完成並清潔收尾。",
+]
 
 
 def _storage():
@@ -67,6 +74,19 @@ def _serialize_branding():
         "logo_url": logo_url,
         "logo_updated_at": logo_updated_at,
     }
+
+
+def _load_task_note_templates() -> list[str]:
+    raw = SiteSetting.get_value(TASK_NOTE_TEMPLATES_KEY)
+    if raw is None:
+        return list(DEFAULT_TASK_NOTE_TEMPLATES)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return list(DEFAULT_TASK_NOTE_TEMPLATES)
+    if not isinstance(parsed, list):
+        return list(DEFAULT_TASK_NOTE_TEMPLATES)
+    return [str(item).strip() for item in parsed if str(item).strip()]
 
 
 @settings_bp.get("/branding")
@@ -189,6 +209,31 @@ def delete_branding_logo():
                 current_app.logger.warning("Failed to delete logo %s: %s", previous_path, exc)
 
     return jsonify(_serialize_branding()), 200
+
+
+@settings_bp.get("/task-update-templates")
+@jwt_required()
+def get_task_update_templates():
+    return jsonify({"templates": _load_task_note_templates()})
+
+
+@settings_bp.put("/task-update-templates")
+@role_required("admin")
+def update_task_update_templates():
+    data = request.get_json(silent=True) or {}
+    templates = data.get("templates")
+
+    if templates is None:
+        return jsonify({"msg": "templates 為必填欄位"}), 400
+    if not isinstance(templates, list):
+        return jsonify({"msg": "templates 必須是陣列"}), 400
+
+    cleaned = [str(item).strip() for item in templates if str(item).strip()]
+    SiteSetting.set_value(
+        TASK_NOTE_TEMPLATES_KEY,
+        json.dumps(cleaned, ensure_ascii=False),
+    )
+    return jsonify({"templates": cleaned})
 
 
 @settings_bp.get("/roles")
