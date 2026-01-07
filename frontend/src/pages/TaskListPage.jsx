@@ -53,6 +53,8 @@ const TaskListPage = () => {
   const [assigningTaskId, setAssigningTaskId] = useState(null);
   const [deletingTaskId, setDeletingTaskId] = useState(null);
   const [acceptingTaskId, setAcceptingTaskId] = useState(null);
+  const hasNotificationPreference = user?.notification_type && user?.notification_type !== 'none';
+  const [showOverdue, setShowOverdue] = useState(Boolean(hasNotificationPreference));
 
   const isManager = managerRoles.has(user?.role);
   const isWorker = user?.role === 'worker';
@@ -124,6 +126,10 @@ const TaskListPage = () => {
   useEffect(() => {
     loadUsers();
   }, [isManager]);
+
+  useEffect(() => {
+    setShowOverdue(Boolean(hasNotificationPreference));
+  }, [hasNotificationPreference]);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -329,6 +335,14 @@ const TaskListPage = () => {
         只顯示可接單
       </label>
       <label>
+        <input
+          type="checkbox"
+          checked={showOverdue}
+          onChange={(event) => setShowOverdue(event.target.checked)}
+        />
+        顯示逾期提醒
+      </label>
+      <label>
         顯示狀態
         <select
           value={statusFilter}
@@ -352,6 +366,14 @@ const TaskListPage = () => {
           onChange={(event) => setAvailableOnly(event.target.checked)}
         />
         只顯示可接單
+      </label>
+      <label>
+        <input
+          type="checkbox"
+          checked={showOverdue}
+          onChange={(event) => setShowOverdue(event.target.checked)}
+        />
+        顯示逾期提醒
       </label>
       {toolbarFilters}
       <button
@@ -483,6 +505,7 @@ const TaskListPage = () => {
                 (task.due_date &&
                   task.status !== '已完成' &&
                   new Date(task.due_date).getTime() < Date.now());
+              const showOverdueIndicator = showOverdue && isOverdue;
               const canAccept =
                 isWorker && task.status === '尚未接單' && !task.assigned_to_id;
               const hasMissingAssignee =
@@ -494,7 +517,10 @@ const TaskListPage = () => {
                 ? new Date(dueDateLabel).toLocaleString()
                 : '未設定';
               return (
-                <li key={task.id} className="task-item">
+                <li
+                  key={task.id}
+                  className={`task-item${showOverdueIndicator ? ' task-overdue' : ''}`}
+                >
                   <div className="task-card">
                     <div className="task-card__header">
                       <h3>
@@ -504,7 +530,7 @@ const TaskListPage = () => {
                         <span className={statusBadgeClass[task.status] || 'status-badge'}>
                           ● {task.status}
                         </span>
-                        {isOverdue && (
+                        {showOverdueIndicator && (
                           <span className="status-badge status-overdue">⚠️ 逾期</span>
                         )}
                       </div>
@@ -561,7 +587,7 @@ const TaskListPage = () => {
                           <span className={statusBadgeClass[task.status] || 'status-badge'}>
                             ● {task.status}
                           </span>
-                          {isOverdue && (
+                          {showOverdueIndicator && (
                             <span className="status-badge status-overdue">⚠️ 逾期</span>
                           )}
                           <select
@@ -582,7 +608,7 @@ const TaskListPage = () => {
                           <span className={statusBadgeClass[task.status] || 'status-badge'}>
                             ● {task.status}
                           </span>
-                          {isOverdue && (
+                          {showOverdueIndicator && (
                             <span className="status-badge status-overdue">⚠️ 逾期</span>
                           )}
                           {canAccept && (

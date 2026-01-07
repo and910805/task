@@ -119,6 +119,8 @@ const TaskDetailPage = () => {
 
   const isManager = useMemo(() => managerRoles.has(user?.role), [user?.role]);
   const isWorker = useMemo(() => user?.role === 'worker', [user?.role]);
+  const hasNotificationPreference = user?.notification_type && user?.notification_type !== 'none';
+  const [showOverdue, setShowOverdue] = useState(Boolean(hasNotificationPreference));
 
 
   const loadTask = async () => {
@@ -154,6 +156,10 @@ const TaskDetailPage = () => {
       loadAssignableUsers();
     }
   }, [isManager]);
+
+  useEffect(() => {
+    setShowOverdue(Boolean(hasNotificationPreference));
+  }, [hasNotificationPreference]);
 
   const assigneeOptions = useMemo(
     () =>
@@ -235,6 +241,7 @@ const TaskDetailPage = () => {
     if (task.is_overdue !== undefined) return Boolean(task.is_overdue);
     return new Date(task.due_date).getTime() < Date.now();
   }, [task]);
+  const showOverdueIndicator = showOverdue && isOverdue;
 
   const handleUpdateChange = (event) => {
     const { name, value } = event.target;
@@ -529,15 +536,25 @@ const TaskDetailPage = () => {
 
       {activeTab === 'info' && (
         <>
-          <section className="panel">
+          <section className={`panel${showOverdueIndicator ? ' task-overdue' : ''}`}>
             <h2>任務資訊</h2>
             <p>
               狀態：
               <span className={statusBadgeClass[task.status] || 'status-badge'}>
                 ● {task.status}
               </span>
-              {isOverdue && <span className="status-badge status-overdue">⚠️ 逾期</span>}
+              {showOverdueIndicator && (
+                <span className="status-badge status-overdue">⚠️ 逾期</span>
+              )}
             </p>
+            <label>
+              <input
+                type="checkbox"
+                checked={showOverdue}
+                onChange={(event) => setShowOverdue(event.target.checked)}
+              />
+              顯示逾期提醒
+            </label>
             <div className="info-quick-actions">
               <div className="info-quick-actions__buttons">
                 {canAcceptTask && (
@@ -587,7 +604,7 @@ const TaskDetailPage = () => {
             {task.due_date && (
               <p>
                 截止日期：{formatDateTime(task.due_date)}
-                {isOverdue && <span className="hint-text">（已逾期）</span>}
+                {showOverdueIndicator && <span className="hint-text">（已逾期）</span>}
               </p>
             )}
           </section>
