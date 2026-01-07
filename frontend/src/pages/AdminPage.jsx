@@ -33,7 +33,6 @@ const AdminPage = () => {
     username: '',
     password: '',
     role: 'worker',
-    line_id: '',
   });
   const [roleNameEdits, setRoleNameEdits] = useState({ ...labels });
   const [roleLabelMessages, setRoleLabelMessages] = useState({});
@@ -392,11 +391,10 @@ const AdminPage = () => {
         username: form.username.trim(),
         password: form.password,
         role: form.role,
-        line_id: form.line_id.trim() || undefined,
       };
       await api.post('auth/register', payload);
       setFormSuccess('帳號建立成功。');
-      setForm({ name: '', username: '', password: '', role: 'worker', line_id: '' });
+      setForm({ name: '', username: '', password: '', role: 'worker' });
       await loadUsers();
     } catch (err) {
       const message = err.response?.data?.msg || '建立帳號失敗。';
@@ -984,15 +982,6 @@ const AdminPage = () => {
                     </option>
                   ))}
                 </select>
-              </label>
-              <label>
-                LINE ID（選填）
-                <input
-                  name="line_id"
-                  value={form.line_id}
-                  onChange={handleFormChange}
-                  placeholder="@909qfaqv"
-                />
               </label>
               <button type="submit">建立帳號</button>
             </form>
