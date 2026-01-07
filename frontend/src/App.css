@@ -702,6 +702,80 @@ button:disabled {
   transform: translateY(-2px);
 }
 
+.task-card {
+  display: none;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.task-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.task-card__header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.task-card__status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+
+.task-card__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  color: var(--muted-soft);
+}
+
+.task-card__cta {
+  position: sticky;
+  bottom: 0;
+  background: var(--panel-bg);
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--panel-border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  z-index: 1;
+}
+
+.task-card__cta select {
+  padding: 0.4rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+  color: inherit;
+}
+
+.task-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.task-title {
+  margin: 0;
+}
+
+.task-secondary {
+  color: var(--muted-soft);
+}
+
+.task-status-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .task-status-control {
   display: inline-flex;
   align-items: center;
@@ -1127,5 +1201,26 @@ button:disabled {
 
   .branding-preview {
     width: 100%;
+  }
+
+  .task-card {
+    display: flex;
+  }
+
+  .task-details .task-title,
+  .task-details .task-secondary,
+  .task-details .task-status-row {
+    display: none;
+  }
+
+  .task-card__cta {
+    position: sticky;
+    bottom: -1px;
+    padding-bottom: 0.2rem;
+  }
+
+  .task-card__cta .secondary-button {
+    width: 100%;
+    justify-content: center;
   }
 }

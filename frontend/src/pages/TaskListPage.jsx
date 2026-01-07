@@ -419,22 +419,72 @@ const TaskListPage = () => {
                 isManager &&
                 taskAssigneeIds.length > 0 &&
                 selectValue.length !== taskAssigneeIds.length;
+              const dueDateLabel = task.due_date || task.expected_time;
+              const dueDateText = dueDateLabel
+                ? new Date(dueDateLabel).toLocaleString()
+                : '未設定';
               return (
                 <li key={task.id} className="task-item">
-                  <div>
-                    <h3>
+                  <div className="task-card">
+                    <div className="task-card__header">
+                      <h3>
+                        <Link to={`/tasks/${task.id}`}>{task.title}</Link>
+                      </h3>
+                      <div className="task-card__status">
+                        <span className={statusBadgeClass[task.status] || 'status-badge'}>
+                          ● {task.status}
+                        </span>
+                        {isOverdue && (
+                          <span className="status-badge status-overdue">⚠️ 逾期</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="task-card__meta">
+                      <span>地點：{task.location}</span>
+                      <span>截止日期：{dueDateText}</span>
+                    </div>
+                    <div className="task-card__cta">
+                      {isManager ? (
+                        <select
+                          value={task.status}
+                          onChange={(event) =>
+                            handleStatusChange(task.id, event.target.value)
+                          }
+                        >
+                          {statusOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : canAccept ? (
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => handleAcceptTask(task.id)}
+                          disabled={acceptingTaskId === task.id}
+                        >
+                          {acceptingTaskId === task.id ? '接單中…' : '接單'}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className="task-details">
+                    <h3 className="task-title">
                       <Link to={`/tasks/${task.id}`}>{task.title}</Link>
                     </h3>
-                    <p>{task.description || '沒有描述'}</p>
-                    <p>地點：{task.location}</p>
-                    <p>
+                    <p className="task-secondary">{task.description || '沒有描述'}</p>
+                    <p className="task-secondary">地點：{task.location}</p>
+                    <p className="task-secondary">
                       預計完成：
                       {task.expected_time
                         ? new Date(task.expected_time).toLocaleString()
                         : '未設定'}
                     </p>
-                    <p>總工時：{(task.total_work_hours ?? 0).toFixed(2)} 小時</p>
-                    <p>
+                    <p className="task-secondary">
+                      總工時：{(task.total_work_hours ?? 0).toFixed(2)} 小時
+                    </p>
+                    <p className="task-status-row">
                       任務進度：
                       {isManager ? (
                         <span className="task-status-control">
