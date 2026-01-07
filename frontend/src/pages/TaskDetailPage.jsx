@@ -122,6 +122,9 @@ const TaskDetailPage = () => {
   const hasNotificationPreference = user?.notification_type && user?.notification_type !== 'none';
   const [showOverdue, setShowOverdue] = useState(Boolean(hasNotificationPreference));
 
+  const getErrorMessage = (err, fallback) =>
+    err?.networkMessage || err?.response?.data?.msg || fallback;
+
 
   const loadTask = async () => {
     setLoading(true);
@@ -130,7 +133,7 @@ const TaskDetailPage = () => {
       const { data } = await api.get(`tasks/${id}`);
       setTask(data);
     } catch (err) {
-      const message = err.response?.data?.msg || '找不到該任務。';
+      const message = getErrorMessage(err, '找不到該任務。');
       setError(message);
     } finally {
       setLoading(false);
@@ -290,7 +293,7 @@ const TaskDetailPage = () => {
       setUpdateForm({ status: '', note: '' });
       await loadTask();
     } catch (err) {
-      const message = err.response?.data?.msg || '更新狀態失敗。';
+      const message = getErrorMessage(err, '更新狀態失敗。');
       setError(message);
     }
   };
@@ -309,7 +312,7 @@ const TaskDetailPage = () => {
       setAssignmentSuccess('任務指派資訊已更新。');
       await loadTask();
     } catch (err) {
-      const message = err.response?.data?.msg || '更新任務指派失敗。';
+      const message = getErrorMessage(err, '更新任務指派失敗。');
       setAssignmentError(message);
     }
   };
@@ -335,7 +338,7 @@ const TaskDetailPage = () => {
       setPhotoForm({ file: null, note: '' });
       await loadTask();
     } catch (err) {
-      const message = err.response?.data?.msg || '上傳照片失敗。';
+      const message = getErrorMessage(err, '上傳照片失敗。');
       setError(message);
     } finally {
       setUploadingPhoto(false);
@@ -391,7 +394,7 @@ const TaskDetailPage = () => {
       clearAudioPreview();
       await loadTask();
     } catch (err) {
-      const message = err.response?.data?.msg || '上傳語音失敗。';
+      const message = getErrorMessage(err, '上傳語音失敗。');
       setError(message);
     } finally {
       setUploadingAudio(false);
@@ -440,7 +443,7 @@ const TaskDetailPage = () => {
       setSignatureNote('');
       await loadTask();
     } catch (err) {
-      const message = err.response?.data?.msg || '上傳簽名失敗。';
+      const message = getErrorMessage(err, '上傳簽名失敗。');
       setError(message);
     } finally {
       setUploadingSignature(false);
@@ -456,7 +459,7 @@ const TaskDetailPage = () => {
       setTimeMessage('工時紀錄已開始。');
       await loadTask();
     } catch (err) {
-      const message = err.response?.data?.msg || '無法開始工時紀錄。';
+      const message = getErrorMessage(err, '無法開始工時紀錄。');
       setTimeError(message);
     } finally {
       setTimeLoading(false);
@@ -472,7 +475,7 @@ const TaskDetailPage = () => {
       setTimeMessage('工時紀錄已結束。');
       await loadTask();
     } catch (err) {
-      const message = err.response?.data?.msg || '無法結束工時紀錄。';
+      const message = getErrorMessage(err, '無法結束工時紀錄。');
       setTimeError(message);
     } finally {
       setTimeLoading(false);
@@ -486,7 +489,7 @@ const TaskDetailPage = () => {
       await api.post(`tasks/${id}/accept`);
       await loadTask();
     } catch (err) {
-      const message = err.response?.data?.msg || '接單失敗。';
+      const message = getErrorMessage(err, '接單失敗。');
       setError(message);
     } finally {
       setAcceptingTask(false);
@@ -505,6 +508,9 @@ const TaskDetailPage = () => {
     return (
       <div className="page">
         <p>{error || '無法顯示任務。'}</p>
+        <button type="button" className="secondary-button" onClick={loadTask}>
+          重試
+        </button>
         <button type="button" onClick={() => navigate(-1)}>
           返回
         </button>
@@ -519,7 +525,14 @@ const TaskDetailPage = () => {
           ← 返回任務列表
         </Link>
       </AppHeader>
-      {error && <p className="error-text">{error}</p>}
+      {error && (
+        <div className="error-text" style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+          <span>{error}</span>
+          <button type="button" className="secondary-button" onClick={loadTask}>
+            重試
+          </button>
+        </div>
+      )}
 
       <nav className="tab-bar tab-bar--top">
         {detailTabs.map((tab) => (

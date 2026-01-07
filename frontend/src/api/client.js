@@ -43,6 +43,7 @@ console.log("[apiBase]", apiBase);
 
 const api = axios.create({
   baseURL: apiBase,
+  timeout: 15000,
   // withCredentials: true, // 如果你用 cookie 才開
 });
 
@@ -59,5 +60,26 @@ api.interceptors.request.use((config) => {
   }
   return config;
 });
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const isTimeout =
+      error?.code === "ECONNABORTED" ||
+      (typeof error?.message === "string" && error.message.toLowerCase().includes("timeout"));
+    const isOffline = typeof navigator !== "undefined" && navigator.onLine === false;
+    const isNetworkError = error?.code === "ERR_NETWORK" || !error?.response;
+
+    if (isTimeout) {
+      error.networkMessage = "連線逾時，請稍後重試。";
+    } else if (isOffline) {
+      error.networkMessage = "目前離線，請確認網路連線。";
+    } else if (isNetworkError) {
+      error.networkMessage = "網路不穩或離線，請稍後重試。";
+    }
+
+    return Promise.reject(error);
+  },
+);
 
 export default api;

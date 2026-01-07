@@ -59,6 +59,9 @@ const TaskListPage = () => {
   const isManager = managerRoles.has(user?.role);
   const isWorker = user?.role === 'worker';
 
+  const getErrorMessage = (err, fallback) =>
+    err?.networkMessage || err?.response?.data?.msg || fallback;
+
   const assigneeOptions = useMemo(
     () =>
       users.map((item) => ({
@@ -77,7 +80,7 @@ const TaskListPage = () => {
       const { data } = await api.get('tasks/');
       setTasks(data);
     } catch (err) {
-      const message = err.response?.data?.msg || '無法取得任務列表。';
+      const message = getErrorMessage(err, '無法取得任務列表。');
       setError(message);
     } finally {
       if (showLoading) {
@@ -94,7 +97,7 @@ const TaskListPage = () => {
       const { data } = await api.get('tasks/', { params: { available: 1 } });
       setAvailableTasks(data);
     } catch (err) {
-      const message = err.response?.data?.msg || '無法取得可接單任務。';
+      const message = getErrorMessage(err, '無法取得可接單任務。');
       setError(message);
     } finally {
       if (showLoading) {
@@ -168,7 +171,7 @@ const TaskListPage = () => {
       setCreating(false);
       await loadTasks();
     } catch (err) {
-      const message = err.response?.data?.msg || '建立任務失敗。';
+      const message = getErrorMessage(err, '建立任務失敗。');
       setError(message);
     }
   };
@@ -179,7 +182,7 @@ const TaskListPage = () => {
       await api.patch(`tasks/update/${taskId}`, { status: nextStatus });
       await loadTasks({ showLoading: false });
     } catch (err) {
-      const message = err.response?.data?.msg || '更新任務狀態失敗。';
+      const message = getErrorMessage(err, '更新任務狀態失敗。');
       setError(message);
     }
   };
@@ -191,7 +194,7 @@ const TaskListPage = () => {
       await api.patch(`tasks/update/${taskId}`, { assignee_ids: values });
       await loadTasks({ showLoading: false });
     } catch (err) {
-      const message = err.response?.data?.msg || '更新指派對象失敗。';
+      const message = getErrorMessage(err, '更新指派對象失敗。');
       setError(message);
     } finally {
       setAssigningTaskId(null);
@@ -199,6 +202,7 @@ const TaskListPage = () => {
   };
 
   const handleRefresh = async () => {
+    setError('');
     setRefreshing(true);
     try {
       await loadTasks({ showLoading: false });
@@ -220,7 +224,7 @@ const TaskListPage = () => {
         await loadAvailableTasks({ showLoading: false });
       }
     } catch (err) {
-      const message = err.response?.data?.msg || '接單失敗。';
+      const message = getErrorMessage(err, '接單失敗。');
       setError(message);
     } finally {
       setAcceptingTaskId(null);
@@ -239,7 +243,7 @@ const TaskListPage = () => {
       await api.delete(`tasks/${taskId}`);
       await loadTasks({ showLoading: false });
     } catch (err) {
-      const message = err.response?.data?.msg || '刪除任務失敗。';
+      const message = getErrorMessage(err, '刪除任務失敗。');
       setError(message);
     } finally {
       setDeletingTaskId(null);
@@ -485,7 +489,14 @@ const TaskListPage = () => {
           )}
         </section>
       )}
-      {error && <p className="error-text">{error}</p>}
+      {error && (
+        <div className="error-text" style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+          <span>{error}</span>
+          <button type="button" className="secondary-button" onClick={handleRefresh}>
+            重試
+          </button>
+        </div>
+      )}
       <section className="panel">
         <h2>任務列表</h2>
         {loading || (availableOnly && loadingAvailable) ? (
