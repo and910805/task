@@ -734,6 +734,10 @@ button:disabled {
   letter-spacing: 0.03em;
 }
 
+.status-badge + .status-badge {
+  margin-left: 0.45rem;
+}
+
 .status-badge.status-pending {
   background: var(--badge-pending-bg);
   color: var(--badge-pending-color);
@@ -750,6 +754,12 @@ button:disabled {
   background: var(--badge-complete-bg);
   color: var(--badge-complete-color);
   border-color: rgba(34, 197, 94, 0.3);
+}
+
+.status-badge.status-overdue {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+  border-color: rgba(239, 68, 68, 0.35);
 }
 
 .tab-bar {

@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import datetime, timezone
 
@@ -13,7 +14,11 @@ from services.attachments import (
     create_file_attachment,
     create_signature_attachment,
 )
-from services import notify_task_assignment, notify_task_status_change
+from services import (
+    notify_task_assignment,
+    notify_task_overdue,
+    notify_task_status_change,
+)
 from storage import StorageError
 from utils import get_current_user_id
 
@@ -23,6 +28,12 @@ tasks_bp = Blueprint("tasks", __name__)
 TASK_STATUS_OPTIONS = ["尚未接單", "已接單", "進行中", "已完成"]
 ALLOWED_STATUSES = set(TASK_STATUS_OPTIONS)
 ALLOWED_ATTACHMENT_TYPES = {"image", "audio", "signature", "other"}
+ALLOWED_STATUS_TRANSITIONS = {
+    "尚未接單": {"已接單", "進行中"},
+    "已接單": {"進行中"},
+    "進行中": {"已完成"},
+    "已完成": set(),
+}
 
 
 def _task_assigned_user_ids(task: Task) -> set[int]:
@@ -89,14 +100,34 @@ def _apply_task_status(task: Task, new_status: str) -> tuple[bool, tuple | None]
     if new_status not in ALLOWED_STATUSES:
         return False, (jsonify({"msg": "Invalid status"}), 400)
 
-    if task.status != new_status:
-        previous = task.status
-        task.status = new_status
-        if new_status == "已完成" and previous != "已完成":
-            task.completed_at = datetime.utcnow()
-        elif new_status != "已完成":
-            task.completed_at = None
-        return True, None
+    if task.status == new_status:
+        return False, None
+
+    allowed_next = ALLOWED_STATUS_TRANSITIONS.get(task.status)
+    if not allowed_next:
+        return (
+            False,
+            (
+                jsonify({"msg": f"Invalid status transition from {task.status} to {new_status}"}),
+                400,
+            ),
+        )
+    if new_status not in allowed_next:
+        return (
+            False,
+            (
+                jsonify({"msg": f"Invalid status transition from {task.status} to {new_status}"}),
+                400,
+            ),
+        )
+
+    previous = task.status
+    task.status = new_status
+    if new_status == "已完成" and previous != "已完成":
+        task.completed_at = datetime.utcnow()
+    elif new_status != "已完成":
+        task.completed_at = None
+    return True, None
 
     return False, None
 
@@ -230,6 +261,30 @@ def _notify_task_changes(task: Task, summary: dict, actor_id: int | None):
     if summary.get("status_changed"):
         recipients = _task_notification_recipients(task)
         notify_task_status_change(task, recipients, updated_by=actor)
+
+    if summary.get("became_overdue"):
+        recipients = _task_notification_recipients(task)
+        notify_task_overdue(task, recipients, updated_by=actor)
+
+
+def _append_assignee_update(task: Task, actor_id: int | None, summary: dict):
+    if not summary.get("assignee_changed"):
+        return
+
+    note_payload = {
+        "from_ids": summary.get("assignee_before_ids", []),
+        "to_ids": summary.get("assignee_after_ids", []),
+        "from_names": summary.get("assignee_before_names", []),
+        "to_names": summary.get("assignee_after_names", []),
+    }
+    db.session.add(
+        TaskUpdate(
+            task_id=task.id,
+            user_id=actor_id,
+            status="指派變更",
+            note=json.dumps(note_payload, ensure_ascii=False),
+        )
+    )
 
 
 def _serialize_task_for_viewer(task: Task, role: str | None, user_id: int | None) -> dict:
@@ -443,6 +498,7 @@ def accept_task(task_id: int):
 
 
 def _apply_task_updates(task: Task, data: dict):
+    was_overdue = task.is_overdue()
     title = data.get("title")
     description = data.get("description")
     status = data.get("status")
@@ -457,6 +513,15 @@ def _apply_task_updates(task: Task, data: dict):
         "assignee_added": [],
         "assignee_removed": [],
         "assignee_map": {},
+<<<<<<< ours
+        "assignee_changed": False,
+        "assignee_before_ids": [],
+        "assignee_after_ids": [],
+        "assignee_before_names": [],
+        "assignee_after_names": [],
+=======
+        "became_overdue": False,
+>>>>>>> theirs
     }
 
     if title is not None:
@@ -495,6 +560,12 @@ def _apply_task_updates(task: Task, data: dict):
             summary["new_status"] = task.status
 
     if should_update_assignees:
+        previous_assignees = [
+            {"id": assignment.user_id, "username": assignment.user.username}
+            for assignment in task.assignees
+            if assignment.user_id and assignment.user
+        ]
+        previous_assignees.sort(key=lambda item: item["username"].lower())
         assignee_map, error = _load_assignee_users(assignee_ids)
         if error:
             return error, summary
@@ -502,6 +573,20 @@ def _apply_task_updates(task: Task, data: dict):
         summary["assignee_added"] = added_ids
         summary["assignee_removed"] = removed_ids
         summary["assignee_map"] = assignee_map
+        if added_ids or removed_ids:
+            next_assignees = [
+                {"id": user_id, "username": assignee_map[user_id].username}
+                for user_id in assignee_ids
+                if user_id in assignee_map
+            ]
+            next_assignees.sort(key=lambda item: item["username"].lower())
+            summary["assignee_changed"] = True
+            summary["assignee_before_ids"] = [item["id"] for item in previous_assignees]
+            summary["assignee_after_ids"] = [item["id"] for item in next_assignees]
+            summary["assignee_before_names"] = [
+                item["username"] for item in previous_assignees
+            ]
+            summary["assignee_after_names"] = [item["username"] for item in next_assignees]
 
     if due_date_raw is not None:
         if due_date_raw in (None, ""):
@@ -512,7 +597,10 @@ def _apply_task_updates(task: Task, data: dict):
                 return (error_response, status_code), summary
             task.due_date = due_date
 
+    summary["became_overdue"] = (not was_overdue) and task.is_overdue()
     return None, summary
+
+
 @tasks_bp.put("/<int:task_id>")
 @role_required("site_supervisor", "hq_staff")
 def update_task(task_id: int):
@@ -529,6 +617,7 @@ def update_task(task_id: int):
     if error:
         return error
 
+    _append_assignee_update(task, actor_id, summary)
     db.session.commit()
     _notify_task_changes(task, summary, actor_id)
     return jsonify(task.to_dict())
@@ -550,6 +639,7 @@ def update_task_patch(task_id: int):
     if error:
         return error
 
+    _append_assignee_update(task, actor_id, summary)
     db.session.commit()
     _notify_task_changes(task, summary, actor_id)
     return jsonify(task.to_dict())
@@ -605,17 +695,13 @@ def add_update(task_id: int):
     if permission_error:
         return permission_error
 
-    # 基本檢查（你原本的）
-    if not status and not note:
-        return jsonify({"msg": "Status or note is required"}), 400
-
-    if status and status not in ALLOWED_STATUSES:
-        return jsonify({"msg": "Invalid status"}), 400
+    status_value = status.strip() if isinstance(status, str) else status
+    note_value = note.strip() if isinstance(note, str) else note
 
     # ====== ✅ 新增：worker 完工規則（放在 permission 後面） ======
-    if status == "已完成" and role == "worker":
+    if status_value == "已完成" and role == "worker":
         # 1) 說明必填（trim）
-        if not (note or "").strip():
+        if not (note_value or "").strip():
             return jsonify({"msg": "完成任務時請填寫說明（note）"}), 400
 
         # 2) 至少一張「自己上傳」的照片
@@ -629,17 +715,28 @@ def add_update(task_id: int):
             return jsonify({"msg": "完成任務時需要至少上傳 1 張照片"}), 400
     # ====== ✅ 新增結束 ======
 
+<<<<<<< ours
+=======
+    was_overdue = task.is_overdue()
     update = TaskUpdate(task_id=task.id, user_id=user_id, status=status, note=note)
     task.updated_at = datetime.utcnow()
 
+>>>>>>> theirs
     status_changed = False
-    if status:
-        status_changed, error = _apply_task_status(task, status)
+    if status_value:
+        if status_value not in ALLOWED_STATUSES:
+            return jsonify({"msg": "Invalid status"}), 400
+        status_changed, error = _apply_task_status(task, status_value)
         if error:
             return error
-        if not status_changed:
-            if status == "已完成" and task.completed_at is None:
-                task.completed_at = datetime.utcnow()
+
+    if not status_changed and not (note_value or ""):
+        return jsonify({"msg": "Status change or note is required"}), 400
+
+    update_status = status_value if status_changed else None
+    update_note = note_value or None
+    update = TaskUpdate(task_id=task.id, user_id=user_id, status=update_status, note=update_note)
+    task.updated_at = datetime.utcnow()
 
     db.session.add(update)
     db.session.commit()
@@ -648,6 +745,10 @@ def add_update(task_id: int):
         actor = User.query.get(user_id)
         recipients = _task_notification_recipients(task)
         notify_task_status_change(task, recipients, updated_by=actor)
+    if not was_overdue and task.is_overdue():
+        actor = User.query.get(user_id)
+        recipients = _task_notification_recipients(task)
+        notify_task_overdue(task, recipients, updated_by=actor)
 
     return jsonify(update.to_dict()), 201
 

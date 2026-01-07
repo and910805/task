@@ -29,12 +29,29 @@ def _generate_password() -> str:
 
     # 12-characters token encoded using URL-safe alphabet (~16 bytes entropy)
     return secrets.token_urlsafe(9)
+
+
+def _normalize_line_id(value) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+    else:
+        value = str(value).strip()
+    if not value:
+        return None
+    if not (value.startswith("U") or value.startswith("@")):
+        return None
+    return value
+
+
 @auth_bp.post("/register")
 @jwt_required(optional=True)
 def register():
     data = request.get_json() or {}
     username = (data.get("username") or "").strip()
     password = data.get("password")
+    line_id = _normalize_line_id(data.get("line_id"))
     requested_role_raw = data.get("role", "worker")
     requested_role = (
         requested_role_raw.strip()
@@ -47,6 +64,9 @@ def register():
 
     if requested_role not in VALID_ROLES:
         return jsonify({"msg": "Invalid role"}), 400
+
+    if data.get("line_id") is not None and not line_id:
+        return jsonify({"msg": "LINE ID 格式不正確，需以 U 或 @ 開頭"}), 400
 
     user_count = User.query.count()
     is_initial_setup = user_count == 0
@@ -73,6 +93,9 @@ def register():
 
     user = User(username=username, role=role)
     user.set_password(password)
+    if line_id:
+        user.notification_type = "line"
+        user.notification_value = line_id
     db.session.add(user)
     db.session.commit()
 

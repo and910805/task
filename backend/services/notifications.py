@@ -33,6 +33,8 @@ DEFAULT_EMAIL_NOTIFICATION_SETTINGS = {
     "send_on_assignment": True,
     # Send email when task status changes.
     "send_on_status_change": True,
+    # Send email when a task becomes overdue.
+    "send_on_overdue": True,
     # If non-empty, only send status-change emails when the new status is in this list.
     # Empty list means "all statuses".
     "status_targets": ["尚未接單", "已接單", "進行中", "已完成"],
@@ -52,6 +54,7 @@ DEFAULT_LINE_NOTIFICATION_SETTINGS = {
     "enabled": True,
     "send_on_assignment": True,
     "send_on_status_change": True,
+    "send_on_overdue": True,
     "status_targets": [],  # empty means all statuses
     "include_task_link": False,
     "task_link_base_url": "",
@@ -81,6 +84,7 @@ def _load_email_settings() -> dict:
     merged["enabled"] = _bool(merged.get("enabled"), True)
     merged["send_on_assignment"] = _bool(merged.get("send_on_assignment"), True)
     merged["send_on_status_change"] = _bool(merged.get("send_on_status_change"), True)
+    merged["send_on_overdue"] = _bool(merged.get("send_on_overdue"), True)
     merged["include_task_link"] = _bool(merged.get("include_task_link"), False)
 
     targets = merged.get("status_targets")
@@ -140,6 +144,7 @@ def _load_line_settings() -> dict:
     merged["enabled"] = _bool(merged.get("enabled"), True)
     merged["send_on_assignment"] = _bool(merged.get("send_on_assignment"), True)
     merged["send_on_status_change"] = _bool(merged.get("send_on_status_change"), True)
+    merged["send_on_overdue"] = _bool(merged.get("send_on_overdue"), True)
     merged["include_task_link"] = _bool(merged.get("include_task_link"), False)
 
     targets = merged.get("status_targets")
@@ -194,7 +199,6 @@ def _append_task_link(message: str, task: "Task") -> str:
 
 
 
-
 def _append_task_link_line(message: str, task: "Task") -> str:
     settings = _load_line_settings()
     if not settings.get("include_task_link"):
@@ -232,10 +236,14 @@ def _should_send_line(kind: str | None, *, status: str | None = None) -> bool:
         if targets and not status:
             return False
         return True
+    if kind == "overdue":
+        return bool(settings.get("send_on_overdue"))
 
     return True
+
+
 def _should_send_email(kind: str | None, *, status: str | None = None) -> bool:
-    """Check email rules. kind: 'assignment' | 'status_change' | None."""
+    """Check email rules. kind: 'assignment' | 'status_change' | 'overdue' | None."""
     if kind is None:
         return True
     settings = _load_email_settings()
@@ -256,8 +264,11 @@ def _should_send_email(kind: str | None, *, status: str | None = None) -> bool:
         if targets and not status:
             return False
         return True
+    if kind == "overdue":
+        return bool(settings.get("send_on_overdue"))
 
     return True
+
 
 def _send_line_notify(token: str, message: str) -> None:
     headers = {"Authorization": f"Bearer {token}"}
@@ -285,6 +296,8 @@ def _send_line_bot(user_id: str, message: str) -> None:
         current_app.logger.warning("LINE bot config missing; skip push")
         return
     push_text(user_id, message)
+
+
 def _get_email_config() -> dict[str, str | int | None]:
     """Read SMTP settings from environment first, then Flask config.
 
@@ -470,6 +483,8 @@ def _format_task_summary(task: "Task") -> str:
         base += f"\n地點：{task.location}"
     if task.expected_time:
         base += f"\n預計完成時間：{task.expected_time.isoformat()}"
+    if task.due_date:
+        base += f"\n截止時間：{task.due_date.isoformat()}"
     return base
 
 
@@ -531,3 +546,17 @@ def notify_task_status_change(
     summary = _format_task_summary(task)
     message = f"{actor}。\n{summary}"
     _dispatch_notifications(users, "任務狀態更新", message, email_kind="status_change", email_status=getattr(task, "status", None), task=task)
+
+
+def notify_task_overdue(
+    task: "Task",
+    users: Sequence["User"],
+    *,
+    updated_by: "User" | None = None,
+) -> None:
+    if not users:
+        return
+    actor = f"{updated_by.username} 更新了任務期限" if updated_by else "任務已逾期"
+    summary = _format_task_summary(task)
+    message = f"{actor}。\n{summary}"
+    _dispatch_notifications(users, "任務逾期提醒", message, email_kind="overdue", task=task)

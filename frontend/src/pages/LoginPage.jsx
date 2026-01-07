@@ -11,7 +11,7 @@ const LoginPage = () => {
   const { login, register, loading } = useAuth();
   const { branding, refresh: refreshBranding } = useBranding();
   const [mode, setMode] = useState('login');
-  const [form, setForm] = useState({ username: '', password: '' });
+  const [form, setForm] = useState({ username: '', password: '', line_id: '' });
   const brandName = branding.name || '立翔水電行';
   const logoSrc = branding.logoUrl || brandFallback;
 
@@ -28,9 +28,13 @@ const LoginPage = () => {
         refreshBranding().catch(() => {});
         navigate('/');
       } else {
-        await register({ username: form.username, password: form.password });
+        await register({
+          username: form.username,
+          password: form.password,
+          line_id: form.line_id,
+        });
         toast.success('帳號建立成功，請使用該帳號登入。');
-        setForm({ username: '', password: '' });
+        setForm({ username: '', password: '', line_id: '' });
         setMode('login');
       }
     } catch (err) {
@@ -89,6 +93,19 @@ const LoginPage = () => {
             placeholder="輸入密碼"
           />
         </div>
+        {mode === 'register' ? (
+          <div className="form-group">
+            <label htmlFor="line-id">LINE ID（選填）</label>
+            <input
+              id="line-id"
+              type="text"
+              name="line_id"
+              value={form.line_id}
+              onChange={handleChange}
+              placeholder="@909qfaqv"
+            />
+          </div>
+        ) : null}
         <button type="submit" disabled={loading}>
           {mode === 'login' ? '登入' : '註冊'}
         </button>

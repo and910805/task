@@ -17,6 +17,21 @@ const statusOptions = [
   { value: '已完成', label: '已完成' },
 ];
 
+<<<<<<< ours
+const statusTransitionMap = {
+  '尚未接單': ['已接單', '進行中'],
+  '已接單': ['進行中'],
+  '進行中': ['已完成'],
+  '已完成': [],
+=======
+const statusBadgeClass = {
+  尚未接單: 'status-badge status-pending',
+  已接單: 'status-badge status-in-progress',
+  進行中: 'status-badge status-in-progress',
+  已完成: 'status-badge status-completed',
+>>>>>>> theirs
+};
+
 const detailTabs = [
   { key: 'info', label: 'ℹ️ 任務資訊' },
   { key: 'photos', label: '📷 照片' },
@@ -43,6 +58,36 @@ const formatDateTime = (value) => {
 };
 
 const formatHours = (hours) => Number(hours ?? 0).toFixed(2);
+
+const parseAssigneeChangeNote = (note) => {
+  if (!note) return null;
+  try {
+    const parsed = JSON.parse(note);
+    if (parsed && typeof parsed === 'object') {
+      return parsed;
+    }
+  } catch (err) {
+    return null;
+  }
+  return null;
+};
+
+const formatAssigneeChangeSummary = (note) => {
+  const payload = parseAssigneeChangeNote(note);
+  if (!payload) return '指派對象已更新。';
+
+  const fromNames = payload.from_names || [];
+  const toNames = payload.to_names || [];
+  const fromIds = payload.from_ids || [];
+  const toIds = payload.to_ids || [];
+
+  const fromLabel =
+    fromNames.length > 0 ? fromNames.join('、') : fromIds.length > 0 ? fromIds.join('、') : '未指派';
+  const toLabel =
+    toNames.length > 0 ? toNames.join('、') : toIds.length > 0 ? toIds.join('、') : '未指派';
+
+  return `指派對象由 ${fromLabel} 變更為 ${toLabel}`;
+};
 
 const TaskDetailPage = () => {
   const { id } = useParams();
@@ -129,6 +174,21 @@ const TaskDetailPage = () => {
     });
   }, [task]);
 
+  const availableStatusOptions = useMemo(() => {
+    if (!task?.status) return statusOptions;
+    const allowed = statusTransitionMap[task.status];
+    if (!allowed) return [];
+    return statusOptions.filter((option) => allowed.includes(option.value));
+  }, [task?.status]);
+
+  useEffect(() => {
+    if (!updateForm.status) return;
+    const allowedValues = new Set(availableStatusOptions.map((option) => option.value));
+    if (!allowedValues.has(updateForm.status)) {
+      setUpdateForm((prev) => ({ ...prev, status: '' }));
+    }
+  }, [availableStatusOptions, updateForm.status]);
+
   const buildAttachmentUrl = useCallback((url) => {
     if (!url) return '';
     if (/^https?:\/\//i.test(url)) {
@@ -171,6 +231,12 @@ const TaskDetailPage = () => {
     () => isWorker && task?.status === '尚未接單' && !task?.assigned_to_id,
     [isWorker, task],
   );
+  const isOverdue = useMemo(() => {
+    if (!task?.due_date) return false;
+    if (task.status === '已完成') return false;
+    if (task.is_overdue !== undefined) return Boolean(task.is_overdue);
+    return new Date(task.due_date).getTime() < Date.now();
+  }, [task]);
 
   const handleUpdateChange = (event) => {
     const { name, value } = event.target;
@@ -467,7 +533,13 @@ const handleStatusSubmit = async (event) => {
         <>
           <section className="panel">
             <h2>任務資訊</h2>
-            <p>狀態：{task.status}</p>
+            <p>
+              狀態：
+              <span className={statusBadgeClass[task.status] || 'status-badge'}>
+                ● {task.status}
+              </span>
+              {isOverdue && <span className="status-badge status-overdue">⚠️ 逾期</span>}
+            </p>
             {canAcceptTask && (
               <button type="button" onClick={handleAcceptTask} disabled={acceptingTask}>
                 {acceptingTask ? '接單中…' : '接單'}
@@ -493,7 +565,12 @@ const handleStatusSubmit = async (event) => {
             <p>預計完成時間：{formatDateTime(task.expected_time)}</p>
             <p>實際完成時間：{task.completed_at ? formatDateTime(task.completed_at) : '未完成'}</p>
             <p>總工時：{formatHours(task.total_work_hours)} 小時</p>
-            {task.due_date && <p>截止日期：{formatDateTime(task.due_date)}</p>}
+            {task.due_date && (
+              <p>
+                截止日期：{formatDateTime(task.due_date)}
+                {isOverdue && <span className="hint-text">（已逾期）</span>}
+              </p>
+            )}
           </section>
 
           {isManager && (
@@ -537,23 +614,32 @@ const handleStatusSubmit = async (event) => {
               <p>尚無回報。</p>
             ) : (
               <ul className="updates">
-                {task.updates.map((update) => (
-                  <li key={update.id}>
-                    <p>
-                      <strong>{update.author || '系統'}</strong> - {formatDateTime(update.created_at)}
-                    </p>
-                    {update.status && <p>狀態：{update.status}</p>}
-                    {update.note && <p>備註：{update.note}</p>}
-                    {(update.start_time || update.end_time) && (
+                {task.updates.map((update) => {
+                  const isAssigneeChange = update.status === '指派變更';
+                  const assigneeSummary = isAssigneeChange
+                    ? formatAssigneeChangeSummary(update.note)
+                    : null;
+
+                  return (
+                    <li key={update.id}>
                       <p>
-                        工時：
-                        {update.start_time ? formatDateTime(update.start_time) : '未記錄'} →
-                        {update.end_time ? formatDateTime(update.end_time) : '進行中'} （
-                        {formatHours(update.work_hours)} 小時）
+                        <strong>{update.author || '系統'}</strong> -{' '}
+                        {formatDateTime(update.created_at)}
                       </p>
-                    )}
-                  </li>
-                ))}
+                      {update.status && <p>狀態：{update.status}</p>}
+                      {isAssigneeChange && <p>{assigneeSummary}</p>}
+                      {update.note && !isAssigneeChange && <p>備註：{update.note}</p>}
+                      {(update.start_time || update.end_time) && (
+                        <p>
+                          工時：
+                          {update.start_time ? formatDateTime(update.start_time) : '未記錄'} →
+                          {update.end_time ? formatDateTime(update.end_time) : '進行中'} （
+                          {formatHours(update.work_hours)} 小時）
+                        </p>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             )}
             <form className="stack" onSubmit={handleStatusSubmit}>
@@ -561,7 +647,7 @@ const handleStatusSubmit = async (event) => {
                 狀態
                 <select name="status" value={updateForm.status} onChange={handleUpdateChange}>
                   <option value="">選擇狀態</option>
-                  {statusOptions.map((option) => (
+                  {availableStatusOptions.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
                     </option>

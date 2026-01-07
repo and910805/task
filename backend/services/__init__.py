@@ -3,6 +3,7 @@
 from .notifications import (
     has_email_config,
     notify_task_assignment,
+    notify_task_overdue,
     notify_task_status_change,
     send_email_async,
 )
@@ -10,6 +11,7 @@ from .notifications import (
 __all__ = [
     "has_email_config",
     "notify_task_assignment",
+    "notify_task_overdue",
     "notify_task_status_change",
     "send_email_async",
 ]

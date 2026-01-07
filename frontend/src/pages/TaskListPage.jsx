@@ -337,8 +337,13 @@ const TaskListPage = () => {
               const selectValue = assigneeOptions.filter((option) =>
                 taskAssigneeIds.includes(option.value),
               );
+              const isOverdue =
+                task.is_overdue ||
+                (task.due_date &&
+                  task.status !== '已完成' &&
+                  new Date(task.due_date).getTime() < Date.now());
               const hasMissingAssignee =
-		isManager &&
+                isManager &&
                 taskAssigneeIds.length > 0 &&
                 selectValue.length !== taskAssigneeIds.length;
               return (
@@ -363,6 +368,9 @@ const TaskListPage = () => {
                           <span className={statusBadgeClass[task.status] || 'status-badge'}>
                             ● {task.status}
                           </span>
+                          {isOverdue && (
+                            <span className="status-badge status-overdue">⚠️ 逾期</span>
+                          )}
                           <select
                             value={task.status}
                             onChange={(event) =>
@@ -377,9 +385,14 @@ const TaskListPage = () => {
                           </select>
                         </span>
                       ) : (
-                        <span className={statusBadgeClass[task.status] || 'status-badge'}>
-                          ● {task.status}
-                        </span>
+                        <>
+                          <span className={statusBadgeClass[task.status] || 'status-badge'}>
+                            ● {task.status}
+                          </span>
+                          {isOverdue && (
+                            <span className="status-badge status-overdue">⚠️ 逾期</span>
+                          )}
+                        </>
                       )}
                     </p>
                     <div>

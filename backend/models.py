@@ -133,6 +133,14 @@ class Task(db.Model):
             if update.work_hours is not None
         )
 
+    def is_overdue(self, now: datetime | None = None) -> bool:
+        if not self.due_date:
+            return False
+        if self.status == "已完成":
+            return False
+        reference = now or datetime.utcnow()
+        return self.due_date < reference
+
     def to_dict(self) -> dict:
         time_entries = [
             update.to_time_dict() for update in self.updates if update.start_time
@@ -176,6 +184,7 @@ class Task(db.Model):
             "updates": [update.to_dict() for update in self.updates],
             "time_entries": time_entries,
             "total_work_hours": round(self.total_work_hours(), 2),
+            "is_overdue": self.is_overdue(),
             "assignees": assigned_users,
             "assignee_ids": [user["id"] for user in assigned_users],
         }
