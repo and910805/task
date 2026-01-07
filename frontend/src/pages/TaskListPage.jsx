@@ -29,6 +29,11 @@ const statusFilterOptions = [
   ...statusOptions,
 ];
 
+const sortOptions = [
+  { value: 'due_soon', label: '最近截止' },
+  { value: 'created_desc', label: '最新建立' },
+];
+
 const TaskListPage = () => {
   const { user } = useAuth();
   const { labels } = useRoleLabels();
@@ -43,6 +48,8 @@ const TaskListPage = () => {
   const [availableOnly, setAvailableOnly] = useState(false);
   const [availableTasks, setAvailableTasks] = useState([]);
   const [loadingAvailable, setLoadingAvailable] = useState(false);
+  const [locationFilter, setLocationFilter] = useState('');
+  const [sortOption, setSortOption] = useState('due_soon');
   const [assigningTaskId, setAssigningTaskId] = useState(null);
   const [deletingTaskId, setDeletingTaskId] = useState(null);
   const [acceptingTaskId, setAcceptingTaskId] = useState(null);
@@ -234,14 +241,75 @@ const TaskListPage = () => {
   };
 
   const filteredTasks = useMemo(() => {
-    if (availableOnly) {
-      return availableTasks;
+    const locationQuery = locationFilter.trim().toLowerCase();
+    let result = availableOnly ? availableTasks : tasks;
+
+    if (statusFilter !== 'all') {
+      result = result.filter((task) => task.status === statusFilter);
     }
-    if (statusFilter === 'all') {
-      return tasks;
+
+    if (locationQuery) {
+      result = result.filter((task) =>
+        (task.location || '').toLowerCase().includes(locationQuery),
+      );
     }
-    return tasks.filter((task) => task.status === statusFilter);
-  }, [availableOnly, availableTasks, statusFilter, tasks]);
+
+    const getDueTimestamp = (task) => {
+      const rawDate = task.due_date || task.expected_time;
+      if (!rawDate) return Number.POSITIVE_INFINITY;
+      const parsed = new Date(rawDate).getTime();
+      return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+    };
+
+    const getCreatedTimestamp = (task) => {
+      if (!task.created_at) return 0;
+      const parsed = new Date(task.created_at).getTime();
+      return Number.isNaN(parsed) ? 0 : parsed;
+    };
+
+    const sorted = [...result].sort((a, b) => {
+      if (sortOption === 'created_desc') {
+        return getCreatedTimestamp(b) - getCreatedTimestamp(a);
+      }
+      return getDueTimestamp(a) - getDueTimestamp(b);
+    });
+
+    return sorted;
+  }, [
+    availableOnly,
+    availableTasks,
+    locationFilter,
+    sortOption,
+    statusFilter,
+    tasks,
+  ]);
+
+  const toolbarFilters = (
+    <>
+      <label>
+        地點搜尋
+        <input
+          type="search"
+          value={locationFilter}
+          onChange={(event) => setLocationFilter(event.target.value)}
+          placeholder="輸入地點關鍵字"
+        />
+      </label>
+      <label>
+        排序方式
+        <select
+          value={sortOption}
+          onChange={(event) => setSortOption(event.target.value)}
+        >
+          {sortOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+    </>
+  );
 
   const statusBadgeClass = {
     尚未接單: 'status-badge status-pending',
@@ -273,6 +341,7 @@ const TaskListPage = () => {
           ))}
         </select>
       </label>
+      {toolbarFilters}
     </div>
   ) : (
     <div className="task-toolbar">
@@ -284,6 +353,7 @@ const TaskListPage = () => {
         />
         只顯示可接單
       </label>
+      {toolbarFilters}
       <button
         type="button"
         className="secondary-button"
