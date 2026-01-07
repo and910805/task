@@ -129,8 +129,6 @@ def _apply_task_status(task: Task, new_status: str) -> tuple[bool, tuple | None]
         task.completed_at = None
     return True, None
 
-    return False, None
-
 
 def _validate_required_field(value, field_name: str):
     if value is None:
@@ -318,18 +316,30 @@ def list_tasks():
         selectinload(Task.assignee),
     ).outerjoin(TaskAssignee, TaskAssignee.task_id == Task.id)
 
-    if role == "worker":
+    available_only = str(request.args.get("available") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if available_only:
         query = query.filter(
-            or_(TaskAssignee.user_id == user_id, Task.assigned_to_id == user_id)
+            Task.status == "尚未接單",
+            Task.assigned_to_id.is_(None),
+            TaskAssignee.user_id.is_(None),
         )
-    elif role == "site_supervisor":
-        query = query.filter(
-            or_(
-                Task.assigned_by_id == user_id,
-                TaskAssignee.user_id == user_id,
-                Task.assigned_to_id == user_id,
+    else:
+        if role == "worker":
+            query = query.filter(
+                or_(TaskAssignee.user_id == user_id, Task.assigned_to_id == user_id)
             )
-        )
+        elif role == "site_supervisor":
+            query = query.filter(
+                or_(
+                    Task.assigned_by_id == user_id,
+                    TaskAssignee.user_id == user_id,
+                    Task.assigned_to_id == user_id,
+                )
+            )
 
     tasks = (
         query.distinct()
@@ -513,15 +523,12 @@ def _apply_task_updates(task: Task, data: dict):
         "assignee_added": [],
         "assignee_removed": [],
         "assignee_map": {},
-<<<<<<< ours
         "assignee_changed": False,
         "assignee_before_ids": [],
         "assignee_after_ids": [],
         "assignee_before_names": [],
         "assignee_after_names": [],
-=======
         "became_overdue": False,
->>>>>>> theirs
     }
 
     if title is not None:
@@ -715,13 +722,7 @@ def add_update(task_id: int):
             return jsonify({"msg": "完成任務時需要至少上傳 1 張照片"}), 400
     # ====== ✅ 新增結束 ======
 
-<<<<<<< ours
-=======
     was_overdue = task.is_overdue()
-    update = TaskUpdate(task_id=task.id, user_id=user_id, status=status, note=note)
-    task.updated_at = datetime.utcnow()
-
->>>>>>> theirs
     status_changed = False
     if status_value:
         if status_value not in ALLOWED_STATUSES:

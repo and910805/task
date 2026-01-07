@@ -10,7 +10,7 @@ import ssl
 import time
 from concurrent.futures import ThreadPoolExecutor
 from email.message import EmailMessage
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Sequence
 
 import requests
 from flask import current_app
@@ -560,3 +560,24 @@ def notify_task_overdue(
     summary = _format_task_summary(task)
     message = f"{actor}。\n{summary}"
     _dispatch_notifications(users, "任務逾期提醒", message, email_kind="overdue", task=task)
+
+
+def notify_overdue_tasks(
+    tasks: Sequence["Task"],
+    recipients_lookup: Callable[["Task"], Sequence["User"]],
+    *,
+    updated_by: "User" | None = None,
+) -> int:
+    """Notify overdue tasks (intended for daily scheduling)."""
+    count = 0
+    for task in tasks:
+        if not getattr(task, "is_overdue", None):
+            continue
+        if not task.is_overdue():
+            continue
+        recipients = recipients_lookup(task)
+        if not recipients:
+            continue
+        notify_task_overdue(task, recipients, updated_by=updated_by)
+        count += 1
+    return count

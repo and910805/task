@@ -17,21 +17,19 @@ const statusOptions = [
   { value: '已完成', label: '已完成' },
 ];
 
-<<<<<<< ours
 const statusTransitionMap = {
   '尚未接單': ['已接單', '進行中'],
   '已接單': ['進行中'],
   '進行中': ['已完成'],
   '已完成': [],
-=======
+};
+
 const statusBadgeClass = {
   尚未接單: 'status-badge status-pending',
   已接單: 'status-badge status-in-progress',
   進行中: 'status-badge status-in-progress',
   已完成: 'status-badge status-completed',
->>>>>>> theirs
 };
-
 const detailTabs = [
   { key: 'info', label: 'ℹ️ 任務資訊' },
   { key: 'photos', label: '📷 照片' },
@@ -255,40 +253,40 @@ const TaskDetailPage = () => {
     }));
   };
 
-const handleStatusSubmit = async (event) => {
-  event.preventDefault();
+  const handleStatusSubmit = async (event) => {
+    event.preventDefault();
 
-  // ✅ 新增：工人完工前置檢查
-  const nextStatus = (updateForm.status || '').trim();
-  const note = (updateForm.note || '').trim();
+    // ✅ 新增：工人完工前置檢查
+    const nextStatus = (updateForm.status || '').trim();
+    const note = (updateForm.note || '').trim();
 
-  if (isWorker && nextStatus === '已完成') {
-    if (!note) {
-      setError('完成任務時請填寫說明（備註）。');
-      return;
+    if (isWorker && nextStatus === '已完成') {
+      if (!note) {
+        setError('完成任務時請填寫說明（備註）。');
+        return;
+      }
+      if (photoAttachments.length === 0) {
+        setError('完成任務時需要至少上傳 1 張照片。');
+        setActiveTab('photos');
+        return;
+      }
     }
-    if (photoAttachments.length === 0) {
-      setError('完成任務時需要至少上傳 1 張照片。');
-      setActiveTab('photos');
-      return;
+
+    if (!updateForm.status && !updateForm.note) return;
+
+    try {
+      const payload = {
+        status: updateForm.status || undefined,
+        note: updateForm.note || undefined,
+      };
+      await api.post(`tasks/${id}/updates`, payload);
+      setUpdateForm({ status: '', note: '' });
+      await loadTask();
+    } catch (err) {
+      const message = err.response?.data?.msg || '更新狀態失敗。';
+      setError(message);
     }
-  }
-
-  if (!updateForm.status && !updateForm.note) return;
-
-  try {
-    const payload = {
-      status: updateForm.status || undefined,
-      note: updateForm.note || undefined,
-    };
-    await api.post(`tasks/${id}/updates`, payload);
-    setUpdateForm({ status: '', note: '' });
-    await loadTask();
-  } catch (err) {
-    const message = err.response?.data?.msg || '更新狀態失敗。';
-    setError(message);
-  }
-};
+  };
 
 
   const handleAssignmentSubmit = async (event) => {

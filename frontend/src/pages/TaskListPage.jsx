@@ -40,10 +40,15 @@ const TaskListPage = () => {
   const [creating, setCreating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [statusFilter, setStatusFilter] = useState('all');
+  const [availableOnly, setAvailableOnly] = useState(false);
+  const [availableTasks, setAvailableTasks] = useState([]);
+  const [loadingAvailable, setLoadingAvailable] = useState(false);
   const [assigningTaskId, setAssigningTaskId] = useState(null);
   const [deletingTaskId, setDeletingTaskId] = useState(null);
+  const [acceptingTaskId, setAcceptingTaskId] = useState(null);
 
   const isManager = managerRoles.has(user?.role);
+  const isWorker = user?.role === 'worker';
 
   const assigneeOptions = useMemo(
     () =>
@@ -72,6 +77,23 @@ const TaskListPage = () => {
     }
   };
 
+  const loadAvailableTasks = async ({ showLoading = true } = {}) => {
+    if (showLoading) {
+      setLoadingAvailable(true);
+    }
+    try {
+      const { data } = await api.get('tasks/', { params: { available: 1 } });
+      setAvailableTasks(data);
+    } catch (err) {
+      const message = err.response?.data?.msg || '無法取得可接單任務。';
+      setError(message);
+    } finally {
+      if (showLoading) {
+        setLoadingAvailable(false);
+      }
+    }
+  };
+
   const loadUsers = async () => {
     if (!isManager) return;
     try {
@@ -85,6 +107,12 @@ const TaskListPage = () => {
   useEffect(() => {
     loadTasks();
   }, []);
+
+  useEffect(() => {
+    if (availableOnly) {
+      loadAvailableTasks();
+    }
+  }, [availableOnly]);
 
   useEffect(() => {
     loadUsers();
@@ -161,8 +189,28 @@ const TaskListPage = () => {
     setRefreshing(true);
     try {
       await loadTasks({ showLoading: false });
+      if (availableOnly) {
+        await loadAvailableTasks({ showLoading: false });
+      }
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const handleAcceptTask = async (taskId) => {
+    setError('');
+    setAcceptingTaskId(taskId);
+    try {
+      await api.post(`tasks/${taskId}/accept`);
+      await loadTasks({ showLoading: false });
+      if (availableOnly) {
+        await loadAvailableTasks({ showLoading: false });
+      }
+    } catch (err) {
+      const message = err.response?.data?.msg || '接單失敗。';
+      setError(message);
+    } finally {
+      setAcceptingTaskId(null);
     }
   };
 
@@ -186,11 +234,14 @@ const TaskListPage = () => {
   };
 
   const filteredTasks = useMemo(() => {
+    if (availableOnly) {
+      return availableTasks;
+    }
     if (statusFilter === 'all') {
       return tasks;
     }
     return tasks.filter((task) => task.status === statusFilter);
-  }, [tasks, statusFilter]);
+  }, [availableOnly, availableTasks, statusFilter, tasks]);
 
   const statusBadgeClass = {
     尚未接單: 'status-badge status-pending',
@@ -201,6 +252,14 @@ const TaskListPage = () => {
 
   const headerActions = isManager ? (
     <div className="task-toolbar">
+      <label>
+        <input
+          type="checkbox"
+          checked={availableOnly}
+          onChange={(event) => setAvailableOnly(event.target.checked)}
+        />
+        只顯示可接單
+      </label>
       <label>
         顯示狀態
         <select
@@ -216,18 +275,30 @@ const TaskListPage = () => {
       </label>
     </div>
   ) : (
-    <button
-      type="button"
-      className="secondary-button"
-      onClick={handleRefresh}
-      disabled={refreshing}
-    >
-      {refreshing ? '刷新中…' : '🔄 刷新任務'}
-    </button>
+    <div className="task-toolbar">
+      <label>
+        <input
+          type="checkbox"
+          checked={availableOnly}
+          onChange={(event) => setAvailableOnly(event.target.checked)}
+        />
+        只顯示可接單
+      </label>
+      <button
+        type="button"
+        className="secondary-button"
+        onClick={handleRefresh}
+        disabled={refreshing}
+      >
+        {refreshing ? '刷新中…' : '🔄 刷新任務'}
+      </button>
+    </div>
   );
 
   const emptyStateMessage =
-    statusFilter === 'all'
+    availableOnly
+      ? '目前沒有可接單任務。'
+      : statusFilter === 'all'
       ? '目前沒有任務。'
       : '此狀態沒有符合的任務。';
 
@@ -325,7 +396,7 @@ const TaskListPage = () => {
       {error && <p className="error-text">{error}</p>}
       <section className="panel">
         <h2>任務列表</h2>
-        {loading ? (
+        {loading || (availableOnly && loadingAvailable) ? (
           <p>載入中...</p>
         ) : filteredTasks.length === 0 ? (
           <p>{emptyStateMessage}</p>
@@ -342,6 +413,8 @@ const TaskListPage = () => {
                 (task.due_date &&
                   task.status !== '已完成' &&
                   new Date(task.due_date).getTime() < Date.now());
+              const canAccept =
+                isWorker && task.status === '尚未接單' && !task.assigned_to_id;
               const hasMissingAssignee =
                 isManager &&
                 taskAssigneeIds.length > 0 &&
@@ -391,6 +464,16 @@ const TaskListPage = () => {
                           </span>
                           {isOverdue && (
                             <span className="status-badge status-overdue">⚠️ 逾期</span>
+                          )}
+                          {canAccept && (
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              onClick={() => handleAcceptTask(task.id)}
+                              disabled={acceptingTaskId === task.id}
+                            >
+                              {acceptingTaskId === task.id ? '接單中…' : '接單'}
+                            </button>
                           )}
                         </>
                       )}
