@@ -69,6 +69,12 @@ const AdminPage = () => {
   const [lineSettingsBusy, setLineSettingsBusy] = useState(false);
   const [lineSettingsMessage, setLineSettingsMessage] = useState(null);
 
+  const [siteLocations, setSiteLocations] = useState([]);
+  const [siteLocationForm, setSiteLocationForm] = useState({ name: '', map_url: '' });
+  const [siteLocationEdits, setSiteLocationEdits] = useState({});
+  const [siteLocationBusy, setSiteLocationBusy] = useState(false);
+  const [siteLocationMessage, setSiteLocationMessage] = useState(null);
+
   useEffect(() => {
     setRoleNameEdits({ ...labels });
   }, [labels]);
@@ -277,10 +283,134 @@ const AdminPage = () => {
     setLineSettings((prev) => ({ ...prev, status_targets: [...lineStatusOptions] }));
   };
 
+  const loadSiteLocations = async () => {
+    setSiteLocationMessage(null);
+    try {
+      const { data } = await api.get('site-locations');
+      const list = Array.isArray(data) ? data : data?.locations ?? [];
+      setSiteLocations(list);
+      setSiteLocationEdits(
+        list.reduce((acc, item) => {
+          acc[item.id] = {
+            name: item.name ?? '',
+            map_url: item.map_url ?? '',
+          };
+          return acc;
+        }, {}),
+      );
+    } catch (err) {
+      const message = err.response?.data?.msg || '無法取得常用地點清單。';
+      setSiteLocationMessage({ type: 'error', text: message });
+    }
+  };
+
+  const handleSiteLocationFormChange = (field, value) => {
+    setSiteLocationMessage(null);
+    setSiteLocationForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleSiteLocationEditChange = (id, field, value) => {
+    setSiteLocationMessage(null);
+    setSiteLocationEdits((prev) => ({
+      ...prev,
+      [id]: {
+        ...prev[id],
+        [field]: value,
+      },
+    }));
+  };
+
+  const validateMapUrl = (value) => {
+    const trimmed = (value || '').trim();
+    if (!trimmed) return '';
+    if (!/^https?:\/\//i.test(trimmed)) {
+      return 'Google Maps 連結需包含 http 或 https。';
+    }
+    return '';
+  };
+
+  const handleSiteLocationCreate = async (event) => {
+    event.preventDefault();
+    const name = siteLocationForm.name.trim();
+    const mapUrl = siteLocationForm.map_url.trim();
+    if (!name) {
+      setSiteLocationMessage({ type: 'error', text: '請輸入地點名稱。' });
+      return;
+    }
+
+    const urlError = validateMapUrl(mapUrl);
+    if (urlError) {
+      setSiteLocationMessage({ type: 'error', text: urlError });
+      return;
+    }
+
+    setSiteLocationBusy(true);
+    setSiteLocationMessage(null);
+    try {
+      await api.post('site-locations', { name, map_url: mapUrl || null });
+      setSiteLocationForm({ name: '', map_url: '' });
+      await loadSiteLocations();
+      setSiteLocationMessage({ type: 'success', text: '已新增常用地點。' });
+    } catch (err) {
+      const message = err.response?.data?.msg || '新增常用地點失敗。';
+      setSiteLocationMessage({ type: 'error', text: message });
+    } finally {
+      setSiteLocationBusy(false);
+    }
+  };
+
+  const handleSiteLocationSave = async (locationId) => {
+    const edits = siteLocationEdits[locationId] || {};
+    const name = (edits.name || '').trim();
+    const mapUrl = (edits.map_url || '').trim();
+    if (!name) {
+      setSiteLocationMessage({ type: 'error', text: '請輸入地點名稱。' });
+      return;
+    }
+
+    const urlError = validateMapUrl(mapUrl);
+    if (urlError) {
+      setSiteLocationMessage({ type: 'error', text: urlError });
+      return;
+    }
+
+    setSiteLocationBusy(true);
+    setSiteLocationMessage(null);
+    try {
+      await api.put(`site-locations/${locationId}`, { name, map_url: mapUrl || null });
+      await loadSiteLocations();
+      setSiteLocationMessage({ type: 'success', text: '已更新地點資訊。' });
+    } catch (err) {
+      const message = err.response?.data?.msg || '更新地點資訊失敗。';
+      setSiteLocationMessage({ type: 'error', text: message });
+    } finally {
+      setSiteLocationBusy(false);
+    }
+  };
+
+  const handleSiteLocationDelete = async (locationId) => {
+    if (!window.confirm('確定要刪除此地點？')) {
+      return;
+    }
+    setSiteLocationBusy(true);
+    setSiteLocationMessage(null);
+    try {
+      await api.delete(`site-locations/${locationId}`);
+      await loadSiteLocations();
+      setSiteLocationMessage({ type: 'success', text: '已刪除地點。' });
+    } catch (err) {
+      const message = err.response?.data?.msg || '刪除地點失敗。';
+      setSiteLocationMessage({ type: 'error', text: message });
+    } finally {
+      setSiteLocationBusy(false);
+    }
+  };
+
   useEffect(() => {
     loadUsers();
     loadEmailSettings();
     loadLineSettings();
+    loadSiteLocations();
   }, []);
 
   const handleExport = async () => {
@@ -626,6 +756,112 @@ const AdminPage = () => {
                 </div>
               </div>
             </div>
+          </section>
+
+          <section className="panel panel--contrast panel--wide">
+            <div className="panel-header">
+              <h2>常用地點管理</h2>
+              <span className="panel-tag">Google Maps</span>
+            </div>
+            <p className="panel-hint">管理派工表單顯示的常用地點與地圖連結。</p>
+            {siteLocationMessage ? (
+              <p className={siteLocationMessage.type === 'error' ? 'error-text' : 'success-text'}>
+                {siteLocationMessage.text}
+              </p>
+            ) : null}
+            <form className="stack location-form" onSubmit={handleSiteLocationCreate}>
+              <label>
+                地點名稱
+                <input
+                  value={siteLocationForm.name}
+                  onChange={(event) => handleSiteLocationFormChange('name', event.target.value)}
+                  placeholder="例如：台北廠房 A 區"
+                  disabled={siteLocationBusy}
+                  required
+                />
+              </label>
+              <label>
+                Google Maps 連結（選填）
+                <input
+                  value={siteLocationForm.map_url}
+                  onChange={(event) => handleSiteLocationFormChange('map_url', event.target.value)}
+                  placeholder="https://maps.google.com/..."
+                  disabled={siteLocationBusy}
+                />
+              </label>
+              <button type="submit" disabled={siteLocationBusy}>
+                {siteLocationBusy ? '儲存中…' : '新增常用地點'}
+              </button>
+            </form>
+
+            {siteLocations.length === 0 ? (
+              <p className="panel-hint">尚未新增常用地點。</p>
+            ) : (
+              <div className="location-list">
+                {siteLocations.map((location) => {
+                  const edits = siteLocationEdits[location.id] || {
+                    name: location.name ?? '',
+                    map_url: location.map_url ?? '',
+                  };
+                  const isDirty =
+                    edits.name?.trim() !== (location.name ?? '') ||
+                    edits.map_url?.trim() !== (location.map_url ?? '');
+
+                  return (
+                    <div key={location.id} className="location-item">
+                      <div className="location-item__meta">
+                        <strong>{location.name}</strong>
+                        {location.map_url ? (
+                          <a href={location.map_url} target="_blank" rel="noreferrer">
+                            開啟地圖
+                          </a>
+                        ) : (
+                          <span>未設定地圖連結</span>
+                        )}
+                      </div>
+                      <label>
+                        地點名稱
+                        <input
+                          value={edits.name}
+                          onChange={(event) =>
+                            handleSiteLocationEditChange(location.id, 'name', event.target.value)
+                          }
+                          disabled={siteLocationBusy}
+                        />
+                      </label>
+                      <label>
+                        Google Maps 連結
+                        <input
+                          value={edits.map_url}
+                          onChange={(event) =>
+                            handleSiteLocationEditChange(location.id, 'map_url', event.target.value)
+                          }
+                          placeholder="https://maps.google.com/..."
+                          disabled={siteLocationBusy}
+                        />
+                      </label>
+                      <div className="location-item__actions">
+                        <button
+                          type="button"
+                          onClick={() => handleSiteLocationSave(location.id)}
+                          disabled={siteLocationBusy || !isDirty}
+                        >
+                          {siteLocationBusy ? '儲存中…' : '儲存變更'}
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => handleSiteLocationDelete(location.id)}
+                          disabled={siteLocationBusy}
+                        >
+                          刪除
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </section>
 
           <section className="panel panel--contrast">

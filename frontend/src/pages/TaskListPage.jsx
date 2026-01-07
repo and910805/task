@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Select from 'react-select';
+import CreatableSelect from 'react-select/creatable';
 
 import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
@@ -19,6 +20,7 @@ const initialForm = {
   title: '',
   description: '',
   location: '',
+  location_url: '',
   expected_time: '',
   status: '尚未接單',
   assignee_ids: [],
@@ -43,6 +45,8 @@ const TaskListPage = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [siteLocations, setSiteLocations] = useState([]);
+  const [loadingLocations, setLoadingLocations] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [statusFilter, setStatusFilter] = useState('all');
   const [availableOnly, setAvailableOnly] = useState(false);
@@ -70,6 +74,26 @@ const TaskListPage = () => {
       })),
     [users, labels],
   );
+
+  const locationOptions = useMemo(
+    () =>
+      siteLocations.map((location) => ({
+        value: location.name,
+        label: location.name,
+        map_url: location.map_url || null,
+      })),
+    [siteLocations],
+  );
+
+  const selectedLocation = useMemo(() => {
+    if (!form.location) return null;
+    return (
+      locationOptions.find((option) => option.value === form.location) || {
+        value: form.location,
+        label: form.location,
+      }
+    );
+  }, [form.location, locationOptions]);
 
   const loadTasks = async ({ showLoading = true } = {}) => {
     if (showLoading) {
@@ -116,6 +140,20 @@ const TaskListPage = () => {
     }
   };
 
+  const loadSiteLocations = async () => {
+    if (!isManager) return;
+    setLoadingLocations(true);
+    try {
+      const { data } = await api.get('site-locations');
+      const list = Array.isArray(data) ? data : data?.locations ?? [];
+      setSiteLocations(list);
+    } catch (err) {
+      console.error('無法取得常用地點', err);
+    } finally {
+      setLoadingLocations(false);
+    }
+  };
+
   useEffect(() => {
     loadTasks();
   }, []);
@@ -128,6 +166,10 @@ const TaskListPage = () => {
 
   useEffect(() => {
     loadUsers();
+  }, [isManager]);
+
+  useEffect(() => {
+    loadSiteLocations();
   }, [isManager]);
 
   useEffect(() => {
@@ -145,6 +187,7 @@ const TaskListPage = () => {
     const trimmedTitle = form.title.trim();
     const trimmedDescription = form.description.trim();
     const trimmedLocation = form.location.trim();
+    const trimmedLocationUrl = form.location_url.trim();
 
     if (!trimmedTitle || !trimmedDescription || !trimmedLocation || !form.expected_time) {
       setError('請完整填寫任務名稱、地點、描述與預計完成時間。');
@@ -162,6 +205,7 @@ const TaskListPage = () => {
         title: trimmedTitle,
         description: trimmedDescription,
         location: trimmedLocation,
+        location_url: trimmedLocationUrl || null,
         expected_time: expectedDate.toISOString(),
         status: form.status,
         assignee_ids: form.assignee_ids.map(Number),
@@ -434,12 +478,52 @@ const TaskListPage = () => {
               </label>
               <label>
                 任務地點
+                <CreatableSelect
+                  classNamePrefix="location-select"
+                  placeholder="選擇或搜尋常用地點"
+                  options={locationOptions}
+                  value={selectedLocation}
+                  isClearable
+                  isSearchable
+                  isLoading={loadingLocations}
+                  formatCreateLabel={(value) => `新增「${value}」`}
+                  noOptionsMessage={() => '沒有符合的地點'}
+                  onChange={(option) =>
+                    setForm((prev) => ({ ...prev, location: option?.value || '' }))
+                  }
+                  onCreateOption={(inputValue) =>
+                    setForm((prev) => ({ ...prev, location: inputValue }))
+                  }
+                />
+                {selectedLocation?.map_url ? (
+                  <a
+                    href={selectedLocation.map_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-link"
+                  >
+                    查看 Google Maps
+                  </a>
+                ) : null}
+              </label>
+              <label>
+                地圖連結
                 <input
-                  name="location"
-                  value={form.location}
+                  type="url"
+                  name="location_url"
+                  value={form.location_url}
                   onChange={handleChange}
-                  placeholder="輸入地點"
-                  required
+                  placeholder="可貼上 Google 地圖連結"
+                />
+              </label>
+              <label>
+                地圖連結
+                <input
+                  type="url"
+                  name="location_url"
+                  value={form.location_url}
+                  onChange={handleChange}
+                  placeholder="可貼上 Google 地圖連結"
                 />
               </label>
               <label>

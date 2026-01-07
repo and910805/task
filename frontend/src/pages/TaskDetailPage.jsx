@@ -108,6 +108,7 @@ const TaskDetailPage = () => {
   const [assignmentForm, setAssignmentForm] = useState({
     assignee_ids: [],
     due_date: '',
+    location_url: '',
   });
   const [activeTab, setActiveTab] = useState('info');
   const [photoForm, setPhotoForm] = useState({ file: null, note: '' });
@@ -206,6 +207,7 @@ const TaskDetailPage = () => {
     setAssignmentForm({
       assignee_ids: task.assignee_ids ? [...task.assignee_ids] : [],
       due_date: task.due_date ? toInputDatetimeValue(task.due_date) : '',
+      location_url: task.location_url || '',
     });
   }, [task]);
 
@@ -315,13 +317,20 @@ const TaskDetailPage = () => {
     const note = (updateForm.note || '').trim();
 
     if (isWorker && nextStatus === '已完成') {
+      const missingItems = [];
+
       if (!note) {
-        setError('完成任務時請填寫說明（備註）。');
-        return;
+        missingItems.push('填寫說明（備註）');
       }
       if (photoAttachments.length === 0) {
-        setError('完成任務時需要至少上傳 1 張照片。');
-        setActiveTab('photos');
+        missingItems.push('至少 1 張照片');
+      }
+
+      if (missingItems.length > 0) {
+        setError(`完成任務前請先${missingItems.join('、')}。`);
+        if (missingItems.includes('至少 1 張照片')) {
+          setActiveTab('photos');
+        }
         return;
       }
     }
@@ -351,6 +360,7 @@ const TaskDetailPage = () => {
       const payload = {
         assignee_ids: assignmentForm.assignee_ids.map(Number),
         due_date: assignmentForm.due_date || null,
+        location_url: assignmentForm.location_url.trim() || null,
       };
       await api.put(`tasks/${id}`, payload);
       setAssignmentSuccess('任務指派資訊已更新。');
@@ -748,6 +758,14 @@ const TaskDetailPage = () => {
             <p>建立人：{task.assigned_by || '系統'}</p>
             <p>內容：{task.description || '沒有描述'}</p>
             <p>地點：{task.location}</p>
+            {task.location_url && (
+              <p>
+                地圖連結：
+                <a href={task.location_url} target="_blank" rel="noreferrer">
+                  {task.location_url}
+                </a>
+              </p>
+            )}
             <p>預計完成時間：{formatDateTime(task.expected_time)}</p>
             <p>實際完成時間：{task.completed_at ? formatDateTime(task.completed_at) : '未完成'}</p>
             <p>總工時：{formatHours(task.total_work_hours)} 小時</p>
@@ -787,6 +805,16 @@ const TaskDetailPage = () => {
                     name="due_date"
                     value={assignmentForm.due_date}
                     onChange={handleAssignmentChange}
+                  />
+                </label>
+                <label>
+                  地圖連結
+                  <input
+                    type="url"
+                    name="location_url"
+                    value={assignmentForm.location_url}
+                    onChange={handleAssignmentChange}
+                    placeholder="可貼上 Google 地圖連結"
                   />
                 </label>
                 <button type="submit">儲存指派</button>

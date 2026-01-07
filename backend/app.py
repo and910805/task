@@ -2,6 +2,8 @@ import os
 import sys
 from datetime import timedelta
 
+import click
+
 from flask import Flask, jsonify, redirect, request, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import verify_jwt_in_request
@@ -86,6 +88,7 @@ def create_app() -> Flask:
 
     from routes.auth import auth_bp
     from routes.export import export_bp
+    from routes.locations import site_locations_bp
     from routes.settings import settings_bp
     from routes.tasks import tasks_bp
     from routes.uploads import upload_bp
@@ -97,6 +100,7 @@ def create_app() -> Flask:
     app.register_blueprint(export_bp, url_prefix="/api/export")
     app.register_blueprint(settings_bp, url_prefix="/api/settings")
     app.register_blueprint(line_bp, url_prefix="/api/line")
+    app.register_blueprint(site_locations_bp, url_prefix="/api/site-locations")
 
     @app.route("/api/health")
     def health_check():
@@ -127,8 +131,16 @@ def create_app() -> Flask:
         return send_from_directory(dist_dir, "index.html")
 
     with app.app_context():
-        from models import Attachment, RoleLabel, SiteSetting, Task, TaskUpdate, User
+        from models import Attachment, RoleLabel, SiteLocation, SiteSetting, Task, TaskUpdate, User
         db.create_all()
+
+    @app.cli.command("send-due-reminders")
+    def send_due_reminders() -> None:
+        """Send daily due-date reminders (for cron usage)."""
+        from services.reminders import run_due_task_reminders
+
+        count = run_due_task_reminders()
+        click.echo(f"Sent {count} reminder notifications.")
 
     return app
 

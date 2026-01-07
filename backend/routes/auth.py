@@ -275,6 +275,13 @@ def update_notification_settings():
         user.notification_type = "line"
         user.notification_value = value
 
+    if "reminder_frequency" in data:
+        frequency_raw = data.get("reminder_frequency") or ""
+        frequency = frequency_raw.strip().lower() if isinstance(frequency_raw, str) else ""
+        if frequency not in {"off", "daily", "weekly"}:
+            return jsonify({"msg": "Invalid reminder frequency"}), 400
+        user.reminder_frequency = frequency
+
     db.session.commit()
 
     return jsonify({"msg": "Notification settings updated", "user": user.to_dict()})

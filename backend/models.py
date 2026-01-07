@@ -47,6 +47,7 @@ class User(db.Model):
     updates = db.relationship("TaskUpdate", back_populates="author")
     notification_type = db.Column(db.String(16))
     notification_value = db.Column(db.Text)
+    reminder_frequency = db.Column(db.String(16), default="daily")
 
     def set_password(self, password: str) -> None:
         self.password_hash = generate_password_hash(password)
@@ -79,6 +80,7 @@ class User(db.Model):
             "notification_type": self.notification_type,
             "notification_value": notification_value,
             "notification_hint": notification_hint,
+            "reminder_frequency": self.reminder_frequency or "daily",
         }
 
 
@@ -90,6 +92,7 @@ class Task(db.Model):
     description = db.Column(db.Text, nullable=False)
     status = db.Column(db.String(32), nullable=False, default="尚未接單")
     location = db.Column(db.String(255), nullable=False)
+    location_url = db.Column(db.String(500))
     expected_time = db.Column(db.DateTime, nullable=False)
     completed_at = db.Column(db.DateTime)
     assigned_to_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
@@ -171,6 +174,7 @@ class Task(db.Model):
             "description": self.description,
             "status": self.status,
             "location": self.location,
+            "location_url": self.location_url,
             "expected_time": self.expected_time.isoformat() if self.expected_time else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "assigned_to": self.assignee.username if self.assignee else None,
@@ -361,6 +365,25 @@ class RoleLabel(db.Model):
         return {
             "role": self.role,
             "label": self.label,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class SiteLocation(db.Model):
+    __tablename__ = "site_location"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255), unique=True, nullable=False)
+    map_url = db.Column(db.String(512))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "map_url": self.map_url,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 

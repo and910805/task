@@ -185,8 +185,14 @@ def _handle_text_command(line_user_id: str, reply_token: str, text: str) -> None
             reply_text(reply_token, "目前沒有指派給你的任務。")
             return
 
+        def _format_task_line(task: Task) -> str:
+            base = f"- #{task.id} [{task.status}] {task.title}"
+            if task.location_url:
+                base += f"\n  地圖：{task.location_url}"
+            return base
+
         msg = "你的任務（最近10筆）：\n" + "\n".join(
-            [f"- #{x.id} [{x.status}] {x.title}" for x in tasks]
+            [_format_task_line(x) for x in tasks]
         )
         reply_text(reply_token, msg)
         return

@@ -488,6 +488,40 @@ def _format_task_summary(task: "Task") -> str:
     return base
 
 
+def _format_due_entry(task: "Task") -> str:
+    due_time = task.due_date or task.expected_time
+    if task.due_date:
+        label = "截止時間"
+    else:
+        label = "預計完成時間"
+    due_value = due_time.isoformat() if due_time else "未設定"
+    return f"• {task.title}（{label}：{due_value}）"
+
+
+def notify_task_due_digest(
+    user: "User",
+    *,
+    upcoming: Sequence["Task"],
+    overdue: Sequence["Task"],
+) -> bool:
+    if not upcoming and not overdue:
+        return False
+
+    sections: list[str] = []
+    if upcoming:
+        sections.append(
+            "即將到期任務：\n" + "\n".join(_format_due_entry(task) for task in upcoming)
+        )
+    if overdue:
+        sections.append(
+            "已逾期任務：\n" + "\n".join(_format_due_entry(task) for task in overdue)
+        )
+
+    message = "每日任務提醒\n\n" + "\n\n".join(sections)
+    _dispatch_notifications([user], "任務到期提醒", message, email_kind="reminder")
+    return True
+
+
 def _dispatch_notifications(
     users: Sequence["User"],
     subject: str,

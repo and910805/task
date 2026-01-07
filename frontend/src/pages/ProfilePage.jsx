@@ -20,6 +20,7 @@ const ProfilePage = () => {
     notification_type: user?.notification_type || 'none',
     notification_value:
       user?.notification_type === 'email' ? user?.notification_value || '' : '',
+    reminder_frequency: user?.reminder_frequency || 'daily',
   });
   const [notificationError, setNotificationError] = useState('');
   const [notificationSuccess, setNotificationSuccess] = useState('');
@@ -37,6 +38,7 @@ const ProfilePage = () => {
       notification_type: user?.notification_type || 'none',
       notification_value:
         user?.notification_type === 'email' ? user?.notification_value || '' : '',
+      reminder_frequency: user?.reminder_frequency || 'daily',
     });
   }, [user]);
 
@@ -82,6 +84,11 @@ const ProfilePage = () => {
     setNotificationForm((prev) => ({ ...prev, notification_value: value }));
   };
 
+  const handleReminderFrequencyChange = (event) => {
+    const { value } = event.target;
+    setNotificationForm((prev) => ({ ...prev, reminder_frequency: value }));
+  };
+
   const handleNotificationSubmit = async (event) => {
     event.preventDefault();
     setNotificationError('');
@@ -91,6 +98,7 @@ const ProfilePage = () => {
       await api.put('auth/notification-settings', {
         notification_type: notificationForm.notification_type,
         notification_value: notificationForm.notification_value,
+        reminder_frequency: notificationForm.reminder_frequency,
       });
       setNotificationSuccess('通知設定已更新。');
       await refreshUser();
@@ -235,6 +243,18 @@ const ProfilePage = () => {
               <option value="none">不接收通知</option>
               <option value="email">Email</option>
               <option value="line">LINE</option>
+            </select>
+          </label>
+          <label>
+            提醒頻率
+            <select
+              name="reminder_frequency"
+              value={notificationForm.reminder_frequency}
+              onChange={handleReminderFrequencyChange}
+            >
+              <option value="daily">每日提醒</option>
+              <option value="weekly">每週提醒</option>
+              <option value="off">關閉到期提醒</option>
             </select>
           </label>
           {notificationForm.notification_type === 'email' ? (

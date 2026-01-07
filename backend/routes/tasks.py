@@ -354,6 +354,9 @@ def _handle_create_task(data, creator_id):
     title = (data.get("title") or "").strip()
     description_raw = data.get("description")
     location_raw = data.get("location")
+    location_url_raw = data.get("location_url")
+    if location_url_raw is None and "map_url" in data:
+        location_url_raw = data.get("map_url")
     expected_time_raw = data.get("expected_time")
     status_raw = (data.get("status") or "尚未接單").strip()
     due_date_raw = data.get("due_date")
@@ -370,6 +373,15 @@ def _handle_create_task(data, creator_id):
     if location_error:
         return location_error
     location = location_raw.strip() if isinstance(location_raw, str) else location_raw
+    location_url = None
+    if location_url_raw is not None:
+        location_url = (
+            location_url_raw.strip()
+            if isinstance(location_url_raw, str)
+            else location_url_raw
+        )
+        if location_url == "":
+            location_url = None
 
     expected_time, error_response, status_code = _parse_datetime(
         expected_time_raw, "Expected time", required=True
@@ -396,6 +408,7 @@ def _handle_create_task(data, creator_id):
         description=description,
         status=status_raw,
         location=location,
+        location_url=location_url,
         expected_time=expected_time,
         assigned_to_id=assignee_ids[0] if assignee_ids else None,
         assigned_by_id=creator_id,
@@ -513,6 +526,9 @@ def _apply_task_updates(task: Task, data: dict):
     description = data.get("description")
     status = data.get("status")
     location = data.get("location")
+    location_url = data.get("location_url")
+    if location_url is None and "map_url" in data:
+        location_url = data.get("map_url")
     expected_time_raw = data.get("expected_time")
     assignee_ids, should_update_assignees = _get_assignee_ids_for_update(data)
     due_date_raw = data.get("due_date")
@@ -548,6 +564,14 @@ def _apply_task_updates(task: Task, data: dict):
         if location_error:
             return location_error, summary
         task.location = location.strip() if isinstance(location, str) else location
+
+    if location_url is not None:
+        location_url_value = (
+            location_url.strip() if isinstance(location_url, str) else location_url
+        )
+        if location_url_value == "":
+            location_url_value = None
+        task.location_url = location_url_value
 
     if expected_time_raw is not None:
         expected_time, error_response, status_code = _parse_datetime(
@@ -707,9 +731,11 @@ def add_update(task_id: int):
 
     # ====== ✅ 新增：worker 完工規則（放在 permission 後面） ======
     if status_value == "已完成" and role == "worker":
+        missing_items = []
+
         # 1) 說明必填（trim）
         if not (note_value or "").strip():
-            return jsonify({"msg": "完成任務時請填寫說明（note）"}), 400
+            missing_items.append("填寫說明（備註）")
 
         # 2) 至少一張「自己上傳」的照片
         attachments = list(getattr(task, "attachments", []) or [])
@@ -719,7 +745,13 @@ def add_update(task_id: int):
             and getattr(a, "uploaded_by_id", None) == user_id
         ]
         if not my_images:
-            return jsonify({"msg": "完成任務時需要至少上傳 1 張照片"}), 400
+            missing_items.append("至少 1 張自己上傳的照片")
+
+        if missing_items:
+            return (
+                jsonify({"msg": f"完成任務前缺少：{'、'.join(missing_items)}"}),
+                400,
+            )
     # ====== ✅ 新增結束 ======
 
     was_overdue = task.is_overdue()
