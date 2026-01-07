@@ -20,7 +20,7 @@ from utils import get_current_user_id
 
 tasks_bp = Blueprint("tasks", __name__)
 
-TASK_STATUS_OPTIONS = ["尚未接單", "進行中", "已完成"]
+TASK_STATUS_OPTIONS = ["尚未接單", "已接單", "進行中", "已完成"]
 ALLOWED_STATUSES = set(TASK_STATUS_OPTIONS)
 ALLOWED_ATTACHMENT_TYPES = {"image", "audio", "signature", "other"}
 
@@ -394,6 +394,52 @@ def get_task(task_id: int):
         return permission_error
 
     return jsonify(_serialize_task_for_viewer(task, role, user_id))
+
+
+@tasks_bp.post("/<int:task_id>/accept")
+@jwt_required()
+def accept_task(task_id: int):
+    user_id = get_current_user_id()
+    if user_id is None:
+        return jsonify({"msg": "Invalid authentication token"}), 401
+    role = (get_jwt() or {}).get("role")
+    if role != "worker":
+        return jsonify({"msg": "Only workers can accept tasks"}), 403
+
+    now = datetime.utcnow()
+    updated = (
+        Task.query.filter(
+            Task.id == task_id,
+            Task.status == "尚未接單",
+            Task.assigned_to_id.is_(None),
+        )
+        .update(
+            {
+                "assigned_to_id": user_id,
+                "status": "已接單",
+                "updated_at": now,
+            },
+            synchronize_session=False,
+        )
+    )
+
+    if updated == 0:
+        task = Task.query.get(task_id)
+        if task is None:
+            return jsonify({"msg": "Task not found"}), 404
+        return jsonify({"msg": "任務已被接走或狀態不符合接單條件"}), 409
+
+    db.session.add(TaskUpdate(task_id=task_id, user_id=user_id, status="已接單", note=None))
+    db.session.commit()
+
+    task = (
+        Task.query.options(
+            selectinload(Task.assignees).selectinload(TaskAssignee.user),
+            selectinload(Task.assignee),
+        )
+        .get(task_id)
+    )
+    return jsonify(task.to_dict())
 
 
 def _apply_task_updates(task: Task, data: dict):

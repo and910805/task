@@ -49,8 +49,9 @@ def _help_text() -> str:
         "1) bind <綁定碼>  → 綁定網站帳號\n"
         "2) unbind        → 解除綁定\n"
         "3) tasks         → 列出指派給我的任務\n"
-        "4) start <id>    → 設為進行中\n"
-        "5) done <id> <說明> → 完工（會要求傳照片）\n\n"
+        "4) accept <id>   → 接單（尚未接單且未指派）\n"
+        "5) start <id>    → 設為進行中\n"
+        "6) done <id> <說明> → 完工（會要求傳照片）\n\n"
         "綁定碼請到網站『個人資料』產生。"
     )
 
@@ -216,6 +217,47 @@ def _handle_text_command(line_user_id: str, reply_token: str, text: str) -> None
         reply_text(reply_token, f"已將任務 #{task.id} 設為「進行中」。")
         return
 
+    if t.startswith("accept "):
+        parts = t.split()
+        if len(parts) != 2 or not parts[1].isdigit():
+            reply_text(reply_token, "用法：accept <task_id>")
+            return
+
+        if user.role != "worker":
+            reply_text(reply_token, "只有工人可以接單。")
+            return
+
+        task_id = int(parts[1])
+        now = datetime.utcnow()
+        updated = (
+            Task.query.filter(
+                Task.id == task_id,
+                Task.status == "尚未接單",
+                Task.assigned_to_id.is_(None),
+            )
+            .update(
+                {
+                    "assigned_to_id": user.id,
+                    "status": "已接單",
+                    "updated_at": now,
+                },
+                synchronize_session=False,
+            )
+        )
+
+        if updated == 0:
+            task = Task.query.get(task_id)
+            if task is None:
+                reply_text(reply_token, "找不到任務")
+                return
+            reply_text(reply_token, "任務已被接走或狀態不符合接單條件。")
+            return
+
+        db.session.add(TaskUpdate(task_id=task_id, user_id=user.id, status="已接單", note=None))
+        db.session.commit()
+        reply_text(reply_token, f"已接單任務 #{task_id} ✅")
+        return
+
     if t.startswith("done "):
         parts = t.split(maxsplit=2)
         if len(parts) < 3 or not parts[1].isdigit():
@@ -347,7 +389,7 @@ def webhook():
                     _handle_bind(line_user_id, reply_token, code)
                 elif lower in {"unbind", "解除", "解除綁定"}:
                     _handle_unbind(line_user_id, reply_token)
-                elif lower in {"help", "?", "指令", "幫助"}:
+                elif lower in {"help", "?", "指令", "幫助", "menu", "功能", "功能表"}:
                     reply_text(reply_token, _help_text())
                 else:
                     _handle_text_command(line_user_id, reply_token, text)

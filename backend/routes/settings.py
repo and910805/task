@@ -252,7 +252,7 @@ def _task_status_options() -> list[str]:
         from routes.tasks import TASK_STATUS_OPTIONS
         return list(TASK_STATUS_OPTIONS)
     except Exception:
-        return ["尚未接單", "進行中", "已完成"]
+        return ["尚未接單", "已接單", "進行中", "已完成"]
 
 
 @settings_bp.get("/notifications/email")

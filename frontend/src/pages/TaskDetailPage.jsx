@@ -12,6 +12,7 @@ import { useRoleLabels } from '../context/RoleLabelContext.jsx';
 
 const statusOptions = [
   { value: '尚未接單', label: '尚未接單' },
+  { value: '已接單', label: '已接單' },
   { value: '進行中', label: '進行中' },
   { value: '已完成', label: '已完成' },
 ];
@@ -69,6 +70,7 @@ const TaskDetailPage = () => {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [uploadingAudio, setUploadingAudio] = useState(false);
   const [uploadingSignature, setUploadingSignature] = useState(false);
+  const [acceptingTask, setAcceptingTask] = useState(false);
   const [audioPreviewUrl, setAudioPreviewUrl] = useState('');
   const audioFileInputRef = useRef(null);
 
@@ -164,6 +166,10 @@ const TaskDetailPage = () => {
   const activeEntry = useMemo(
     () => timeEntries.find((entry) => entry.user_id === user?.id && !entry.end_time) || null,
     [timeEntries, user?.id],
+  );
+  const canAcceptTask = useMemo(
+    () => isWorker && task?.status === '尚未接單' && !task?.assigned_to_id,
+    [isWorker, task],
   );
 
   const handleUpdateChange = (event) => {
@@ -402,6 +408,20 @@ const handleStatusSubmit = async (event) => {
     }
   };
 
+  const handleAcceptTask = async () => {
+    setError('');
+    setAcceptingTask(true);
+    try {
+      await api.post(`tasks/${id}/accept`);
+      await loadTask();
+    } catch (err) {
+      const message = err.response?.data?.msg || '接單失敗。';
+      setError(message);
+    } finally {
+      setAcceptingTask(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="page">
@@ -448,6 +468,11 @@ const handleStatusSubmit = async (event) => {
           <section className="panel">
             <h2>任務資訊</h2>
             <p>狀態：{task.status}</p>
+            {canAcceptTask && (
+              <button type="button" onClick={handleAcceptTask} disabled={acceptingTask}>
+                {acceptingTask ? '接單中…' : '接單'}
+              </button>
+            )}
             <div>
               <strong>指派對象：</strong>
               {task.assignees && task.assignees.length > 0 ? (

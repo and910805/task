@@ -35,7 +35,7 @@ DEFAULT_EMAIL_NOTIFICATION_SETTINGS = {
     "send_on_status_change": True,
     # If non-empty, only send status-change emails when the new status is in this list.
     # Empty list means "all statuses".
-    "status_targets": ["尚未接單", "進行中", "已完成"],
+    "status_targets": ["尚未接單", "已接單", "進行中", "已完成"],
     # Optional subject prefix, e.g. "[TaskGo] "
     "subject_prefix": "",
     # Optionally append a task link at the bottom of emails.

@@ -10,6 +10,7 @@ import { useRoleLabels } from '../context/RoleLabelContext.jsx';
 
 const statusOptions = [
   { value: '尚未接單', label: '尚未接單' },
+  { value: '已接單', label: '已接單' },
   { value: '進行中', label: '進行中' },
   { value: '已完成', label: '已完成' },
 ];
@@ -193,6 +194,7 @@ const TaskListPage = () => {
 
   const statusBadgeClass = {
     尚未接單: 'status-badge status-pending',
+    已接單: 'status-badge status-in-progress',
     進行中: 'status-badge status-in-progress',
     已完成: 'status-badge status-completed',
   };

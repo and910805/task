@@ -334,3 +334,27 @@
 ---
 
 如需調整既有模組，請遵循本說明文件中對 API、資料庫與前端互動的定義，確保 JWT、角色權限與 React 表單驗證的行為保持一致。
+## 2026-01 更新：任務完工需「說明 + 照片」與 LINE 指令流程
+
+### 完工規則（後端強制 + 前端預檢）
+- 適用對象：role=worker
+- 觸發條件：POST /api/tasks/<id>/updates status=已完成
+- 必備條件：
+  1) note 必填（trim 後不得為空）
+  2) 任務至少存在 1 張由該 worker 自己上傳的 image 附件（file_type=image 且 uploaded_by_id==worker.id）
+
+### 上傳權限（支援多重指派）
+- worker 只要符合其一即可上傳：
+  - assigned_to_id == user_id
+  - task.assignees 內含 user_id（task_assignee 關聯）
+
+### 前端行為（TaskDetailPage）
+- worker 在 Web UI 選已完成送出前會檢查：note + 至少 1 張照片；不符合會提示並導到 photos tab
+
+### LINE 指令流程（Webhook）
+- tasks / start <id> / done <id> <說明>
+- done 進 pending，收到照片後：下載 bytes → 存 image 附件 → 寫 TaskUpdate(已完成, note) → 更新 task.completed_at
+
+### LINE 相關環境變數
+- LINE_CHANNEL_ACCESS_TOKEN
+- LINE_CHANNEL_SECRET

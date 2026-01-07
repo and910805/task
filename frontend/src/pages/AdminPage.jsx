@@ -7,7 +7,7 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { useBranding } from '../context/BrandingContext.jsx';
 import { useRoleLabels } from '../context/RoleLabelContext.jsx';
 
-const FALLBACK_TASK_STATUSES = ['尚未接單', '進行中', '已完成'];
+const FALLBACK_TASK_STATUSES = ['尚未接單', '已接單', '進行中', '已完成'];
 
 const AdminPage = () => {
   const { user, logout } = useAuth();
