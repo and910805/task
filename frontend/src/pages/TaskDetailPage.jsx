@@ -73,6 +73,8 @@ const TaskDetailPage = () => {
   const audioFileInputRef = useRef(null);
 
   const isManager = useMemo(() => managerRoles.has(user?.role), [user?.role]);
+  const isWorker = useMemo(() => user?.role === 'worker', [user?.role]);
+
 
   const loadTask = async () => {
     setLoading(true);
@@ -181,22 +183,41 @@ const TaskDetailPage = () => {
     }));
   };
 
-  const handleStatusSubmit = async (event) => {
-    event.preventDefault();
-    if (!updateForm.status && !updateForm.note) return;
-    try {
-      const payload = {
-        status: updateForm.status || undefined,
-        note: updateForm.note || undefined,
-      };
-      await api.post(`tasks/${id}/updates`, payload);
-      setUpdateForm({ status: '', note: '' });
-      await loadTask();
-    } catch (err) {
-      const message = err.response?.data?.msg || '更新狀態失敗。';
-      setError(message);
+const handleStatusSubmit = async (event) => {
+  event.preventDefault();
+
+  // ✅ 新增：工人完工前置檢查
+  const nextStatus = (updateForm.status || '').trim();
+  const note = (updateForm.note || '').trim();
+
+  if (isWorker && nextStatus === '已完成') {
+    if (!note) {
+      setError('完成任務時請填寫說明（備註）。');
+      return;
     }
-  };
+    if (photoAttachments.length === 0) {
+      setError('完成任務時需要至少上傳 1 張照片。');
+      setActiveTab('photos');
+      return;
+    }
+  }
+
+  if (!updateForm.status && !updateForm.note) return;
+
+  try {
+    const payload = {
+      status: updateForm.status || undefined,
+      note: updateForm.note || undefined,
+    };
+    await api.post(`tasks/${id}/updates`, payload);
+    setUpdateForm({ status: '', note: '' });
+    await loadTask();
+  } catch (err) {
+    const message = err.response?.data?.msg || '更新狀態失敗。';
+    setError(message);
+  }
+};
+
 
   const handleAssignmentSubmit = async (event) => {
     event.preventDefault();

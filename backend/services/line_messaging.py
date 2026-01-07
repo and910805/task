@@ -4,21 +4,19 @@ import base64
 import hashlib
 import hmac
 import os
-from typing import Any
+from typing import Any, Optional, Tuple
 
 import requests
-from flask import current_app
-
-LINE_API_BASE = "https://api.line.me/v2/bot/message"
-_MAX_TEXT_LEN = 1800
-# backend/services/line_messaging.py
-
-from typing import Optional
 
 try:
     from flask import current_app
 except Exception:
     current_app = None
+
+
+LINE_API_BASE = "https://api.line.me/v2/bot/message"
+LINE_DATA_API_BASE = "https://api-data.line.me/v2/bot/message"
+_MAX_TEXT_LEN = 1800
 
 
 def _cfg(key: str, app=None) -> Optional[str]:
@@ -36,45 +34,24 @@ def _cfg(key: str, app=None) -> Optional[str]:
 
 
 def has_line_config(app=None) -> bool:
-    """
-    True if LINE Messaging API config exists.
-    Adjust env/config keys to match your project.
-    """
-    token = _cfg("LINE_CHANNEL_ACCESS_TOKEN", app=app)
-    secret = _cfg("LINE_CHANNEL_SECRET", app=app)
+    """True if both LINE token & secret exist."""
+    token = (_cfg("LINE_CHANNEL_ACCESS_TOKEN", app=app) or "").strip()
+    secret = (_cfg("LINE_CHANNEL_SECRET", app=app) or "").strip()
     return bool(token and secret)
 
 
-# 保險：如果你 auth.py 也 import push_text，但你服務沒定義，就補一個 noop
-def push_text(to_user_id: str, text: str, app=None) -> bool:
-    """
-    Push a text message via LINE.
-    If not configured, return False (do not raise).
-    """
-    if not has_line_config(app=app):
-        return False
-
-    # 這裡根據你原本的實作調整：
-    # - 若你已經有 linebot SDK 的 push_message，就改成呼叫它
-    # - 若沒有，先用 requests 打 LINE Messaging API
-    import requests
-
-    token = _cfg("LINE_CHANNEL_ACCESS_TOKEN", app=app)
-    url = "https://api.line.me/v2/bot/message/push"
-    payload = {"to": to_user_id, "messages": [{"type": "text", "text": text}]}
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    r = requests.post(url, json=payload, headers=headers, timeout=10)
-    return r.status_code // 100 == 2
+def has_line_bot_config(app=None) -> bool:
+    """True if LINE Messaging API access token exists."""
+    token = (_cfg("LINE_CHANNEL_ACCESS_TOKEN", app=app) or "").strip()
+    return bool(token)
 
 
-def has_line_bot_config() -> bool:
-    """Return True if the LINE Messaging API token is configured."""
-    return bool((os.getenv("LINE_CHANNEL_ACCESS_TOKEN") or "").strip())
-
-
-def _headers() -> dict[str, str]:
-    token = (os.getenv("LINE_CHANNEL_ACCESS_TOKEN") or "").strip()
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+def _headers(app=None, *, json_content: bool = True) -> dict[str, str]:
+    token = (_cfg("LINE_CHANNEL_ACCESS_TOKEN", app=app) or "").strip()
+    headers = {"Authorization": f"Bearer {token}"}
+    if json_content:
+        headers["Content-Type"] = "application/json"
+    return headers
 
 
 def verify_signature(body: bytes, signature: str, channel_secret: str) -> bool:
@@ -93,35 +70,69 @@ def _truncate_text(text: str) -> str:
     return text[: _MAX_TEXT_LEN - 1] + "…"
 
 
-def reply_text(reply_token: str, text: str) -> None:
-    """Reply to a webhook event."""
-    if not has_line_bot_config() or not reply_token:
-        return
+def reply_text(reply_token: str, text: str, app=None) -> bool:
+    """Reply to a webhook event. Return True if 2xx."""
+    if not has_line_bot_config(app=app) or not reply_token:
+        return False
+
     url = f"{LINE_API_BASE}/reply"
     payload: dict[str, Any] = {
         "replyToken": reply_token,
         "messages": [{"type": "text", "text": _truncate_text(text)}],
     }
+
     try:
-        r = requests.post(url, headers=_headers(), json=payload, timeout=10)
-        if r.status_code >= 400:
+        r = requests.post(url, headers=_headers(app=app), json=payload, timeout=10)
+        if r.status_code >= 400 and current_app is not None:
             current_app.logger.warning("LINE reply failed: %s %s", r.status_code, r.text)
+        return r.status_code // 100 == 2
     except Exception as exc:  # pragma: no cover
-        current_app.logger.warning("LINE reply exception: %s", exc)
+        if current_app is not None:
+            current_app.logger.warning("LINE reply exception: %s", exc)
+        return False
 
 
-def push_text(to_user_id: str, text: str) -> None:
-    """Push a text message to a LINE userId (starts with 'U')."""
-    if not has_line_bot_config() or not to_user_id:
-        return
+def push_text(to_user_id: str, text: str, app=None) -> bool:
+    """Push a text message to a LINE userId (starts with 'U'). Return True if 2xx."""
+    if not has_line_bot_config(app=app) or not to_user_id:
+        return False
+
     url = f"{LINE_API_BASE}/push"
     payload: dict[str, Any] = {
         "to": to_user_id,
         "messages": [{"type": "text", "text": _truncate_text(text)}],
     }
+
     try:
-        r = requests.post(url, headers=_headers(), json=payload, timeout=10)
-        if r.status_code >= 400:
+        r = requests.post(url, headers=_headers(app=app), json=payload, timeout=10)
+        if r.status_code >= 400 and current_app is not None:
             current_app.logger.warning("LINE push failed: %s %s", r.status_code, r.text)
+        return r.status_code // 100 == 2
     except Exception as exc:  # pragma: no cover
-        current_app.logger.warning("LINE push exception: %s", exc)
+        if current_app is not None:
+            current_app.logger.warning("LINE push exception: %s", exc)
+        return False
+
+
+def get_message_content_bytes(message_id: str, app=None) -> Tuple[bytes, str]:
+    """
+    Fetch binary content (image/audio/video) from LINE message content API.
+
+    Returns:
+      (content_bytes, content_type)
+
+    Requires:
+      LINE_CHANNEL_ACCESS_TOKEN in env or app.config
+    """
+    if not has_line_bot_config(app=app):
+        raise RuntimeError("LINE_CHANNEL_ACCESS_TOKEN not set")
+
+    url = f"{LINE_DATA_API_BASE}/{message_id}/content"
+    # 注意：抓 binary 時不要強制 Content-Type: application/json
+    headers = _headers(app=app, json_content=False)
+
+    r = requests.get(url, headers=headers, timeout=30)
+    r.raise_for_status()
+
+    content_type = r.headers.get("Content-Type", "application/octet-stream")
+    return r.content, content_type

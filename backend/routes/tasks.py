@@ -545,35 +545,56 @@ def delete_task(task_id: int):
 @jwt_required()
 def add_update(task_id: int):
     task = Task.query.get_or_404(task_id)
-    data = request.get_json() or {}
+
+    data = request.get_json(silent=True) or {}
     status = data.get("status")
     note = data.get("note")
 
     user_id = get_current_user_id()
     role = (get_jwt() or {}).get("role")
+
     permission_error = _ensure_task_permission(
         task, role, user_id, message="You cannot update this task"
     )
     if permission_error:
         return permission_error
 
+    # 基本檢查（你原本的）
     if not status and not note:
         return jsonify({"msg": "Status or note is required"}), 400
 
     if status and status not in ALLOWED_STATUSES:
         return jsonify({"msg": "Invalid status"}), 400
 
+    # ====== ✅ 新增：worker 完工規則（放在 permission 後面） ======
+    if status == "已完成" and role == "worker":
+        # 1) 說明必填（trim）
+        if not (note or "").strip():
+            return jsonify({"msg": "完成任務時請填寫說明（note）"}), 400
+
+        # 2) 至少一張「自己上傳」的照片
+        attachments = list(getattr(task, "attachments", []) or [])
+        my_images = [
+            a for a in attachments
+            if getattr(a, "file_type", None) == "image"
+            and getattr(a, "uploaded_by_id", None) == user_id
+        ]
+        if not my_images:
+            return jsonify({"msg": "完成任務時需要至少上傳 1 張照片"}), 400
+    # ====== ✅ 新增結束 ======
+
     update = TaskUpdate(task_id=task.id, user_id=user_id, status=status, note=note)
     task.updated_at = datetime.utcnow()
+
     status_changed = False
     if status:
         status_changed, error = _apply_task_status(task, status)
         if error:
             return error
         if not status_changed:
-            # ensure completed_at stays populated even if status matches but field missing
             if status == "已完成" and task.completed_at is None:
                 task.completed_at = datetime.utcnow()
+
     db.session.add(update)
     db.session.commit()
 
@@ -583,6 +604,7 @@ def add_update(task_id: int):
         notify_task_status_change(task, recipients, updated_by=actor)
 
     return jsonify(update.to_dict()), 201
+
 
 
 @tasks_bp.post("/<int:task_id>/time/start")

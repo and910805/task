@@ -22,13 +22,33 @@ from storage import StorageError
 upload_bp = Blueprint("upload", __name__)
 
 
+def _worker_can_access_task(task: Task, user_id: int) -> bool:
+    # 單一指派
+    if getattr(task, "assigned_to_id", None) == user_id:
+        return True
+
+    # 多重指派（task.assignees: List[TaskAssignee]）
+    for a in (getattr(task, "assignees", None) or []):
+        if getattr(a, "user_id", None) == user_id:
+            return True
+
+    return False
+
+
 def _check_task_permission(task: Task, *, message: str):
     role = (get_jwt() or {}).get("role")
     user_id = get_current_user_id()
     if user_id is None:
         return None, jsonify({"msg": "Invalid authentication token"}), 401
-    if role == "worker" and task.assigned_to_id != user_id:
+
+    # admin 直接放行
+    if role == "admin":
+        return user_id, None, None
+
+    # worker：單一指派 or 多重指派
+    if role == "worker" and not _worker_can_access_task(task, user_id):
         return None, jsonify({"msg": message}), 403
+
     return user_id, None, None
 
 
@@ -183,4 +203,3 @@ def download_file(filename: str):
     if not _has_valid_download_token():
         return jsonify({"msg": "Missing or invalid authentication token"}), 401
     return _serve_file(filename)
-
