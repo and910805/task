@@ -111,10 +111,14 @@ const TaskDetailPage = () => {
   const [timeError, setTimeError] = useState('');
   const [timeLoading, setTimeLoading] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [photoProcessing, setPhotoProcessing] = useState(false);
   const [uploadingAudio, setUploadingAudio] = useState(false);
   const [uploadingSignature, setUploadingSignature] = useState(false);
   const [acceptingTask, setAcceptingTask] = useState(false);
   const [audioPreviewUrl, setAudioPreviewUrl] = useState('');
+  const [photoPreviewUrl, setPhotoPreviewUrl] = useState('');
+  const [photoPreviewMeta, setPhotoPreviewMeta] = useState(null);
+  const photoFileInputRef = useRef(null);
   const audioFileInputRef = useRef(null);
 
   const isManager = useMemo(() => managerRoles.has(user?.role), [user?.role]);
@@ -221,6 +225,15 @@ const TaskDetailPage = () => {
     () => resolvedAttachments.filter((item) => item.file_type === 'image'),
     [resolvedAttachments],
   );
+  const latestPhotoAttachment = useMemo(() => {
+    if (photoAttachments.length === 0) return null;
+    return [...photoAttachments].sort((a, b) => {
+      const aTime = a.uploaded_at ? new Date(a.uploaded_at).getTime() : 0;
+      const bTime = b.uploaded_at ? new Date(b.uploaded_at).getTime() : 0;
+      if (aTime !== bTime) return bTime - aTime;
+      return (b.id || 0) - (a.id || 0);
+    })[0];
+  }, [photoAttachments]);
   const audioAttachments = useMemo(
     () => resolvedAttachments.filter((item) => item.file_type === 'audio'),
     [resolvedAttachments],
@@ -317,14 +330,94 @@ const TaskDetailPage = () => {
     }
   };
 
-  const handlePhotoFileChange = (event) => {
+  const clearPhotoPreview = useCallback(() => {
+    if (photoPreviewUrl) {
+      URL.revokeObjectURL(photoPreviewUrl);
+    }
+    setPhotoPreviewUrl('');
+    setPhotoPreviewMeta(null);
+  }, [photoPreviewUrl]);
+
+  const loadImageFromFile = (file) =>
+    new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve(img);
+      };
+      img.onerror = (error) => {
+        URL.revokeObjectURL(url);
+        reject(error);
+      };
+      img.src = url;
+    });
+
+  const compressImage = useCallback(async (file) => {
+    const maxDimension = 1600;
+    const quality = 0.82;
+    const image = await loadImageFromFile(file);
+    const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
+    const targetWidth = Math.round(image.width * scale);
+    const targetHeight = Math.round(image.height * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('無法建立畫布進行壓縮');
+    }
+    context.drawImage(image, 0, 0, targetWidth, targetHeight);
+    const outputType = file.type && file.type.startsWith('image/') ? file.type : 'image/jpeg';
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob(
+        (result) => {
+          if (result) {
+            resolve(result);
+          } else {
+            reject(new Error('壓縮失敗'));
+          }
+        },
+        outputType,
+        quality,
+      );
+    });
+    return new File([blob], file.name, { type: outputType });
+  }, []);
+
+  const handlePhotoFileChange = async (event) => {
     const file = event.target.files?.[0] || null;
-    setPhotoForm((prev) => ({ ...prev, file }));
+    clearPhotoPreview();
+    if (!file) {
+      setPhotoForm((prev) => ({ ...prev, file: null }));
+      return;
+    }
+    setPhotoProcessing(true);
+    try {
+      const compressed = await compressImage(file);
+      const previewUrl = URL.createObjectURL(compressed);
+      setPhotoPreviewUrl(previewUrl);
+      setPhotoPreviewMeta({
+        name: compressed.name,
+        size: compressed.size,
+        type: compressed.type,
+        originalSize: file.size,
+      });
+      setPhotoForm((prev) => ({ ...prev, file: compressed }));
+    } catch (err) {
+      setError('照片壓縮失敗，請重新選擇檔案。');
+      setPhotoForm((prev) => ({ ...prev, file: null }));
+      if (photoFileInputRef.current) {
+        photoFileInputRef.current.value = '';
+      }
+    } finally {
+      setPhotoProcessing(false);
+    }
   };
 
   const handlePhotoUpload = async (event) => {
     event.preventDefault();
-    if (!photoForm.file) return;
+    if (!photoForm.file || photoProcessing) return;
     setUploadingPhoto(true);
     try {
       const formData = new FormData();
@@ -336,6 +429,10 @@ const TaskDetailPage = () => {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setPhotoForm({ file: null, note: '' });
+      clearPhotoPreview();
+      if (photoFileInputRef.current) {
+        photoFileInputRef.current.value = '';
+      }
       await loadTask();
     } catch (err) {
       const message = getErrorMessage(err, '上傳照片失敗。');
@@ -352,6 +449,15 @@ const TaskDetailPage = () => {
       }
     },
     [audioPreviewUrl],
+  );
+
+  useEffect(
+    () => () => {
+      if (photoPreviewUrl) {
+        URL.revokeObjectURL(photoPreviewUrl);
+      }
+    },
+    [photoPreviewUrl],
   );
 
   const clearAudioPreview = useCallback(() => {
@@ -721,6 +827,21 @@ const TaskDetailPage = () => {
       {activeTab === 'photos' && (
         <section className="panel">
           <h2>📷 照片紀錄</h2>
+          {latestPhotoAttachment && (
+            <div className="attachment-preview">
+              <p>最新照片</p>
+              <figure>
+                <img
+                  src={latestPhotoAttachment.url}
+                  alt={latestPhotoAttachment.original_name}
+                />
+                <figcaption>
+                  {latestPhotoAttachment.original_name}
+                  {latestPhotoAttachment.note && <span>（{latestPhotoAttachment.note}）</span>}
+                </figcaption>
+              </figure>
+            </div>
+          )}
           {photoAttachments.length === 0 ? (
             <p>尚未上傳照片。</p>
           ) : (
@@ -750,9 +871,34 @@ const TaskDetailPage = () => {
             </label>
             <label>
               選擇照片
-              <input type="file" accept="image/*" onChange={handlePhotoFileChange} />
+              <input
+                ref={photoFileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handlePhotoFileChange}
+              />
             </label>
-            <button type="submit" disabled={!photoForm.file || uploadingPhoto}>
+            {photoProcessing && <p className="hint-text">照片處理中…</p>}
+            {photoPreviewUrl && photoPreviewMeta && (
+              <div className="attachment-preview">
+                <p>
+                  壓縮後預覽：<strong>{photoPreviewMeta.name}</strong>{' '}
+                  <span>
+                    （
+                    {photoPreviewMeta.size
+                      ? `${(photoPreviewMeta.size / 1024).toFixed(1)} KB`
+                      : '大小未知'}
+                    ，原始檔
+                    {photoPreviewMeta.originalSize
+                      ? `${(photoPreviewMeta.originalSize / 1024).toFixed(1)} KB`
+                      : '未知'}
+                    ）
+                  </span>
+                </p>
+                <img src={photoPreviewUrl} alt="上傳照片預覽" />
+              </div>
+            )}
+            <button type="submit" disabled={!photoForm.file || uploadingPhoto || photoProcessing}>
               {uploadingPhoto ? '上傳中…' : '上傳照片'}
             </button>
           </form>
