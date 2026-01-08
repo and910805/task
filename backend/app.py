@@ -136,10 +136,8 @@ def create_app() -> Flask:
         from models import Attachment, RoleLabel, SiteLocation, SiteSetting, Task, TaskUpdate, User
         db.create_all()
         _ensure_user_reminder_frequency_column()
-<<<<<<< ours
-=======
         _ensure_task_location_url_column()
->>>>>>> theirs
+
 
     @app.cli.command("send-due-reminders")
     def send_due_reminders() -> None:
@@ -170,8 +168,7 @@ def _ensure_user_reminder_frequency_column() -> None:
     db.session.commit()
 
 
-<<<<<<< ours
-=======
+
 def _ensure_task_location_url_column() -> None:
     inspector = inspect(db.engine)
     if "task" not in inspector.get_table_names():
@@ -187,7 +184,6 @@ def _ensure_task_location_url_column() -> None:
     db.session.commit()
 
 
->>>>>>> theirs
 app = create_app()
 
 if __name__ == "__main__":
