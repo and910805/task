@@ -3,6 +3,8 @@ import sys
 from datetime import timedelta
 
 import click
+from sqlalchemy import text
+from sqlalchemy import inspect
 
 from flask import Flask, jsonify, redirect, request, send_from_directory
 from flask_cors import CORS
@@ -133,6 +135,7 @@ def create_app() -> Flask:
     with app.app_context():
         from models import Attachment, RoleLabel, SiteLocation, SiteSetting, Task, TaskUpdate, User
         db.create_all()
+        _ensure_user_reminder_frequency_column()
 
     @app.cli.command("send-due-reminders")
     def send_due_reminders() -> None:
@@ -143,6 +146,24 @@ def create_app() -> Flask:
         click.echo(f"Sent {count} reminder notifications.")
 
     return app
+
+
+def _ensure_user_reminder_frequency_column() -> None:
+    inspector = inspect(db.engine)
+    if "user" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("user")}
+    if "reminder_frequency" in columns:
+        return
+    if db.engine.dialect.name != "sqlite":
+        return
+    db.session.execute(
+        text("ALTER TABLE user ADD COLUMN reminder_frequency VARCHAR(16)")
+    )
+    db.session.execute(
+        text("UPDATE user SET reminder_frequency = 'daily' WHERE reminder_frequency IS NULL")
+    )
+    db.session.commit()
 
 
 app = create_app()
