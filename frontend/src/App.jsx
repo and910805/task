@@ -11,6 +11,7 @@ import TaskDetailPage from './pages/TaskDetailPage.jsx';
 import TaskListPage from './pages/TaskListPage.jsx';
 import AdminPage from './pages/AdminPage.jsx';
 import ProfilePage from './pages/ProfilePage.jsx';
+import TaskCalendarPage from './pages/TaskCalendarPage.jsx';
 import './App.css';
 
 const PrivateRoute = ({ children, roles }) => {
@@ -53,6 +54,14 @@ const AppRoutes = () => (
       element={(
         <PrivateRoute>
           <ProfilePage />
+        </PrivateRoute>
+      )}
+    />
+    <Route
+      path="/calendar"
+      element={(
+        <PrivateRoute>
+          <TaskCalendarPage />
         </PrivateRoute>
       )}
     />

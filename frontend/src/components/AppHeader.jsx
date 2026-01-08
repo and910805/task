@@ -44,6 +44,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
         </select>
         <nav className="header-nav">
           <Link to="/">任務列表</Link>
+          <Link to="/calendar">排程視圖</Link>
           {isAdmin ? <Link to="/admin">使用者管理</Link> : null}
           <Link to="/profile">個人資料</Link>
         </nav>

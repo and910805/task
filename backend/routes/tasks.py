@@ -1,10 +1,10 @@
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, current_app, jsonify, redirect, request, send_file
 from flask_jwt_extended import get_jwt, jwt_required
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import selectinload
 
 from decorators import role_required
@@ -211,6 +211,97 @@ def _load_assignee_users(assignee_ids: list[int]):
     return user_map, None
 
 
+def _parse_estimated_hours(value):
+    if value in (None, ""):
+        return None, None
+    try:
+        hours = float(value)
+    except (TypeError, ValueError):
+        return None, (jsonify({"msg": "Estimated hours must be a number"}), 400)
+    if hours <= 0:
+        return None, (jsonify({"msg": "Estimated hours must be positive"}), 400)
+    return hours, None
+
+
+def _schedule_window_end(
+    expected_time: datetime | None,
+    due_date: datetime | None,
+    estimated_hours: float | None,
+) -> datetime | None:
+    if expected_time is None:
+        return None
+    if due_date is not None:
+        return due_date
+    if estimated_hours:
+        return expected_time + timedelta(hours=estimated_hours)
+    return expected_time
+
+
+def _format_conflict_message(conflicts: list[Task], assignee_ids: set[int]) -> tuple[str, list[dict]]:
+    details = []
+    lines = []
+    for conflict in conflicts:
+        overlap_ids = _task_assigned_user_ids(conflict) & assignee_ids
+        overlap_names = []
+        if conflict.assignee and conflict.assignee.id in overlap_ids:
+            overlap_names.append(conflict.assignee.username)
+        for assignment in conflict.assignees:
+            if assignment.user and assignment.user.id in overlap_ids:
+                overlap_names.append(assignment.user.username)
+        overlap_names = sorted(set(overlap_names))
+        end_time = conflict.due_date or conflict.expected_time
+        details.append(
+            {
+                "task_id": conflict.id,
+                "title": conflict.title,
+                "expected_time": conflict.expected_time.isoformat()
+                if conflict.expected_time
+                else None,
+                "due_date": conflict.due_date.isoformat() if conflict.due_date else None,
+                "assignee_ids": sorted(overlap_ids),
+                "assignee_names": overlap_names,
+            }
+        )
+        name_label = "、".join(overlap_names) or "指定工人"
+        range_label = (
+            f"{conflict.expected_time.isoformat()} ~ {end_time.isoformat()}"
+            if end_time
+            else conflict.expected_time.isoformat()
+        )
+        lines.append(f"{name_label} 與「{conflict.title}」({range_label})")
+
+    return f"排程衝突：{'；'.join(lines)}", details
+
+
+def _find_schedule_conflicts(
+    expected_time: datetime | None,
+    window_end: datetime | None,
+    assignee_ids: list[int],
+    *,
+    exclude_task_id: int | None = None,
+) -> list[Task]:
+    if expected_time is None or window_end is None or not assignee_ids:
+        return []
+
+    assignee_set = set(assignee_ids)
+    end_expr = func.coalesce(Task.due_date, Task.expected_time)
+    query = (
+        Task.query.options(
+            selectinload(Task.assignees).selectinload(TaskAssignee.user),
+            selectinload(Task.assignee),
+        )
+        .outerjoin(TaskAssignee, TaskAssignee.task_id == Task.id)
+        .filter(Task.status != "已完成")
+        .filter(
+            or_(Task.assigned_to_id.in_(assignee_set), TaskAssignee.user_id.in_(assignee_set))
+        )
+        .filter(Task.expected_time <= window_end, end_expr >= expected_time)
+    )
+    if exclude_task_id is not None:
+        query = query.filter(Task.id != exclude_task_id)
+    return query.distinct().all()
+
+
 def _sync_task_assignees(task: Task, assignee_ids: list[int]):
     desired = _dedupe_ids(assignee_ids)
     existing = {assignment.user_id: assignment for assignment in task.assignees}
@@ -285,8 +376,57 @@ def _append_assignee_update(task: Task, actor_id: int | None, summary: dict):
     )
 
 
-def _serialize_task_for_viewer(task: Task, role: str | None, user_id: int | None) -> dict:
+def _build_worker_load_summary(tasks: list[Task]) -> dict[int, dict[str, float]]:
+    summary: dict[int, dict[str, float]] = {}
+    for task in tasks:
+        if task.status == "已完成":
+            continue
+        assignee_ids = _task_assigned_user_ids(task)
+        for assignee_id in assignee_ids:
+            summary.setdefault(assignee_id, {"assigned_count": 0, "total_work_hours": 0.0})
+            summary[assignee_id]["assigned_count"] += 1
+        for update in task.updates:
+            if update.user_id is None or update.work_hours is None:
+                continue
+            if update.user_id not in summary:
+                summary[update.user_id] = {"assigned_count": 0.0, "total_work_hours": 0.0}
+            summary[update.user_id]["total_work_hours"] += update.work_hours
+    return summary
+
+
+def _format_assignee_loads(task: Task, summary: dict[int, dict[str, float]]) -> list[dict]:
+    loads: list[dict] = []
+    seen: set[int] = set()
+
+    def add_user(user: User | None):
+        if not user or user.id in seen:
+            return
+        seen.add(user.id)
+        load = summary.get(user.id, {"assigned_count": 0.0, "total_work_hours": 0.0})
+        loads.append(
+            {
+                "user_id": user.id,
+                "username": user.username,
+                "assigned_count": int(load.get("assigned_count", 0.0)),
+                "total_work_hours": round(float(load.get("total_work_hours", 0.0)), 2),
+            }
+        )
+
+    add_user(task.assignee)
+    for assignment in task.assignees:
+        add_user(assignment.user)
+    return loads
+
+
+def _serialize_task_for_viewer(
+    task: Task,
+    role: str | None,
+    user_id: int | None,
+    workload_summary: dict[int, dict[str, float]] | None = None,
+) -> dict:
     data = task.to_dict()
+    if workload_summary is not None:
+        data["assignee_loads"] = _format_assignee_loads(task, workload_summary)
     if role == "worker":
         attachments = data.get("attachments") or []
         if user_id is None:
@@ -346,7 +486,10 @@ def list_tasks():
         .order_by(Task.created_at.desc())
         .all()
     )
-    payload = [_serialize_task_for_viewer(task, role, user_id) for task in tasks]
+    workload_summary = _build_worker_load_summary(tasks)
+    payload = [
+        _serialize_task_for_viewer(task, role, user_id, workload_summary) for task in tasks
+    ]
     return jsonify(payload)
 
 
@@ -360,6 +503,9 @@ def _handle_create_task(data, creator_id):
     expected_time_raw = data.get("expected_time")
     status_raw = (data.get("status") or "尚未接單").strip()
     due_date_raw = data.get("due_date")
+    estimated_hours, estimated_error = _parse_estimated_hours(data.get("estimated_hours"))
+    if estimated_error:
+        return estimated_error
 
     if not title:
         return jsonify({"msg": "Title is required"}), 400
@@ -402,6 +548,12 @@ def _handle_create_task(data, creator_id):
         due_date, error_response, status_code = _parse_datetime(due_date_raw, "Due date")
         if error_response:
             return error_response, status_code
+
+    window_end = _schedule_window_end(expected_time, due_date, estimated_hours)
+    conflicts = _find_schedule_conflicts(expected_time, window_end, assignee_ids)
+    if conflicts:
+        msg, details = _format_conflict_message(conflicts, set(assignee_ids))
+        return jsonify({"msg": msg, "conflicts": details}), 409
 
     task = Task(
         title=title,
@@ -471,7 +623,29 @@ def get_task(task_id: int):
     if permission_error:
         return permission_error
 
-    return jsonify(_serialize_task_for_viewer(task, role, user_id))
+    assignee_ids = list(_task_assigned_user_ids(task))
+    workload_summary: dict[int, dict[str, float]] = {}
+    if assignee_ids:
+        related_tasks = (
+            Task.query.options(
+                selectinload(Task.updates),
+                selectinload(Task.assignees).selectinload(TaskAssignee.user),
+                selectinload(Task.assignee),
+            )
+            .outerjoin(TaskAssignee, TaskAssignee.task_id == Task.id)
+            .filter(Task.status != "已完成")
+            .filter(
+                or_(
+                    Task.assigned_to_id.in_(assignee_ids),
+                    TaskAssignee.user_id.in_(assignee_ids),
+                )
+            )
+            .distinct()
+            .all()
+        )
+        workload_summary = _build_worker_load_summary(related_tasks)
+
+    return jsonify(_serialize_task_for_viewer(task, role, user_id, workload_summary))
 
 
 @tasks_bp.post("/<int:task_id>/accept")
@@ -530,6 +704,9 @@ def _apply_task_updates(task: Task, data: dict):
     if location_url is None and "map_url" in data:
         location_url = data.get("map_url")
     expected_time_raw = data.get("expected_time")
+    estimated_hours, estimated_error = _parse_estimated_hours(data.get("estimated_hours"))
+    if estimated_error:
+        return estimated_error, summary
     assignee_ids, should_update_assignees = _get_assignee_ids_for_update(data)
     due_date_raw = data.get("due_date")
 
@@ -627,6 +804,17 @@ def _apply_task_updates(task: Task, data: dict):
             if error_response:
                 return (error_response, status_code), summary
             task.due_date = due_date
+
+    window_end = _schedule_window_end(task.expected_time, task.due_date, estimated_hours)
+    conflicts = _find_schedule_conflicts(
+        task.expected_time,
+        window_end,
+        list(_task_assigned_user_ids(task)),
+        exclude_task_id=task.id,
+    )
+    if conflicts:
+        msg, details = _format_conflict_message(conflicts, _task_assigned_user_ids(task))
+        return (jsonify({"msg": msg, "conflicts": details}), 409), summary
 
     summary["became_overdue"] = (not was_overdue) and task.is_overdue()
     return None, summary
