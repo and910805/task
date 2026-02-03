@@ -12,7 +12,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
   const { labels } = useRoleLabels();
   const { preference, setPreference } = useTheme();
   const isAdmin = user?.role === 'admin';
-  const brandName = branding.name || '立翔水電行';
+  const brandName = branding.name || '水電派工系統';
   const logoSrc = branding.logoUrl || brandFallback;
 
   return (
@@ -36,22 +36,22 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
           className="theme-toggle"
           value={preference}
           onChange={(event) => setPreference(event.target.value)}
-          aria-label="切換主題模式"
+          aria-label="主題模式"
         >
-          <option value="light">☀️ Light</option>
-          <option value="dark">🌙 Dark</option>
-          <option value="system">💻 System</option>
+          <option value="light">淺色</option>
+          <option value="dark">深色</option>
+          <option value="system">系統</option>
         </select>
         <nav className="header-nav">
           <Link to="/">任務列表</Link>
-          <Link to="/calendar">排程視圖</Link>
-          {isAdmin ? <Link to="/admin">使用者管理</Link> : null}
-          <Link to="/profile">個人資料</Link>
+          <Link to="/overview">今日派工</Link>
+          <Link to="/stats">工時效率</Link>
+          <Link to="/calendar">排程總覽</Link>
+          {isAdmin ? <Link to="/admin">管理中心</Link> : null}
+          <Link to="/profile">個人設定</Link>
         </nav>
         <span>
-          目前登入：
-          {user?.username}
-          （{labels[user?.role] || user?.role}）
+          目前登入：{user?.username}（{labels[user?.role] || user?.role}）
         </span>
         <button type="button" onClick={logout}>
           登出

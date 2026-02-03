@@ -61,6 +61,41 @@ DEFAULT_LINE_NOTIFICATION_SETTINGS = {
 }
 
 
+def _parse_management_roles(raw: str | None) -> list[str]:
+    if not raw:
+        return ["admin"]
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def get_management_recipients(*, exclude_user_ids: Sequence[int] | None = None) -> list["User"]:
+    if str(os.getenv("MANAGEMENT_NOTIFICATION_ENABLED", "true")).strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        return []
+
+    try:
+        from models import User  # local import to avoid cycles
+    except Exception:
+        return []
+
+    roles = _parse_management_roles(os.getenv("MANAGEMENT_NOTIFICATION_ROLES"))
+    if not roles:
+        return []
+
+    query = User.query.filter(User.role.in_(roles))
+    query = query.filter(User.notification_type.isnot(None), User.notification_value.isnot(None))
+    recipients = list(query.all())
+
+    if exclude_user_ids:
+        exclude = {user_id for user_id in exclude_user_ids if user_id}
+        recipients = [user for user in recipients if user.id not in exclude]
+
+    return recipients
+
+
 def _load_email_settings() -> dict:
     """Load and normalize email notification settings from SiteSetting."""
     try:

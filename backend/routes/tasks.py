@@ -18,6 +18,7 @@ from services import (
     notify_task_assignment,
     notify_task_overdue,
     notify_task_status_change,
+    get_management_recipients,
 )
 from storage import StorageError
 from utils import get_current_user_id
@@ -346,14 +347,29 @@ def _notify_task_changes(task: Task, summary: dict, actor_id: int | None):
     ]
     if added_users:
         notify_task_assignment(task, added_users, assigned_by=actor)
+        management_users = get_management_recipients(
+            exclude_user_ids=[user.id for user in added_users] + ([actor.id] if actor else [])
+        )
+        if management_users:
+            notify_task_assignment(task, management_users, assigned_by=actor)
 
     if summary.get("status_changed"):
         recipients = _task_notification_recipients(task)
         notify_task_status_change(task, recipients, updated_by=actor)
+        management_users = get_management_recipients(
+            exclude_user_ids=[user.id for user in recipients] + ([actor.id] if actor else [])
+        )
+        if management_users:
+            notify_task_status_change(task, management_users, updated_by=actor)
 
     if summary.get("became_overdue"):
         recipients = _task_notification_recipients(task)
         notify_task_overdue(task, recipients, updated_by=actor)
+        management_users = get_management_recipients(
+            exclude_user_ids=[user.id for user in recipients] + ([actor.id] if actor else [])
+        )
+        if management_users:
+            notify_task_overdue(task, management_users, updated_by=actor)
 
 
 def _append_assignee_update(task: Task, actor_id: int | None, summary: dict):

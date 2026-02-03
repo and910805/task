@@ -15,6 +15,8 @@ const TaskListPage = lazy(() => import('./pages/TaskListPage.jsx'));
 const AdminPage = lazy(() => import('./pages/AdminPage.jsx'));
 const ProfilePage = lazy(() => import('./pages/ProfilePage.jsx'));
 const TaskCalendarPage = lazy(() => import('./pages/TaskCalendarPage.jsx'));
+const OverviewPage = lazy(() => import('./pages/OverviewPage.jsx'));
+const StatsPage = lazy(() => import('./pages/StatsPage.jsx'));
 
 const PrivateRoute = ({ children, roles }) => {
   const { isAuthenticated, user, initializing } = useAuth();
@@ -65,6 +67,22 @@ const AppRoutes = () => (
         element={(
           <PrivateRoute>
             <TaskCalendarPage />
+          </PrivateRoute>
+        )}
+      />
+      <Route
+        path="/overview"
+        element={(
+          <PrivateRoute roles={["admin", "hq_staff", "site_supervisor"]}>
+            <OverviewPage />
+          </PrivateRoute>
+        )}
+      />
+      <Route
+        path="/stats"
+        element={(
+          <PrivateRoute roles={["admin", "hq_staff", "site_supervisor"]}>
+            <StatsPage />
           </PrivateRoute>
         )}
       />

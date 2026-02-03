@@ -1,6 +1,7 @@
 """Service utilities for 立翔水電行."""
 
 from .notifications import (
+    get_management_recipients,
     has_email_config,
     notify_overdue_tasks,
     notify_task_assignment,
@@ -11,6 +12,7 @@ from .notifications import (
 
 __all__ = [
     "has_email_config",
+    "get_management_recipients",
     "notify_overdue_tasks",
     "notify_task_assignment",
     "notify_task_overdue",

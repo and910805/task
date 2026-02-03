@@ -346,11 +346,7 @@ const TaskListPage = () => {
 
   return (
     <div className="page">
-      <AppHeader
-        title="任務清單"
-        subtitle="快速掌握任務狀態"
-        actions={headerActions}
-      />
+      <AppHeader title="任務列表" subtitle="快速掌握所有任務" actions={headerActions} />
       {isManager && (
         <section className="panel">
           <button type="button" onClick={() => setCreating((prev) => !prev)}>
@@ -462,7 +458,7 @@ const TaskListPage = () => {
         </div>
       )}
       <section className="panel">
-        <h2>任務列表</h2>
+        <h2>任務清單</h2>
         {loading ? (
           <p>載入中...</p>
         ) : filteredTasks.length === 0 ? (
@@ -489,7 +485,7 @@ const TaskListPage = () => {
                       </span>
                     </div>
                     <div className="task-card__meta">
-                      <span>{task.location}</span>
+                      <span>{task.location || '-'}</span>
                       <span>
                         到期：
                         {task.due_date
