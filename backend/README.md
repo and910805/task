@@ -1,12 +1,19 @@
-# Backend deployment notes
+# Backend (single service)
 
-To avoid `ModuleNotFoundError: No module named 'flask'` on Zeabur:
+This backend is designed to run together with the frontend in one Zeabur service.
 
-1. **Root Directory**: Configure the service Root Directory as `backend` so Zeabur can find `requirements.txt`.
-2. **Dependencies**: Keep `requirements.txt` in this folder; it lists all backend packages Zeabur should install.
-3. **Start Command**: Use a production server instead of `python app.py`, e.g.:
-   ```bash
-   gunicorn --bind 0.0.0.0:$PORT "app:create_app()"
-   ```
+## Production start
 
-The app entry point already reads `PORT` from the environment, binds to `0.0.0.0`, and CORS support lives in `app/__init__.py`.
+Use Gunicorn and serve the built frontend:
+
+```bash
+gunicorn --bind 0.0.0.0:$PORT "app:create_app()"
+```
+
+When `frontend/dist/index.html` exists, Flask serves it for all non-API routes.
+
+## Environment
+
+- `SECRET_KEY` and `JWT_SECRET_KEY`
+- `DATABASE_URL` (optional; defaults to sqlite)
+- `FRONTEND_URL` (optional; restrict CORS)
