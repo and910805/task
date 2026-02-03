@@ -4,7 +4,7 @@ from typing import Optional
 from flask import current_app
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import UniqueConstraint, Index
 
 from extensions import db
 
@@ -86,6 +86,14 @@ class User(db.Model):
 
 class Task(db.Model):
     __tablename__ = "task"
+
+    __table_args__ = (
+        Index("ix_task_status", "status"),
+        Index("ix_task_assigned_to_id", "assigned_to_id"),
+        Index("ix_task_expected_time", "expected_time"),
+        Index("ix_task_due_date", "due_date"),
+        Index("ix_task_created_at", "created_at"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(150), nullable=False)
@@ -225,6 +233,13 @@ class TaskAssignee(db.Model):
 
 class TaskUpdate(db.Model):
     __tablename__ = "task_update"
+
+    __table_args__ = (
+        Index("ix_task_update_task_id", "task_id"),
+        Index("ix_task_update_user_id", "user_id"),
+        Index("ix_task_update_start_time", "start_time"),
+        Index("ix_task_update_created_at", "created_at"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     task_id = db.Column(db.Integer, db.ForeignKey("task.id"), nullable=False)

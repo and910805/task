@@ -1468,3 +1468,16 @@ button:disabled {
     justify-content: center;
   }
 }
+
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: flex-end;
+  padding-top: 16px;
+}
+
+.pagination select {
+  margin-left: 8px;
+}

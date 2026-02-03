@@ -9,11 +9,12 @@ from sqlalchemy import inspect
 from flask import Flask, jsonify, redirect, request, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import verify_jwt_in_request
+from flask_compress import Compress
 from werkzeug.middleware.proxy_fix import ProxyFix
 # Ensure local imports work when gunicorn --chdir backend
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from extensions import db, jwt
+from extensions import db, jwt, cache
 from storage import StorageError, create_storage
 
 
@@ -57,11 +58,19 @@ def create_app() -> Flask:
     database_url = _normalize_database_url(os.environ.get("DATABASE_URL"))
     cors_origins = _parse_cors_origins(os.environ.get("CORS_ORIGINS"))
 
+    redis_url = os.environ.get("REDIS_URL")
+    cache_type = "RedisCache" if redis_url else "SimpleCache"
+    cache_timeout = int(os.environ.get("CACHE_DEFAULT_TIMEOUT", "60"))
+
     app.config.update(
         SECRET_KEY=secret_key,
         JWT_SECRET_KEY=jwt_secret,
         SQLALCHEMY_DATABASE_URI=database_url or f"sqlite:///{database_path}",
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        SQLALCHEMY_ENGINE_OPTIONS={
+            "pool_pre_ping": True,
+            "pool_recycle": 1800,
+        },
         JWT_ACCESS_TOKEN_EXPIRES=timedelta(hours=1),
         JWT_TOKEN_LOCATION=["headers"],
         UPLOAD_FOLDER=uploads_path,
@@ -72,15 +81,22 @@ def create_app() -> Flask:
         STORAGE_MODE=os.environ.get("STORAGE_MODE", "local"),
         MAX_CONTENT_LENGTH=16 * 1024 * 1024,
         CORS_ORIGINS=cors_origins,
-    )
+        COMPRESS_MIN_SIZE=512,
+    
+        CACHE_TYPE=cache_type,
+        CACHE_DEFAULT_TIMEOUT=cache_timeout,
+        CACHE_REDIS_URL=redis_url,
+        TASKS_CACHE_TTL=int(os.environ.get("TASKS_CACHE_TTL", "15")),)
 
     for folder in (uploads_path, reports_path, images_path, audio_path, signature_path, other_path):
         os.makedirs(folder, exist_ok=True)
 
     CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": app.config["CORS_ORIGINS"]}})
+    Compress(app)
 
     db.init_app(app)
     jwt.init_app(app)
+    cache.init_app(app)
 
     try:
         storage_backend = create_storage(app.config)
@@ -131,6 +147,35 @@ def create_app() -> Flask:
         if os.path.exists(requested_path) and not os.path.isdir(requested_path):
             return send_from_directory(dist_dir, path)
         return send_from_directory(dist_dir, "index.html")
+
+    @app.after_request
+    def _apply_cache_headers(response):
+        path = request.path or ""
+        if path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+            return response
+
+        if path == "/" or path.endswith("index.html"):
+            response.headers["Cache-Control"] = "no-cache"
+            return response
+
+        if path.startswith(("/assets/", "/static/")) or path.endswith(
+            (
+                ".js",
+                ".css",
+                ".svg",
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".gif",
+                ".webp",
+                ".ico",
+                ".woff",
+                ".woff2",
+            )
+        ):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
 
     with app.app_context():
         from models import Attachment, RoleLabel, SiteLocation, SiteSetting, Task, TaskUpdate, User

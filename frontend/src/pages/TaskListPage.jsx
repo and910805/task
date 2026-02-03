@@ -50,8 +50,6 @@ const TaskListPage = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [statusFilter, setStatusFilter] = useState('all');
   const [availableOnly, setAvailableOnly] = useState(false);
-  const [availableTasks, setAvailableTasks] = useState([]);
-  const [loadingAvailable, setLoadingAvailable] = useState(false);
   const [locationFilter, setLocationFilter] = useState('');
   const [sortOption, setSortOption] = useState('due_soon');
   const [assigningTaskId, setAssigningTaskId] = useState(null);
@@ -59,6 +57,11 @@ const TaskListPage = () => {
   const [acceptingTaskId, setAcceptingTaskId] = useState(null);
   const hasNotificationPreference = user?.notification_type && user?.notification_type !== 'none';
   const [showOverdue, setShowOverdue] = useState(Boolean(hasNotificationPreference));
+  const [searchQuery, setSearchQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(30);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
 
   const isManager = managerRoles.has(user?.role);
   const isWorker = user?.role === 'worker';
@@ -95,37 +98,47 @@ const TaskListPage = () => {
     );
   }, [form.location, locationOptions]);
 
-  const loadTasks = async ({ showLoading = true } = {}) => {
+  const loadTasks = async ({ showLoading = true, overrideAvailable } = {}) => {
     if (showLoading) {
       setLoading(true);
     }
     setError('');
     try {
-      const { data } = await api.get('tasks/');
-      setTasks(data);
+      const params = {
+        summary: 1,
+        page,
+        page_size: pageSize,
+      };
+      const useAvailable =
+        typeof overrideAvailable === 'boolean' ? overrideAvailable : availableOnly;
+      if (useAvailable) {
+        params.available = 1;
+      }
+      if (statusFilter !== 'all') {
+        params.status = statusFilter;
+      }
+      const trimmedSearch = searchQuery.trim();
+      if (trimmedSearch) {
+        params.q = trimmedSearch;
+      }
+      const { data } = await api.get('tasks/', { params });
+      const items = Array.isArray(data) ? data : data.items || [];
+      setTasks(items);
+      if (!Array.isArray(data)) {
+        setTotalPages(data.pages || 1);
+        setTotalCount(data.total || items.length);
+        setPage(data.page || 1);
+      } else {
+        setTotalPages(1);
+        setTotalCount(items.length);
+        setPage(1);
+      }
     } catch (err) {
-      const message = getErrorMessage(err, '無法取得任務列表。');
+      const message = getErrorMessage(err, '??????????????);
       setError(message);
     } finally {
       if (showLoading) {
         setLoading(false);
-      }
-    }
-  };
-
-  const loadAvailableTasks = async ({ showLoading = true } = {}) => {
-    if (showLoading) {
-      setLoadingAvailable(true);
-    }
-    try {
-      const { data } = await api.get('tasks/', { params: { available: 1 } });
-      setAvailableTasks(data);
-    } catch (err) {
-      const message = getErrorMessage(err, '無法取得可接單任務。');
-      setError(message);
-    } finally {
-      if (showLoading) {
-        setLoadingAvailable(false);
       }
     }
   };
@@ -156,13 +169,8 @@ const TaskListPage = () => {
 
   useEffect(() => {
     loadTasks();
-  }, []);
+  }, [availableOnly, statusFilter, searchQuery, page, pageSize]);
 
-  useEffect(() => {
-    if (availableOnly) {
-      loadAvailableTasks();
-    }
-  }, [availableOnly]);
 
   useEffect(() => {
     loadUsers();
@@ -171,6 +179,10 @@ const TaskListPage = () => {
   useEffect(() => {
     loadSiteLocations();
   }, [isManager]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [availableOnly, statusFilter, searchQuery]);
 
   useEffect(() => {
     setShowOverdue(Boolean(hasNotificationPreference));
@@ -250,9 +262,6 @@ const TaskListPage = () => {
     setRefreshing(true);
     try {
       await loadTasks({ showLoading: false });
-      if (availableOnly) {
-        await loadAvailableTasks({ showLoading: false });
-      }
     } finally {
       setRefreshing(false);
     }
@@ -264,9 +273,6 @@ const TaskListPage = () => {
     try {
       await api.post(`tasks/${taskId}/accept`);
       await loadTasks({ showLoading: false });
-      if (availableOnly) {
-        await loadAvailableTasks({ showLoading: false });
-      }
     } catch (err) {
       const message = getErrorMessage(err, '接單失敗。');
       setError(message);
@@ -296,7 +302,7 @@ const TaskListPage = () => {
 
   const filteredTasks = useMemo(() => {
     const locationQuery = locationFilter.trim().toLowerCase();
-    let result = availableOnly ? availableTasks : tasks;
+    let result = tasks;
 
     if (statusFilter !== 'all') {
       result = result.filter((task) => task.status === statusFilter);
@@ -331,7 +337,6 @@ const TaskListPage = () => {
     return sorted;
   }, [
     availableOnly,
-    availableTasks,
     locationFilter,
     sortOption,
     statusFilter,
@@ -341,16 +346,25 @@ const TaskListPage = () => {
   const toolbarFilters = (
     <>
       <label>
-        地點搜尋
+        Search
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          placeholder="Title or description"
+        />
+      </label>
+      <label>
+        Location
         <input
           type="search"
           value={locationFilter}
           onChange={(event) => setLocationFilter(event.target.value)}
-          placeholder="輸入地點關鍵字"
+          placeholder="Filter by location"
         />
       </label>
       <label>
-        排序方式
+        Sort
         <select
           value={sortOption}
           onChange={(event) => setSortOption(event.target.value)}
@@ -583,7 +597,7 @@ const TaskListPage = () => {
       )}
       <section className="panel">
         <h2>任務列表</h2>
-        {loading || (availableOnly && loadingAvailable) ? (
+        {loading ? (
           <p>載入中...</p>
         ) : filteredTasks.length === 0 ? (
           <p>{emptyStateMessage}</p>
@@ -673,7 +687,7 @@ const TaskListPage = () => {
                         : '未設定'}
                     </p>
                     <p className="task-secondary">
-                      總工時：{(task.total_work_hours ?? 0).toFixed(2)} 小時
+                      ????{typeof task.total_work_hours === 'number' ? task.total_work_hours.toFixed(2) : '-'} ??
                     </p>
                     <p className="task-status-row">
                       任務進度：
@@ -773,6 +787,43 @@ const TaskListPage = () => {
               );
             })}
           </ul>
+          <div className="pagination">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+              disabled={page <= 1}
+            >
+              ???????
+            </button>
+            <span>
+              ? {page} / {totalPages} ? ? ? {totalCount} ?
+            </span>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+              disabled={page >= totalPages}
+            >
+              ???????
+            </button>
+            <label>
+              ??????
+              <select
+                value={pageSize}
+                onChange={(event) => {
+                  setPageSize(Number(event.target.value));
+                  setPage(1);
+                }}
+              >
+                {[10, 20, 30, 50, 100].map((size) => (
+                  <option key={size} value={size}>
+                    {size}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
         )}
       </section>
     </div>

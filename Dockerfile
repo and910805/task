@@ -27,6 +27,9 @@ COPY --from=frontend_builder /app/frontend/dist ./frontend/dist
 # A writable directory for SQLite + uploads (mount a Zeabur volume here if you need persistence)
 RUN mkdir -p /app/backend/uploads
 
+ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV WEB_CONCURRENCY=2
+ENV WEB_THREADS=4
 
-CMD ["sh", "-c", "gunicorn --chdir backend -w ${WEB_CONCURRENCY:-1} --threads ${WEB_THREADS:-2} -b 0.0.0.0:${PORT:-5000} app:app"]
+CMD ["sh", "-c", "gunicorn --chdir backend -w ${WEB_CONCURRENCY:-2} --threads ${WEB_THREADS:-4} -b 0.0.0.0:${PORT:-5000} app:app"]

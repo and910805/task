@@ -1,20 +1,14 @@
 #!/bin/bash
-# =========================
-# 立翔水電行專案一鍵啟動腳本
-# =========================
+set -euo pipefail
 
-echo "🚀 啟動 Flask 後端 ..."
-cd ~/taskgo/backend
-source venv/bin/activate
-nohup python3 app.py > backend.log 2>&1 &
-BACK_PID=$!
-echo "✅ Flask 已啟動 (PID: $BACK_PID)"
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "🌐 啟動 React 前端 ..."
-cd ~/taskgo/frontend
-nohup npm run dev -- --host 0.0.0.0 > frontend.log 2>&1 &
-FRONT_PID=$!
-echo "✅ React 已啟動 (PID: $FRONT_PID)"
+echo "== Build frontend =="
+cd "$ROOT_DIR/frontend"
+npm ci
+npm run build
 
-echo "🎯 所有服務已啟動完成！"
-
+echo "== Start backend (Gunicorn) =="
+cd "$ROOT_DIR/backend"
+export PORT="${PORT:-5000}"
+exec gunicorn --chdir "$ROOT_DIR/backend" -w "${WEB_CONCURRENCY:-2}" --threads "${WEB_THREADS:-4}" -b 0.0.0.0:${PORT} app:app

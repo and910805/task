@@ -8,8 +8,8 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import selectinload
 
 from decorators import role_required
-from extensions import db
-from models import Task, TaskAssignee, TaskUpdate, User
+from extensions import db, cache
+from models import Task, TaskAssignee, TaskUpdate, User, RoleLabel, ROLE_LABEL_DEFAULTS
 from services.attachments import (
     create_file_attachment,
     create_signature_attachment,
@@ -440,13 +440,192 @@ def _serialize_task_for_viewer(
     return data
 
 
+
+
+def _serialize_task_summary(task: Task) -> dict:
+    try:
+        role_labels = RoleLabel.get_labels()
+    except Exception:
+        role_labels = ROLE_LABEL_DEFAULTS
+
+    assigned_users = []
+    for assignment in task.assignees:
+        user = assignment.user
+        if not user:
+            continue
+        assigned_users.append(
+            {
+                "id": user.id,
+                "username": user.username,
+                "role": user.role,
+                "role_label": role_labels.get(user.role, user.role),
+            }
+        )
+    if assigned_users:
+        assigned_users.sort(key=lambda item: item["username"].lower())
+
+    return {
+        "id": task.id,
+        "title": task.title,
+        "description": task.description,
+        "status": task.status,
+        "location": task.location,
+        "location_url": task.location_url,
+        "expected_time": task.expected_time.isoformat() if task.expected_time else None,
+        "due_date": task.due_date.isoformat() if task.due_date else None,
+        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+        "assigned_to": task.assignee.username if task.assignee else None,
+        "assigned_to_id": task.assigned_to_id,
+        "assigned_by": task.assigner.username if task.assigner else None,
+        "assigned_by_id": task.assigned_by_id,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+        "assignees": assigned_users,
+        "assignee_ids": [user["id"] for user in assigned_users],
+        "is_overdue": task.is_overdue(),
+        "total_work_hours": None,
+    }
+
+
 @tasks_bp.get("/")
 @jwt_required()
 def list_tasks():
+    cache_ttl = current_app.config.get("TASKS_CACHE_TTL", 15)
     user_id = get_current_user_id()
     if user_id is None:
         return jsonify({"msg": "Invalid authentication token"}), 401
     role = (get_jwt() or {}).get("role")
+
+    def _parse_int(value, default=None, min_value=None, max_value=None):
+        if value in (None, ""):
+            return default
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        if min_value is not None:
+            parsed = max(parsed, min_value)
+        if max_value is not None:
+            parsed = min(parsed, max_value)
+        return parsed
+
+    available_only = str(request.args.get("available") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    status_filter = (request.args.get("status") or "").strip()
+    assignee_id = _normalize_user_id(request.args.get("assignee_id"))
+    search = (request.args.get("q") or "").strip()
+    summary = str(request.args.get("summary") or "").strip().lower() in {"1", "true", "yes"}
+
+    page = _parse_int(request.args.get("page"), min_value=1)
+    page_size = _parse_int(request.args.get("page_size"), default=50, min_value=1, max_value=200)
+
+    cache_key_payload = {
+        "user_id": user_id,
+        "role": role,
+        "available": available_only,
+        "status": status_filter or None,
+        "assignee_id": assignee_id,
+        "q": search or None,
+        "summary": summary,
+        "page": page,
+        "page_size": page_size,
+    }
+    should_cache = bool(summary or page)
+    cache_key = None
+    if should_cache and cache is not None:
+        cache_key = f"tasks:{user_id}:{role}:{json.dumps(cache_key_payload, sort_keys=True)}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return jsonify(cached)
+
+    if summary:
+        query = Task.query.options(
+            selectinload(Task.assignees).selectinload(TaskAssignee.user),
+            selectinload(Task.assignee),
+            selectinload(Task.assigner),
+        )
+    else:
+        query = Task.query.options(
+            selectinload(Task.attachments),
+            selectinload(Task.updates),
+            selectinload(Task.assignees).selectinload(TaskAssignee.user),
+            selectinload(Task.assigner),
+            selectinload(Task.assignee),
+        )
+
+    query = query.outerjoin(TaskAssignee, TaskAssignee.task_id == Task.id)
+
+    if available_only:
+        query = query.filter(
+            Task.status == "??????",
+            Task.assigned_to_id.is_(None),
+            TaskAssignee.user_id.is_(None),
+        )
+    else:
+        if role == "worker":
+            query = query.filter(
+                or_(TaskAssignee.user_id == user_id, Task.assigned_to_id == user_id)
+            )
+        elif role == "site_supervisor":
+            query = query.filter(
+                or_(
+                    Task.assigned_by_id == user_id,
+                    TaskAssignee.user_id == user_id,
+                    Task.assigned_to_id == user_id,
+                )
+            )
+
+    if status_filter:
+        query = query.filter(Task.status == status_filter)
+
+    if assignee_id is not None:
+        query = query.filter(
+            or_(Task.assigned_to_id == assignee_id, TaskAssignee.user_id == assignee_id)
+        )
+
+    if search:
+        like = f"%{search}%"
+        query = query.filter(or_(Task.title.ilike(like), Task.description.ilike(like)))
+
+    query = query.distinct().order_by(Task.created_at.desc())
+
+    if page:
+        pagination = query.paginate(page=page, per_page=page_size, error_out=False)
+        tasks = pagination.items
+        workload_summary = None if summary else _build_worker_load_summary(tasks)
+        if summary:
+            payload = [_serialize_task_summary(task) for task in tasks]
+        else:
+            payload = [
+                _serialize_task_for_viewer(task, role, user_id, workload_summary)
+                for task in tasks
+            ]
+        response_payload = {
+            "items": payload,
+            "page": pagination.page,
+            "page_size": pagination.per_page,
+            "total": pagination.total,
+            "pages": pagination.pages,
+        }
+        if cache is not None and cache_key:
+            cache.set(cache_key, response_payload, timeout=cache_ttl)
+        return jsonify(response_payload)
+
+    tasks = query.all()
+    workload_summary = None if summary else _build_worker_load_summary(tasks)
+    if summary:
+        payload = [_serialize_task_summary(task) for task in tasks]
+    else:
+        payload = [
+            _serialize_task_for_viewer(task, role, user_id, workload_summary) for task in tasks
+        ]
+    if cache is not None and cache_key:
+        cache.set(cache_key, payload, timeout=cache_ttl)
+    return jsonify(payload)
+
 
     query = Task.query.options(
         selectinload(Task.attachments),
