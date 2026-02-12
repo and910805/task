@@ -15,6 +15,8 @@ const toNumber = (value) => {
   return Number.isFinite(num) ? num : 0;
 };
 
+const HOUR_MS = 60 * 60 * 1000;
+
 const AttendancePage = () => {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -111,6 +113,66 @@ const AttendancePage = () => {
     };
   }, [filteredRecords, summaryRows]);
 
+  const anomalies = useMemo(() => {
+    const rows = [];
+
+    for (const row of filteredRecords) {
+      const startAt = row.start_time ? new Date(row.start_time).getTime() : null;
+      const endAt = row.end_time ? new Date(row.end_time).getTime() : null;
+      if (startAt && !endAt && Date.now() - startAt > 12 * HOUR_MS) {
+        rows.push({
+          id: `missing-end-${row.task_id}-${row.worker}-${row.start_time}`,
+          type: '未結束工時',
+          worker: row.worker,
+          task_title: row.task_title,
+          date: row.date,
+          detail: '開始超過 12 小時仍未結束',
+        });
+      }
+      if (row.work_hours > 10) {
+        rows.push({
+          id: `overtime-${row.task_id}-${row.worker}-${row.start_time}`,
+          type: '超時工時',
+          worker: row.worker,
+          task_title: row.task_title,
+          date: row.date,
+          detail: `單筆工時 ${row.work_hours.toFixed(2)} 小時`,
+        });
+      }
+    }
+
+    const byWorkerDate = new Map();
+    for (const row of filteredRecords) {
+      const startAt = row.start_time ? new Date(row.start_time).getTime() : null;
+      const endAt = row.end_time ? new Date(row.end_time).getTime() : null;
+      if (!startAt || !endAt) continue;
+      const key = `${row.worker}::${row.date}`;
+      const bucket = byWorkerDate.get(key) || [];
+      bucket.push({ ...row, startAt, endAt });
+      byWorkerDate.set(key, bucket);
+    }
+
+    for (const [, bucket] of byWorkerDate) {
+      const sorted = bucket.sort((a, b) => a.startAt - b.startAt);
+      for (let i = 1; i < sorted.length; i += 1) {
+        const prev = sorted[i - 1];
+        const current = sorted[i];
+        if (current.startAt < prev.endAt) {
+          rows.push({
+            id: `overlap-${current.task_id}-${current.worker}-${current.start_time}`,
+            type: '重疊工時',
+            worker: current.worker,
+            task_title: `${prev.task_title} / ${current.task_title}`,
+            date: current.date,
+            detail: '同日同人員出現重疊區段',
+          });
+        }
+      }
+    }
+
+    return rows;
+  }, [filteredRecords]);
+
   return (
     <div className="page">
       <AppHeader
@@ -142,6 +204,10 @@ const AttendancePage = () => {
           <div className="metric-card">
             <p className="metric-label">總工時</p>
             <h3>{stats.totalHours}h</h3>
+          </div>
+          <div className="metric-card">
+            <p className="metric-label">異常筆數</p>
+            <h3>{anomalies.length}</h3>
           </div>
         </div>
       </section>
@@ -175,6 +241,41 @@ const AttendancePage = () => {
               placeholder="輸入姓名"
             />
           </label>
+        </div>
+      </section>
+
+      <section className="panel panel--table">
+        <div className="panel-header">
+          <h2>異常偵測</h2>
+        </div>
+        <div className="table-wrapper">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>日期</th>
+                <th>人員</th>
+                <th>異常類型</th>
+                <th>任務</th>
+                <th>說明</th>
+              </tr>
+            </thead>
+            <tbody>
+              {anomalies.map((row) => (
+                <tr key={row.id}>
+                  <td>{row.date}</td>
+                  <td>{row.worker}</td>
+                  <td>{row.type}</td>
+                  <td>{row.task_title}</td>
+                  <td>{row.detail}</td>
+                </tr>
+              ))}
+              {!loading && anomalies.length === 0 && (
+                <tr>
+                  <td colSpan="5">未偵測到異常</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </section>
 

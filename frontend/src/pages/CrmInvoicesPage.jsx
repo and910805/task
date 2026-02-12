@@ -4,6 +4,8 @@ import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
 
 const blankItem = () => ({ description: '', quantity: 1, unit_price: 0 });
+const DRAFT_KEY = 'taskgo.invoice.draft.v1';
+const VERSION_KEY = 'taskgo.invoice.versions.v1';
 const INVOICE_TEMPLATES = [
   {
     id: 'project-stage',
@@ -43,6 +45,24 @@ const CrmInvoicesPage = () => {
   });
   const [items, setItems] = useState([blankItem()]);
   const [templateId, setTemplateId] = useState('');
+  const [versionHistory, setVersionHistory] = useState([]);
+
+  const persistDraft = (payload) => {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(payload));
+  };
+
+  const pushVersion = (label = '手動儲存') => {
+    const snapshot = {
+      id: `${Date.now()}`,
+      label,
+      saved_at: new Date().toISOString(),
+      form,
+      items,
+    };
+    const versions = [snapshot, ...versionHistory].slice(0, 12);
+    setVersionHistory(versions);
+    localStorage.setItem(VERSION_KEY, JSON.stringify(versions));
+  };
 
   const loadBase = async () => {
     const [customerRes, contactRes] = await Promise.all([
@@ -70,7 +90,22 @@ const CrmInvoicesPage = () => {
   useEffect(() => {
     loadBase();
     loadInvoices();
+    try {
+      const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+      if (draft?.form && Array.isArray(draft?.items)) {
+        setForm((prev) => ({ ...prev, ...draft.form }));
+        setItems(draft.items.length ? draft.items : [blankItem()]);
+      }
+      const versions = JSON.parse(localStorage.getItem(VERSION_KEY) || '[]');
+      setVersionHistory(Array.isArray(versions) ? versions : []);
+    } catch {
+      // ignore invalid local cache
+    }
   }, []);
+
+  useEffect(() => {
+    persistDraft({ form, items, updated_at: new Date().toISOString() });
+  }, [form, items]);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -125,6 +160,8 @@ const CrmInvoicesPage = () => {
         note: '',
       });
       setItems([blankItem()]);
+      localStorage.removeItem(DRAFT_KEY);
+      pushVersion('送出前快照');
       await loadInvoices();
     } catch (err) {
       const message = err?.response?.data?.msg || '新增發票失敗';
@@ -198,6 +235,44 @@ const CrmInvoicesPage = () => {
             </label>
           </div>
 
+          <div className="crm-line-tools">
+            <button type="button" className="secondary-btn" onClick={() => pushVersion()}>
+              儲存版本
+            </button>
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={() => {
+                const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+                if (draft?.form && Array.isArray(draft?.items)) {
+                  setForm((prev) => ({ ...prev, ...draft.form }));
+                  setItems(draft.items.length ? draft.items : [blankItem()]);
+                }
+              }}
+            >
+              載入草稿
+            </button>
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={() => {
+                localStorage.removeItem(DRAFT_KEY);
+                setForm({
+                  customer_id: '',
+                  contact_id: '',
+                  issue_date: '',
+                  due_date: '',
+                  currency: 'TWD',
+                  tax_rate: 5,
+                  note: '',
+                });
+                setItems([blankItem()]);
+              }}
+            >
+              清除草稿
+            </button>
+          </div>
+
           <div className="crm-line-items">
             <div className="panel-header">
               <h3>品項</h3>
@@ -245,6 +320,48 @@ const CrmInvoicesPage = () => {
               </div>
             ))}
           </div>
+
+          {versionHistory.length > 0 ? (
+            <div className="panel">
+              <div className="panel-header">
+                <h3>版本紀錄</h3>
+                <span className="panel-tag">{versionHistory.length} 筆</span>
+              </div>
+              <div className="table-wrapper">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>時間</th>
+                      <th>標籤</th>
+                      <th>客戶</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {versionHistory.map((version) => (
+                      <tr key={version.id}>
+                        <td>{new Date(version.saved_at).toLocaleString('zh-TW', { hour12: false })}</td>
+                        <td>{version.label}</td>
+                        <td>{version.form?.customer_id || '-'}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="secondary-btn"
+                            onClick={() => {
+                              setForm((prev) => ({ ...prev, ...(version.form || {}) }));
+                              setItems(Array.isArray(version.items) && version.items.length ? version.items : [blankItem()]);
+                            }}
+                          >
+                            還原
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
 
           <div className="crm-form-actions">
             <button type="submit" disabled={saving}>

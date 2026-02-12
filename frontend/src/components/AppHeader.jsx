@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom';
 
 import brandFallback from '../assets/brand-logo.svg';
+import GlobalSearch from './GlobalSearch.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useBranding } from '../context/BrandingContext.jsx';
 import { useRoleLabels } from '../context/RoleLabelContext.jsx';
@@ -41,6 +42,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
         </div>
 
         <nav className="app-sidebar__nav">
+          <GlobalSearch />
           {visibleNavItems.map((item) => (
             <NavLink
               key={item.to}

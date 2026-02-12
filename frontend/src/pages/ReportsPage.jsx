@@ -11,29 +11,45 @@ const toCurrency = (value) =>
     maximumFractionDigits: 0,
   });
 
+const toDateValue = (value) => {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return parsed.toISOString().slice(0, 10);
+};
+
+const csvEscape = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+
 const ReportsPage = () => {
-  const [bootData, setBootData] = useState({
-    quotes: [],
-    invoices: [],
-    customers: [],
-    contacts: [],
-  });
+  const [customers, setCustomers] = useState([]);
+  const [contacts, setContacts] = useState([]);
+  const [quotes, setQuotes] = useState([]);
+  const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [exportResult, setExportResult] = useState(null);
   const [error, setError] = useState('');
+  const [filters, setFilters] = useState({
+    date_from: '',
+    date_to: '',
+    doc_type: 'all',
+    status: 'all',
+  });
 
-  const loadBoot = async () => {
+  const loadAll = async () => {
     setLoading(true);
     setError('');
     try {
-      const { data } = await api.get('crm/boot');
-      setBootData({
-        quotes: Array.isArray(data?.quotes) ? data.quotes : [],
-        invoices: Array.isArray(data?.invoices) ? data.invoices : [],
-        customers: Array.isArray(data?.customers) ? data.customers : [],
-        contacts: Array.isArray(data?.contacts) ? data.contacts : [],
-      });
+      const [customerRes, contactRes, quoteRes, invoiceRes] = await Promise.all([
+        api.get('crm/customers'),
+        api.get('crm/contacts'),
+        api.get('crm/quotes'),
+        api.get('crm/invoices'),
+      ]);
+      setCustomers(Array.isArray(customerRes.data) ? customerRes.data : []);
+      setContacts(Array.isArray(contactRes.data) ? contactRes.data : []);
+      setQuotes(Array.isArray(quoteRes.data) ? quoteRes.data : []);
+      setInvoices(Array.isArray(invoiceRes.data) ? invoiceRes.data : []);
     } catch (err) {
       const message = err?.networkMessage || err?.response?.data?.msg || '報表資料載入失敗';
       setError(message);
@@ -43,26 +59,64 @@ const ReportsPage = () => {
   };
 
   useEffect(() => {
-    loadBoot();
+    loadAll();
   }, []);
 
+  const statusOptions = useMemo(() => {
+    const set = new Set(['all']);
+    for (const row of quotes) set.add(row.status || 'draft');
+    for (const row of invoices) set.add(row.status || 'draft');
+    return Array.from(set);
+  }, [quotes, invoices]);
+
+  const reportRows = useMemo(() => {
+    const quoteRows = quotes.map((row) => ({
+      doc_type: 'quote',
+      no: row.quote_no || '',
+      status: row.status || '',
+      amount: Number(row.total_amount || 0),
+      date: toDateValue(row.issue_date || row.created_at),
+      raw: row,
+    }));
+    const invoiceRows = invoices.map((row) => ({
+      doc_type: 'invoice',
+      no: row.invoice_no || '',
+      status: row.status || '',
+      amount: Number(row.total_amount || 0),
+      date: toDateValue(row.issue_date || row.created_at),
+      raw: row,
+    }));
+
+    return [...quoteRows, ...invoiceRows]
+      .filter((row) => {
+        if (filters.doc_type !== 'all' && row.doc_type !== filters.doc_type) return false;
+        if (filters.status !== 'all' && row.status !== filters.status) return false;
+        if (filters.date_from && row.date && row.date < filters.date_from) return false;
+        if (filters.date_to && row.date && row.date > filters.date_to) return false;
+        return true;
+      })
+      .sort((a, b) => `${b.date}${b.no}`.localeCompare(`${a.date}${a.no}`));
+  }, [quotes, invoices, filters]);
+
   const stats = useMemo(() => {
-    const quoteTotal = bootData.quotes.reduce((sum, row) => sum + Number(row.total_amount || 0), 0);
-    const invoiceTotal = bootData.invoices.reduce((sum, row) => sum + Number(row.total_amount || 0), 0);
-    const unpaidTotal = bootData.invoices
+    const quoteRows = reportRows.filter((row) => row.doc_type === 'quote');
+    const invoiceRows = reportRows.filter((row) => row.doc_type === 'invoice');
+    const quoteTotal = quoteRows.reduce((sum, row) => sum + row.amount, 0);
+    const invoiceTotal = invoiceRows.reduce((sum, row) => sum + row.amount, 0);
+    const unpaidTotal = invoiceRows
       .filter((row) => !['paid', 'cancelled'].includes((row.status || '').toLowerCase()))
-      .reduce((sum, row) => sum + Number(row.total_amount || 0), 0);
+      .reduce((sum, row) => sum + row.amount, 0);
 
     return {
-      quoteCount: bootData.quotes.length,
-      invoiceCount: bootData.invoices.length,
-      customerCount: bootData.customers.length,
-      contactCount: bootData.contacts.length,
+      customerCount: customers.length,
+      contactCount: contacts.length,
+      quoteCount: quoteRows.length,
+      invoiceCount: invoiceRows.length,
       quoteTotal,
       invoiceTotal,
       unpaidTotal,
     };
-  }, [bootData]);
+  }, [reportRows, customers.length, contacts.length]);
 
   const handleExportTasks = async () => {
     setExporting(true);
@@ -78,20 +132,41 @@ const ReportsPage = () => {
         url: downloadUrl,
       });
     } catch (err) {
-      const message = err?.networkMessage || err?.response?.data?.msg || '匯出報表失敗';
+      const message = err?.networkMessage || err?.response?.data?.msg || '匯出任務報表失敗';
       setError(message);
     } finally {
       setExporting(false);
     }
   };
 
+  const exportCsv = () => {
+    const header = ['文件類型', '單號', '狀態', '日期', '金額'];
+    const body = reportRows.map((row) => [
+      row.doc_type === 'quote' ? '報價單' : '發票',
+      row.no,
+      row.status,
+      row.date,
+      row.amount.toFixed(2),
+    ]);
+    const csv = [header, ...body]
+      .map((line) => line.map(csvEscape).join(','))
+      .join('\n');
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `taskgo_report_${new Date().toISOString().slice(0, 10)}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="page">
       <AppHeader
         title="報表中心"
-        subtitle="業務數據、任務報表與文件輸出整合管理"
+        subtitle="支援篩選、CSV 匯出與 PDF 列印的營運報表"
         actions={(
-          <button type="button" className="refresh-btn" onClick={loadBoot} disabled={loading}>
+          <button type="button" className="refresh-btn" onClick={loadAll} disabled={loading}>
             重新整理
           </button>
         )}
@@ -137,10 +212,66 @@ const ReportsPage = () => {
 
       <section className="panel">
         <div className="panel-header">
+          <h2>篩選條件</h2>
+        </div>
+        <div className="attendance-filter-grid">
+          <label>
+            文件類型
+            <select
+              value={filters.doc_type}
+              onChange={(event) => setFilters((prev) => ({ ...prev, doc_type: event.target.value }))}
+            >
+              <option value="all">全部</option>
+              <option value="quote">報價單</option>
+              <option value="invoice">發票</option>
+            </select>
+          </label>
+          <label>
+            狀態
+            <select
+              value={filters.status}
+              onChange={(event) => setFilters((prev) => ({ ...prev, status: event.target.value }))}
+            >
+              {statusOptions.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            起日
+            <input
+              type="date"
+              value={filters.date_from}
+              onChange={(event) => setFilters((prev) => ({ ...prev, date_from: event.target.value }))}
+            />
+          </label>
+          <label>
+            迄日
+            <input
+              type="date"
+              value={filters.date_to}
+              onChange={(event) => setFilters((prev) => ({ ...prev, date_to: event.target.value }))}
+            />
+          </label>
+        </div>
+        <div className="report-actions">
+          <button type="button" className="secondary-btn" onClick={exportCsv}>
+            匯出 CSV
+          </button>
+          <button type="button" className="secondary-btn" onClick={() => window.print()}>
+            匯出 PDF（列印）
+          </button>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
           <h2>任務報表匯出</h2>
         </div>
         <p className="panel-hint">
-          匯出內容包含任務主檔、附件清單與工時紀錄，適合交付內部彙整或財務報帳使用。
+          匯出內容包含任務主檔、附件清單與工時紀錄，適合內部彙整或稽核。
         </p>
         <div className="report-actions">
           <button type="button" onClick={handleExportTasks} disabled={exporting}>
@@ -151,6 +282,42 @@ const ReportsPage = () => {
               下載 {exportResult.filename}
             </a>
           ) : null}
+        </div>
+      </section>
+
+      <section className="panel panel--table">
+        <div className="panel-header">
+          <h2>文件明細</h2>
+          <span className="panel-tag">{reportRows.length} 筆</span>
+        </div>
+        <div className="table-wrapper">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>文件類型</th>
+                <th>單號</th>
+                <th>狀態</th>
+                <th>日期</th>
+                <th>金額</th>
+              </tr>
+            </thead>
+            <tbody>
+              {reportRows.map((row) => (
+                <tr key={`${row.doc_type}-${row.no}-${row.date}`}>
+                  <td>{row.doc_type === 'quote' ? '報價單' : '發票'}</td>
+                  <td>{row.no}</td>
+                  <td>{row.status}</td>
+                  <td>{row.date || '-'}</td>
+                  <td>{row.amount.toFixed(2)}</td>
+                </tr>
+              ))}
+              {!loading && reportRows.length === 0 ? (
+                <tr>
+                  <td colSpan="5">目前無符合條件資料</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
         </div>
       </section>
 
