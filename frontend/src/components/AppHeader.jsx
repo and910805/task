@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { NavLink } from 'react-router-dom';
 
 import brandFallback from '../assets/brand-logo.svg';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -16,57 +16,88 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
   const brandName = branding.name || 'TaskGo';
   const logoSrc = branding.logoUrl || brandFallback;
   const roleLabel = labels[user?.role] || user?.role || '';
+  const navItems = [
+    { to: '/', label: '任務清單' },
+    { to: '/attendance', label: '出勤' },
+    { to: '/calendar', label: '行事曆' },
+    { to: '/crm', label: '營運中台' },
+    { to: '/reports', label: '報表' },
+    { to: '/profile', label: '個人設定' },
+    { to: '/admin', label: '管理後台', adminOnly: true },
+  ];
+  const visibleNavItems = navItems.filter((item) => !item.adminOnly || isAdmin);
 
   return (
-    <header className="page-header">
-      <div className="page-header__lead">
-        <div className="header-brand header-brand--banner">
-          <div className="header-brand__logo">
+    <>
+      <aside className="app-sidebar">
+        <div className="app-sidebar__brand">
+          <div className="app-sidebar__logo">
             <img src={logoSrc} alt={`${brandName} Logo`} />
           </div>
-          <span className="header-brand__name">{brandName}</span>
+          <div className="app-sidebar__brand-meta">
+            <strong>{brandName}</strong>
+            <span>Operations Suite</span>
+          </div>
         </div>
-        <div className="page-header__titles">
-          <h1>{title}</h1>
-          {subtitle ? <p className="page-subtitle">{subtitle}</p> : null}
-          {children}
-        </div>
-      </div>
 
-      <div className="header-actions">
-        {actions ? <div className="header-extra">{actions}</div> : null}
-
-        <select
-          className="theme-toggle"
-          value={preference}
-          onChange={(event) => setPreference(event.target.value)}
-          aria-label="主題切換"
-        >
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-          <option value="system">System</option>
-        </select>
-
-        <nav className="header-nav">
-          <Link to="/">任務清單</Link>
-          <Link to="/attendance">出勤</Link>
-          <Link to="/calendar">行事曆</Link>
-          <Link to="/crm">營運中台</Link>
-          <Link to="/reports">報表</Link>
-          {isAdmin ? <Link to="/admin">管理後台</Link> : null}
-          <Link to="/profile">個人設定</Link>
+        <nav className="app-sidebar__nav">
+          {visibleNavItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.to === '/'}
+              className={({ isActive }) =>
+                `app-sidebar__link${isActive ? ' is-active' : ''}`
+              }
+            >
+              {item.label}
+            </NavLink>
+          ))}
         </nav>
 
-        <span>
-          目前登入：{user?.username}
-          {roleLabel ? `（${roleLabel}）` : ''}
-        </span>
+        <div className="app-sidebar__footer">
+          <p className="app-sidebar__user">
+            目前登入：{user?.username}
+            {roleLabel ? `（${roleLabel}）` : ''}
+          </p>
+          <div className="app-sidebar__controls">
+            <select
+              className="theme-toggle app-sidebar__theme-select"
+              value={preference}
+              onChange={(event) => setPreference(event.target.value)}
+              aria-label="主題切換"
+            >
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+              <option value="system">System</option>
+            </select>
+            <button type="button" className="secondary-button" onClick={logout}>
+              登出
+            </button>
+          </div>
+        </div>
+      </aside>
 
-        <button type="button" onClick={logout}>
-          登出
-        </button>
-      </div>
-    </header>
+      <header className="page-header">
+        <div className="page-header__lead">
+          <div className="header-brand header-brand--banner">
+            <div className="header-brand__logo">
+              <img src={logoSrc} alt={`${brandName} Logo`} />
+            </div>
+            <span className="header-brand__name">{brandName}</span>
+          </div>
+          <div className="page-header__titles">
+            <h1>{title}</h1>
+            {subtitle ? <p className="page-subtitle">{subtitle}</p> : null}
+            {children}
+          </div>
+        </div>
+
+        <div className="header-actions">
+          {actions ? <div className="header-extra">{actions}</div> : null}
+        </div>
+      </header>
+    </>
   );
 };
 
