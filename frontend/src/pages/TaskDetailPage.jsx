@@ -11,37 +11,37 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { useRoleLabels } from '../context/RoleLabelContext.jsx';
 
 const statusOptions = [
-  { value: '尚未接單', label: '尚未接單' },
-  { value: '已接單', label: '已接單' },
-  { value: '進行中', label: '進行中' },
-  { value: '已完成', label: '已完成' },
+  { value: '尚未?�單', label: '尚未?�單' },
+  { value: '已接??, label: '已接?? },
+  { value: '?��?�?, label: '?��?�? },
+  { value: '已�???, label: '已�??? },
 ];
 
 const statusTransitionMap = {
-  '尚未接單': ['已接單', '進行中'],
-  '已接單': ['進行中'],
-  '進行中': ['已完成'],
-  '已完成': [],
+  '尚未?�單': ['已接??, '?��?�?],
+  '已接??: ['?��?�?],
+  '?��?�?: ['已�???],
+  '已�???: [],
 };
 
 const statusBadgeClass = {
-  尚未接單: 'status-badge status-pending',
-  已接單: 'status-badge status-in-progress',
-  進行中: 'status-badge status-in-progress',
-  已完成: 'status-badge status-completed',
+  尚未?�單: 'status-badge status-pending',
+  已接?? 'status-badge status-in-progress',
+  ?��?�? 'status-badge status-in-progress',
+  已�??? 'status-badge status-completed',
 };
 const defaultNoteTemplates = [
-  '已到場，開始作業。',
-  '已完成檢修。',
-  '等待材料/零件中。',
-  '已完成並清潔收尾。',
+  '已到?��??��?作業??,
+  '已�??�檢修�?,
+  '等�??��?/?�件中�?,
+  '已�??�並清�??�尾??,
 ];
 const detailTabs = [
-  { key: 'info', label: 'ℹ️ 任務資訊' },
-  { key: 'photos', label: '📷 照片' },
-  { key: 'audio', label: '🎤 語音' },
-  { key: 'signature', label: '✍️ 簽名' },
-  { key: 'time', label: '⏱ 工時' },
+  { key: 'info', label: '?��? 任�?資�?' },
+  { key: 'photos', label: '?�� ?��?' },
+  { key: 'audio', label: '?�� 語音' },
+  { key: 'signature', label: '?��? 簽�?' },
+  { key: 'time', label: '??工�?' },
 ];
 
 const toInputDatetimeValue = (value) => {
@@ -53,7 +53,7 @@ const toInputDatetimeValue = (value) => {
 };
 
 const formatDateTime = (value) => {
-  if (!value) return '未設定';
+  if (!value) return '?�設�?;
   try {
     return new Date(value).toLocaleString();
   } catch (err) {
@@ -78,7 +78,7 @@ const parseAssigneeChangeNote = (note) => {
 
 const formatAssigneeChangeSummary = (note) => {
   const payload = parseAssigneeChangeNote(note);
-  if (!payload) return '指派對象已更新。';
+  if (!payload) return '?�派對象已更?��?;
 
   const fromNames = payload.from_names || [];
   const toNames = payload.to_names || [];
@@ -86,11 +86,11 @@ const formatAssigneeChangeSummary = (note) => {
   const toIds = payload.to_ids || [];
 
   const fromLabel =
-    fromNames.length > 0 ? fromNames.join('、') : fromIds.length > 0 ? fromIds.join('、') : '未指派';
+    fromNames.length > 0 ? fromNames.join('??) : fromIds.length > 0 ? fromIds.join('??) : '?��?�?;
   const toLabel =
-    toNames.length > 0 ? toNames.join('、') : toIds.length > 0 ? toIds.join('、') : '未指派';
+    toNames.length > 0 ? toNames.join('??) : toIds.length > 0 ? toIds.join('??) : '?��?�?;
 
-  return `指派對象由 ${fromLabel} 變更為 ${toLabel}`;
+  return `?�派對象??${fromLabel} 變更??${toLabel}`;
 };
 
 const TaskDetailPage = () => {
@@ -146,7 +146,7 @@ const TaskDetailPage = () => {
         return;
       }
     } catch (err) {
-      console.error('無法取得備註模板', err);
+      console.error('?��??��??�註模板', err);
     }
     setNoteTemplates(defaultNoteTemplates);
   }, []);
@@ -158,7 +158,7 @@ const TaskDetailPage = () => {
       const { data } = await api.get(`tasks/${id}`);
       setTask(data);
     } catch (err) {
-      const message = getErrorMessage(err, '找不到該任務。');
+      const message = getErrorMessage(err, '?��??�該任�???);
       setError(message);
     } finally {
       setLoading(false);
@@ -171,7 +171,7 @@ const TaskDetailPage = () => {
       const { data } = await api.get('auth/assignable-users');
       setAssignableUsers(data);
     } catch (err) {
-      console.error('無法取得可指派使用者列表', err);
+      console.error('?��??��??��?派使?�者�?�?, err);
     }
   };
 
@@ -197,7 +197,7 @@ const TaskDetailPage = () => {
     () =>
       assignableUsers.map((option) => ({
         value: option.id,
-        label: `${option.username}（${labels[option.role] || option.role}）`,
+        label: `${option.username}�?{labels[option.role] || option.role}）`,
       })),
     [assignableUsers, labels],
   );
@@ -274,12 +274,12 @@ const TaskDetailPage = () => {
     [timeEntries, user?.id],
   );
   const canAcceptTask = useMemo(
-    () => isWorker && task?.status === '尚未接單' && !task?.assigned_to_id,
+    () => isWorker && task?.status === '尚未?�單' && !task?.assigned_to_id,
     [isWorker, task],
   );
   const isOverdue = useMemo(() => {
     if (!task?.due_date) return false;
-    if (task.status === '已完成') return false;
+    if (task.status === '已�???) return false;
     if (task.is_overdue !== undefined) return Boolean(task.is_overdue);
     return new Date(task.due_date).getTime() < Date.now();
   }, [task]);
@@ -312,23 +312,23 @@ const TaskDetailPage = () => {
   const handleStatusSubmit = async (event) => {
     event.preventDefault();
 
-    // ✅ 新增：工人完工前置檢查
+    // ???��?：工人�?工�?置檢??
     const nextStatus = (updateForm.status || '').trim();
     const note = (updateForm.note || '').trim();
 
-    if (isWorker && nextStatus === '已完成') {
+    if (isWorker && nextStatus === '已�???) {
       const missingItems = [];
 
       if (!note) {
-        missingItems.push('填寫說明（備註）');
+        missingItems.push('填寫說�?（�?註�?');
       }
       if (photoAttachments.length === 0) {
-        missingItems.push('至少 1 張照片');
+        missingItems.push('?��? 1 張照??);
       }
 
       if (missingItems.length > 0) {
-        setError(`完成任務前請先${missingItems.join('、')}。`);
-        if (missingItems.includes('至少 1 張照片')) {
+        setError(`完�?任�??��???{missingItems.join('??)}?�`);
+        if (missingItems.includes('?��? 1 張照??)) {
           setActiveTab('photos');
         }
         return;
@@ -346,7 +346,7 @@ const TaskDetailPage = () => {
       setUpdateForm({ status: '', note: '' });
       await loadTask();
     } catch (err) {
-      const message = getErrorMessage(err, '更新狀態失敗。');
+      const message = getErrorMessage(err, '?�新?�?�失?��?);
       setError(message);
     }
   };
@@ -363,10 +363,10 @@ const TaskDetailPage = () => {
         location_url: assignmentForm.location_url.trim() || null,
       };
       await api.put(`tasks/${id}`, payload);
-      setAssignmentSuccess('任務指派資訊已更新。');
+      setAssignmentSuccess('任�??�派資�?已更?��?);
       await loadTask();
     } catch (err) {
-      const message = getErrorMessage(err, '更新任務指派失敗。');
+      const message = getErrorMessage(err, '?�新任�??�派失�???);
       setAssignmentError(message);
     }
   };
@@ -406,7 +406,7 @@ const TaskDetailPage = () => {
     canvas.height = targetHeight;
     const context = canvas.getContext('2d');
     if (!context) {
-      throw new Error('無法建立畫布進行壓縮');
+      throw new Error('?��?建�??��??��?壓縮');
     }
     context.drawImage(image, 0, 0, targetWidth, targetHeight);
     const outputType = file.type && file.type.startsWith('image/') ? file.type : 'image/jpeg';
@@ -416,7 +416,7 @@ const TaskDetailPage = () => {
           if (result) {
             resolve(result);
           } else {
-            reject(new Error('壓縮失敗'));
+            reject(new Error('壓縮失�?'));
           }
         },
         outputType,
@@ -446,7 +446,7 @@ const TaskDetailPage = () => {
       });
       setPhotoForm((prev) => ({ ...prev, file: compressed }));
     } catch (err) {
-      setError('照片壓縮失敗，請重新選擇檔案。');
+      setError('?��?壓縮失�?，�??�新?��?檔�???);
       setPhotoForm((prev) => ({ ...prev, file: null }));
       if (photoFileInputRef.current) {
         photoFileInputRef.current.value = '';
@@ -476,7 +476,7 @@ const TaskDetailPage = () => {
       }
       await loadTask();
     } catch (err) {
-      const message = getErrorMessage(err, '上傳照片失敗。');
+      const message = getErrorMessage(err, '上傳?��?失�???);
       setError(message);
     } finally {
       setUploadingPhoto(false);
@@ -541,7 +541,7 @@ const TaskDetailPage = () => {
       clearAudioPreview();
       await loadTask();
     } catch (err) {
-      const message = getErrorMessage(err, '上傳語音失敗。');
+      const message = getErrorMessage(err, '上傳語音失�???);
       setError(message);
     } finally {
       setUploadingAudio(false);
@@ -590,7 +590,7 @@ const TaskDetailPage = () => {
       setSignatureNote('');
       await loadTask();
     } catch (err) {
-      const message = getErrorMessage(err, '上傳簽名失敗。');
+      const message = getErrorMessage(err, '上傳簽�?失�???);
       setError(message);
     } finally {
       setUploadingSignature(false);
@@ -603,10 +603,10 @@ const TaskDetailPage = () => {
     setTimeLoading(true);
     try {
       await api.post(`tasks/${id}/time/start`);
-      setTimeMessage('工時紀錄已開始。');
+      setTimeMessage('工�?紀?�已?��???);
       await loadTask();
     } catch (err) {
-      const message = getErrorMessage(err, '無法開始工時紀錄。');
+      const message = getErrorMessage(err, '?��??��?工�?紀?��?);
       setTimeError(message);
     } finally {
       setTimeLoading(false);
@@ -619,10 +619,10 @@ const TaskDetailPage = () => {
     setTimeLoading(true);
     try {
       await api.post(`tasks/${id}/time/stop`);
-      setTimeMessage('工時紀錄已結束。');
+      setTimeMessage('工�?紀?�已結�???);
       await loadTask();
     } catch (err) {
-      const message = getErrorMessage(err, '無法結束工時紀錄。');
+      const message = getErrorMessage(err, '?��?結�?工�?紀?��?);
       setTimeError(message);
     } finally {
       setTimeLoading(false);
@@ -636,7 +636,7 @@ const TaskDetailPage = () => {
       await api.post(`tasks/${id}/accept`);
       await loadTask();
     } catch (err) {
-      const message = getErrorMessage(err, '接單失敗。');
+      const message = getErrorMessage(err, '?�單失�???);
       setError(message);
     } finally {
       setAcceptingTask(false);
@@ -646,7 +646,7 @@ const TaskDetailPage = () => {
   if (loading) {
     return (
       <div className="page">
-        <p>載入中...</p>
+        <p>載入�?..</p>
       </div>
     );
   }
@@ -654,12 +654,12 @@ const TaskDetailPage = () => {
   if (!task) {
     return (
       <div className="page">
-        <p>{error || '無法顯示任務。'}</p>
+        <p>{error || '?��?顯示任�???}</p>
         <button type="button" className="secondary-button" onClick={loadTask}>
-          重試
+          ?�試
         </button>
         <button type="button" onClick={() => navigate(-1)}>
-          返回
+          返�?
         </button>
       </div>
     );
@@ -667,16 +667,16 @@ const TaskDetailPage = () => {
 
   return (
     <div className="page task-detail-page mobile-tabs">
-      <AppHeader title={task.title} subtitle={`任務編號：${task.id}`}>
+      <AppHeader title={task.title} subtitle={`任�?編�?�?{task.id}`}>
         <Link to="/" className="link-button">
-          ← 返回任務列表
+          ??返�?任�??�表
         </Link>
       </AppHeader>
       {error && (
         <div className="error-text" style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
           <span>{error}</span>
           <button type="button" className="secondary-button" onClick={loadTask}>
-            重試
+            ?�試
           </button>
         </div>
       )}
@@ -697,14 +697,14 @@ const TaskDetailPage = () => {
       {activeTab === 'info' && (
         <>
           <section className={`panel${showOverdueIndicator ? ' task-overdue' : ''}`}>
-            <h2>任務資訊</h2>
+            <h2>任�?資�?</h2>
             <p>
-              狀態：
+              ?�?��?
               <span className={statusBadgeClass[task.status] || 'status-badge'}>
-                ● {task.status}
+                ??{task.status}
               </span>
               {showOverdueIndicator && (
-                <span className="status-badge status-overdue">⚠️ 逾期</span>
+                <span className="status-badge status-overdue">?��? ?��?</span>
               )}
             </p>
             <label>
@@ -713,13 +713,13 @@ const TaskDetailPage = () => {
                 checked={showOverdue}
                 onChange={(event) => setShowOverdue(event.target.checked)}
               />
-              顯示逾期提醒
+              顯示?��??��?
             </label>
             <div className="info-quick-actions">
               <div className="info-quick-actions__buttons">
                 {canAcceptTask && (
                   <button type="button" onClick={handleAcceptTask} disabled={acceptingTask}>
-                    {acceptingTask ? '接單中…' : '接單'}
+                    {acceptingTask ? '?�單中�? : '?�單'}
                   </button>
                 )}
                 <button
@@ -727,22 +727,22 @@ const TaskDetailPage = () => {
                   onClick={handleStartTime}
                   disabled={!!activeEntry || timeLoading}
                 >
-                  {activeEntry ? '已開始' : '開始工時'}
+                  {activeEntry ? '已�?�? : '?��?工�?'}
                 </button>
                 <button type="button" onClick={handleStopTime} disabled={!activeEntry || timeLoading}>
-                  結束工時
+                  結�?工�?
                 </button>
               </div>
               {timeError && <p className="error-text">{timeError}</p>}
               {timeMessage && <p className="success-text">{timeMessage}</p>}
               {activeEntry && (
                 <p className="hint-text">
-                  工時進行中（開始於 {formatDateTime(activeEntry.start_time)}）
+                  工�??��?中�??��???{formatDateTime(activeEntry.start_time)}�?
                 </p>
               )}
             </div>
             <div>
-              <strong>指派對象：</strong>
+              <strong>?�派對象�?/strong>
               {task.assignees && task.assignees.length > 0 ? (
                 <div className="chip-list">
                   {task.assignees.map((assignee) => (
@@ -752,43 +752,43 @@ const TaskDetailPage = () => {
                   ))}
                 </div>
               ) : (
-                <span className="hint-text">未指派</span>
+                <span className="hint-text">?��?�?/span>
               )}
             </div>
-            <p>建立人：{task.assigned_by || '系統'}</p>
-            <p>內容：{task.description || '沒有描述'}</p>
-            <p>地點：{task.location}</p>
+            <p>建�?人�?{task.assigned_by || '系統'}</p>
+            <p>?�容：{task.description || '沒�??�述'}</p>
+            <p>?��?：{task.location}</p>
             {task.location_url && (
               <p>
-                地圖連結：
+                ?��????�?
                 <a href={task.location_url} target="_blank" rel="noreferrer">
                   {task.location_url}
                 </a>
               </p>
             )}
-            <p>預計完成時間：{formatDateTime(task.expected_time)}</p>
-            <p>實際完成時間：{task.completed_at ? formatDateTime(task.completed_at) : '未完成'}</p>
-            <p>總工時：{formatHours(task.total_work_hours)} 小時</p>
+            <p>?��?完�??��?：{formatDateTime(task.expected_time)}</p>
+            <p>實�?完�??��?：{task.completed_at ? formatDateTime(task.completed_at) : '?��???}</p>
+            <p>總工?��?{formatHours(task.total_work_hours)} 小�?</p>
             {task.due_date && (
               <p>
-                截止日期：{formatDateTime(task.due_date)}
-                {showOverdueIndicator && <span className="hint-text">（已逾期）</span>}
+                ?�止?��?：{formatDateTime(task.due_date)}
+                {showOverdueIndicator && <span className="hint-text">（已?��?�?/span>}
               </p>
             )}
           </section>
 
           {isManager && (
             <section className="panel">
-              <h2>指派設定</h2>
+              <h2>?�派設�?</h2>
               {assignmentError && <p className="error-text">{assignmentError}</p>}
               {assignmentSuccess && <p className="success-text">{assignmentSuccess}</p>}
               <form className="stack" onSubmit={handleAssignmentSubmit}>
                 <label>
-                  指派給
+                  ?�派�?
                   <Select
                     isMulti
                     classNamePrefix="assignee-select"
-                    placeholder="選擇負責人"
+                    placeholder="?��?負責�?
                     options={assigneeOptions}
                     value={assigneeOptions.filter((option) =>
                       assignmentForm.assignee_ids.includes(option.value),
@@ -799,7 +799,7 @@ const TaskDetailPage = () => {
                   />
                 </label>
                 <label>
-                  截止時間
+                  ?�止?��?
                   <input
                     type="datetime-local"
                     name="due_date"
@@ -808,28 +808,28 @@ const TaskDetailPage = () => {
                   />
                 </label>
                 <label>
-                  地圖連結
+                  ?��????
                   <input
                     type="url"
                     name="location_url"
                     value={assignmentForm.location_url}
                     onChange={handleAssignmentChange}
-                    placeholder="可貼上 Google 地圖連結"
+                    placeholder="?�貼�?Google ?��????"
                   />
                 </label>
-                <button type="submit">儲存指派</button>
+                <button type="submit">?��??�派</button>
               </form>
             </section>
           )}
 
           <section className="panel">
-            <h2>狀態更新與回報</h2>
+            <h2>?�?�更?��??�報</h2>
             {task.updates.length === 0 ? (
-              <p>尚無回報。</p>
+              <p>尚無?�報??/p>
             ) : (
               <ul className="updates">
                 {task.updates.map((update) => {
-                  const isAssigneeChange = update.status === '指派變更';
+                  const isAssigneeChange = update.status === '?�派變更';
                   const assigneeSummary = isAssigneeChange
                     ? formatAssigneeChangeSummary(update.note)
                     : null;
@@ -840,15 +840,15 @@ const TaskDetailPage = () => {
                         <strong>{update.author || '系統'}</strong> -{' '}
                         {formatDateTime(update.created_at)}
                       </p>
-                      {update.status && <p>狀態：{update.status}</p>}
+                      {update.status && <p>?�?��?{update.status}</p>}
                       {isAssigneeChange && <p>{assigneeSummary}</p>}
-                      {update.note && !isAssigneeChange && <p>備註：{update.note}</p>}
+                      {update.note && !isAssigneeChange && <p>?�註：{update.note}</p>}
                       {(update.start_time || update.end_time) && (
                         <p>
-                          工時：
-                          {update.start_time ? formatDateTime(update.start_time) : '未記錄'} →
-                          {update.end_time ? formatDateTime(update.end_time) : '進行中'} （
-                          {formatHours(update.work_hours)} 小時）
+                          工�?�?
+                          {update.start_time ? formatDateTime(update.start_time) : '?��???} ??
+                          {update.end_time ? formatDateTime(update.end_time) : '?��?�?} �?
+                          {formatHours(update.work_hours)} 小�?�?
                         </p>
                       )}
                     </li>
@@ -858,9 +858,9 @@ const TaskDetailPage = () => {
             )}
             <form className="stack" onSubmit={handleStatusSubmit}>
               <label>
-                狀態
+                ?�??
                 <select name="status" value={updateForm.status} onChange={handleUpdateChange}>
-                  <option value="">選擇狀態</option>
+                  <option value="">?��??�??/option>
                   {availableStatusOptions.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
@@ -869,18 +869,18 @@ const TaskDetailPage = () => {
                 </select>
               </label>
               <label>
-                備註
+                ?�註
                 <textarea
                   ref={noteInputRef}
                   name="note"
                   value={updateForm.note}
                   onChange={handleUpdateChange}
-                  placeholder="填寫回報內容"
+                  placeholder="填寫?�報?�容"
                 />
               </label>
               {noteTemplates.length > 0 && (
                 <div className="note-template-picker">
-                  <p className="hint-text">常用備註快速選單</p>
+                  <p className="hint-text">常用?�註快速選??/p>
                   <div className="chip-list">
                     {noteTemplates.map((template, index) => (
                       <button
@@ -895,7 +895,7 @@ const TaskDetailPage = () => {
                   </div>
                 </div>
               )}
-              <button type="submit">送出回報</button>
+              <button type="submit">?�出?�報</button>
             </form>
           </section>
         </>
@@ -903,10 +903,10 @@ const TaskDetailPage = () => {
 
       {activeTab === 'photos' && (
         <section className="panel">
-          <h2>📷 照片紀錄</h2>
+          <h2>?�� ?��?紀??/h2>
           {latestPhotoAttachment && (
             <div className="attachment-preview">
-              <p>最新照片</p>
+              <p>?�?�照??/p>
               <figure>
                 <img
                   src={latestPhotoAttachment.url}
@@ -914,13 +914,13 @@ const TaskDetailPage = () => {
                 />
                 <figcaption>
                   {latestPhotoAttachment.original_name}
-                  {latestPhotoAttachment.note && <span>（{latestPhotoAttachment.note}）</span>}
+                  {latestPhotoAttachment.note && <span>（{latestPhotoAttachment.note}�?/span>}
                 </figcaption>
               </figure>
             </div>
           )}
           {photoAttachments.length === 0 ? (
-            <p>尚未上傳照片。</p>
+            <p>尚未上傳?��???/p>
           ) : (
             <div className="attachment-grid">
               {photoAttachments.map((attachment) => (
@@ -928,7 +928,7 @@ const TaskDetailPage = () => {
                   <img src={attachment.url} alt={attachment.original_name} />
                   <figcaption>
                     {attachment.original_name}
-                    {attachment.note && <span>（{attachment.note}）</span>}
+                    {attachment.note && <span>（{attachment.note}�?/span>}
                   </figcaption>
                 </figure>
               ))}
@@ -936,18 +936,18 @@ const TaskDetailPage = () => {
           )}
           <form className="stack" onSubmit={handlePhotoUpload}>
             <label>
-              照片說明
+              ?��?說�?
               <input
                 name="photo-note"
                 value={photoForm.note}
                 onChange={(event) =>
                   setPhotoForm((prev) => ({ ...prev, note: event.target.value }))
                 }
-                placeholder="可填寫補充說明"
+                placeholder="?�填寫�??�說??
               />
             </label>
             <label>
-              選擇照片
+              ?��??��?
               <input
                 ref={photoFileInputRef}
                 type="file"
@@ -955,28 +955,28 @@ const TaskDetailPage = () => {
                 onChange={handlePhotoFileChange}
               />
             </label>
-            {photoProcessing && <p className="hint-text">照片處理中…</p>}
+            {photoProcessing && <p className="hint-text">?��??��?中�?/p>}
             {photoPreviewUrl && photoPreviewMeta && (
               <div className="attachment-preview">
                 <p>
-                  壓縮後預覽：<strong>{photoPreviewMeta.name}</strong>{' '}
+                  壓縮後�?覽�?<strong>{photoPreviewMeta.name}</strong>{' '}
                   <span>
-                    （
+                    �?
                     {photoPreviewMeta.size
                       ? `${(photoPreviewMeta.size / 1024).toFixed(1)} KB`
-                      : '大小未知'}
-                    ，原始檔
+                      : '大�??�知'}
+                    ，�?始�?
                     {photoPreviewMeta.originalSize
                       ? `${(photoPreviewMeta.originalSize / 1024).toFixed(1)} KB`
-                      : '未知'}
-                    ）
+                      : '?�知'}
+                    �?
                   </span>
                 </p>
-                <img src={photoPreviewUrl} alt="上傳照片預覽" />
+                <img src={photoPreviewUrl} alt="上傳?��??�覽" />
               </div>
             )}
             <button type="submit" disabled={!photoForm.file || uploadingPhoto || photoProcessing}>
-              {uploadingPhoto ? '上傳中…' : '上傳照片'}
+              {uploadingPhoto ? '上傳中�? : '上傳?��?'}
             </button>
           </form>
         </section>
@@ -984,9 +984,9 @@ const TaskDetailPage = () => {
 
       {activeTab === 'audio' && (
         <section className="panel">
-          <h2>🎤 語音回報</h2>
+          <h2>?�� 語音?�報</h2>
           {audioAttachments.length === 0 ? (
-            <p>尚未上傳語音檔。</p>
+            <p>尚未上傳語音檔�?/p>
           ) : (
             <ul className="attachments">
               {audioAttachments.map((attachment) => (
@@ -994,38 +994,38 @@ const TaskDetailPage = () => {
                   <audio controls src={attachment.url} />
                   <p>
                     {attachment.original_name}
-                    {attachment.note && <span>（{attachment.note}）</span>}
+                    {attachment.note && <span>（{attachment.note}�?/span>}
                   </p>
-                  {attachment.transcript && <p>逐字稿：{attachment.transcript}</p>}
+                  {attachment.transcript && <p>?��?稿�?{attachment.transcript}</p>}
                 </li>
               ))}
             </ul>
           )}
           <form className="stack" onSubmit={handleAudioUpload}>
             <label>
-              語音說明
+              語音說�?
               <input
                 name="audio-note"
                 value={audioForm.note}
                 onChange={(event) =>
                   setAudioForm((prev) => ({ ...prev, note: event.target.value }))
                 }
-                placeholder="可輸入語音內容概要"
+                placeholder="?�輸?��??�內容�?�?
               />
             </label>
             <label>
-              語音逐字稿（選填）
+              語音?��?稿�??�填�?
               <textarea
                 name="audio-transcript"
                 value={audioForm.transcript}
                 onChange={(event) =>
                   setAudioForm((prev) => ({ ...prev, transcript: event.target.value }))
                 }
-                placeholder="可預先輸入語音文字描述"
+                placeholder="?��??�輸?��??��?字�?�?
               />
             </label>
             <label>
-              選擇語音檔
+              ?��?語音�?
               <input
                 ref={audioFileInputRef}
                 type="file"
@@ -1037,14 +1037,14 @@ const TaskDetailPage = () => {
             {audioForm.file && (
               <div className="attachment-preview">
                 <p>
-                  已準備檔案：
+                  已�??��?案�?
                   <strong>{audioForm.file.name}</strong>
                   <span>
-                    （
+                    �?
                     {audioForm.file.size
                       ? `${(audioForm.file.size / 1024).toFixed(1)} KB`
-                      : '大小未知'}
-                    ）
+                      : '大�??�知'}
+                    �?
                   </span>
                 </p>
                 {audioPreviewUrl && <audio controls src={audioPreviewUrl} />}
@@ -1053,12 +1053,12 @@ const TaskDetailPage = () => {
                   onClick={handleClearRecordedAudio}
                   disabled={uploadingAudio}
                 >
-                  清除錄音
+                  清除?�音
                 </button>
               </div>
             )}
             <button type="submit" disabled={!audioForm.file || uploadingAudio}>
-              {uploadingAudio ? '上傳中…' : '上傳語音'}
+              {uploadingAudio ? '上傳中�? : '上傳語音'}
             </button>
           </form>
         </section>
@@ -1066,79 +1066,81 @@ const TaskDetailPage = () => {
 
       {activeTab === 'signature' && (
         <section className="panel">
-          <h2>✍️ 電子簽名</h2>
+          <h2>?��? ?��?簽�?</h2>
           {signatureAttachment ? (
             <div className="signature-preview">
-              <img src={signatureAttachment.url} alt="任務簽名" />
+              <img src={signatureAttachment.url} alt="任�?簽�?" />
               <p>
-                {signatureAttachment.note || '已上傳簽名'}
+                {signatureAttachment.note || '已�??�簽??}
                 {signatureAttachment.uploaded_at && (
-                  <span>（{formatDateTime(signatureAttachment.uploaded_at)}）</span>
+                  <span>（{formatDateTime(signatureAttachment.uploaded_at)}�?/span>
                 )}
               </p>
             </div>
           ) : (
-            <p>目前尚未上傳簽名。</p>
+            <p>?��?尚未上傳簽�???/p>
           )}
-          <p className="hint-text">在下方畫布簽名並按送出即可更新簽名檔。</p>
+          <p className="hint-text">?��??�畫布簽?�並?�送出?�可?�新簽�?檔�?/p>
           <label>
-            簽名備註（選填）
+            簽�??�註（選填�?
             <input
               name="signature-note"
               value={signatureNote}
               onChange={(event) => setSignatureNote(event.target.value)}
-              placeholder="可輸入簽名說明或負責人"
+              placeholder="?�輸?�簽?�說?��?負責�?
             />
           </label>
           <SignaturePad onSubmit={handleSignatureSubmit} disabled={uploadingSignature} />
-          {uploadingSignature && <p className="hint-text">簽名上傳中…</p>}
+          {uploadingSignature && <p className="hint-text">簽�?上傳中�?/p>}
         </section>
       )}
 
       {activeTab === 'time' && (
         <section className="panel">
-          <h2>⏱ 工時紀錄</h2>
+          <h2>??工�?紀??/h2>
           {timeError && <p className="error-text">{timeError}</p>}
           {timeMessage && <p className="success-text">{timeMessage}</p>}
           <p>
-            總工時：<strong>{formatHours(task.total_work_hours)} 小時</strong>
+            總工?��?<strong>{formatHours(task.total_work_hours)} 小�?</strong>
           </p>
           <div className="time-actions">
             <button type="button" onClick={handleStartTime} disabled={!!activeEntry || timeLoading}>
-              {activeEntry ? '已開始' : '開始工作'}
+              {activeEntry ? '已�?�? : '?��?工�?'}
             </button>
             <button type="button" onClick={handleStopTime} disabled={!activeEntry || timeLoading}>
-              結束工作
+              結�?工�?
             </button>
           </div>
           {activeEntry && (
             <p className="hint-text">
-              工時進行中（開始於 {formatDateTime(activeEntry.start_time)}）
+              工�??��?中�??��???{formatDateTime(activeEntry.start_time)}�?
             </p>
           )}
           {timeEntries.length === 0 ? (
-            <p>尚無工時紀錄。</p>
+            <p>尚無工�?紀?��?/p>
           ) : (
+            <div className="table-wrapper">
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>使用者</th>
-                  <th>開始時間</th>
-                  <th>結束時間</th>
-                  <th>工時（小時）</th>
+                  <th>使用??/th>
+                  <th>?��??��?</th>
+                  <th>結�??��?</th>
+                  <th>工�?（�??��?</th>
                 </tr>
               </thead>
               <tbody>
                 {timeEntries.map((entry) => (
                   <tr key={entry.id}>
-                    <td>{entry.author || `使用者 ${entry.user_id}`}</td>
-                    <td>{entry.start_time ? formatDateTime(entry.start_time) : '—'}</td>
-                    <td>{entry.end_time ? formatDateTime(entry.end_time) : '進行中'}</td>
+                    <td>{entry.author || `使用??${entry.user_id}`}</td>
+                    <td>{entry.start_time ? formatDateTime(entry.start_time) : '??}</td>
+                    <td>{entry.end_time ? formatDateTime(entry.end_time) : '?��?�?}</td>
                     <td>{formatHours(entry.work_hours)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </section>
       )}
