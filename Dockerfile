@@ -1,9 +1,16 @@
 # ---- 1) Build Frontend (Vite + React) ----
-FROM node:20-alpine AS frontend_builder
+FROM node:20-bookworm-slim AS frontend_builder
 WORKDIR /app/frontend
 
+ENV CI=true \
+    npm_config_optional=true \
+    npm_config_fund=false \
+    npm_config_audit=false
+
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+# npm optional deps (esbuild platform package) may be skipped on some builders.
+# Use npm install with optional deps explicitly enabled for best cross-platform compatibility.
+RUN npm cache clean --force && npm install --include=dev --include=optional
 
 COPY frontend/ ./
 
@@ -11,7 +18,7 @@ COPY frontend/ ./
 ARG VITE_API_BASE_URL
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 
-RUN npm run build
+RUN npm run build -- --debug
 
 
 # ---- 2) Backend (Flask + Gunicorn) ----
