@@ -4,6 +4,26 @@ import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
 
 const blankItem = () => ({ description: '', quantity: 1, unit_price: 0 });
+const QUOTE_TEMPLATES = [
+  {
+    id: 'electrical-basic',
+    label: '標準水電施工',
+    items: [
+      { description: '現場施工工資', quantity: 1, unit_price: 8500 },
+      { description: '材料費', quantity: 1, unit_price: 4200 },
+      { description: '測試與驗收', quantity: 1, unit_price: 1500 },
+    ],
+  },
+  {
+    id: 'maintenance',
+    label: '維修保養方案',
+    items: [
+      { description: '定期巡檢', quantity: 1, unit_price: 3200 },
+      { description: '故障檢修', quantity: 1, unit_price: 2600 },
+      { description: '耗材更新', quantity: 1, unit_price: 1800 },
+    ],
+  },
+];
 
 const CrmQuotesPage = () => {
   const [customers, setCustomers] = useState([]);
@@ -23,6 +43,7 @@ const CrmQuotesPage = () => {
     note: '',
   });
   const [items, setItems] = useState([blankItem()]);
+  const [templateId, setTemplateId] = useState('');
 
   const loadBase = async () => {
     const [customerRes, contactRes] = await Promise.all([
@@ -64,6 +85,12 @@ const CrmQuotesPage = () => {
   const addItem = () => setItems((prev) => [...prev, blankItem()]);
   const removeItem = (index) =>
     setItems((prev) => prev.filter((_, idx) => idx !== index).length ? prev.filter((_, idx) => idx !== index) : [blankItem()]);
+  const applyTemplate = () => {
+    if (!templateId) return;
+    const template = QUOTE_TEMPLATES.find((item) => item.id === templateId);
+    if (!template) return;
+    setItems(template.items.map((item) => ({ ...item })));
+  };
 
   const submitQuote = async (event) => {
     event.preventDefault();
@@ -185,9 +212,22 @@ const CrmQuotesPage = () => {
           <div className="crm-line-items">
             <div className="panel-header">
               <h3>品項</h3>
-              <button type="button" className="secondary-btn" onClick={addItem}>
-                新增品項
-              </button>
+              <div className="crm-line-tools">
+                <select value={templateId} onChange={(event) => setTemplateId(event.target.value)}>
+                  <option value="">套用範本（選填）</option>
+                  {QUOTE_TEMPLATES.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" className="secondary-btn" onClick={applyTemplate} disabled={!templateId}>
+                  套用範本
+                </button>
+                <button type="button" className="secondary-btn" onClick={addItem}>
+                  新增品項
+                </button>
+              </div>
             </div>
             {items.map((item, idx) => (
               <div key={`${idx}-${item.description}`} className="crm-line-item">

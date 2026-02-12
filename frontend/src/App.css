@@ -286,6 +286,7 @@ a:hover {
 .header-nav {
   display: flex;
   gap: 0.85rem;
+  flex-wrap: wrap;
 }
 
 .header-nav a {
@@ -391,6 +392,14 @@ a:hover {
   flex-direction: column;
   gap: 0.35rem;
   box-shadow: var(--panel-metric-shadow);
+}
+
+.metric-label {
+  margin: 0;
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-soft);
 }
 
 .metric-card__value {
@@ -767,6 +776,126 @@ button:disabled {
   box-shadow: var(--panel-accent-shadow);
   color: var(--panel-text);
   font-weight: 600;
+}
+
+.crm-hub-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+.crm-module-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 1.15rem;
+  border-radius: 16px;
+  border: 1px solid var(--panel-border);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.52));
+  color: inherit;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+[data-theme='dark'] .crm-module-card {
+  background: linear-gradient(145deg, rgba(17, 24, 39, 0.8), rgba(30, 41, 59, 0.65));
+}
+
+.crm-module-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--accent-color);
+  box-shadow: 0 22px 34px rgba(15, 23, 42, 0.24);
+}
+
+.crm-module-card h3 {
+  margin: 0;
+  font-size: 1.12rem;
+}
+
+.crm-module-card p {
+  margin: 0;
+  color: var(--muted-color);
+  line-height: 1.45;
+}
+
+.crm-module-card__tag {
+  width: fit-content;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(217, 119, 6, 0.35);
+  background: rgba(217, 119, 6, 0.14);
+  color: var(--accent-hover);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.crm-module-card__cta {
+  margin-top: auto;
+  font-weight: 700;
+  color: var(--accent-color);
+}
+
+.report-summary-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.report-summary-card {
+  margin: 0;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  background: var(--panel-bg);
+}
+
+.report-summary-card h3 {
+  margin: 0.4rem 0 0;
+  font-size: 1.4rem;
+  color: var(--accent-hover);
+}
+
+.report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.attendance-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.9rem;
+}
+
+.crm-line-tools {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.crm-line-tools select {
+  min-width: 170px;
+}
+
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem 1.05rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: var(--button-bg);
+  color: var(--button-color);
+  font-weight: 700;
+}
+
+.refresh-btn:hover {
+  background: var(--button-hover-bg);
+  color: var(--button-hover-color);
 }
 
 .crm-form-grid {

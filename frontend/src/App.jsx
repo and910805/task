@@ -17,6 +17,8 @@ import CrmCustomersPage from './pages/CrmCustomersPage.jsx';
 import CrmContactsPage from './pages/CrmContactsPage.jsx';
 import CrmQuotesPage from './pages/CrmQuotesPage.jsx';
 import CrmInvoicesPage from './pages/CrmInvoicesPage.jsx';
+import AttendancePage from './pages/AttendancePage.jsx';
+import ReportsPage from './pages/ReportsPage.jsx';
 import './App.css';
 
 const PrivateRoute = ({ children, roles }) => {
@@ -107,6 +109,22 @@ const AppRoutes = () => (
       element={(
         <PrivateRoute>
           <CrmInvoicesPage />
+        </PrivateRoute>
+      )}
+    />
+    <Route
+      path="/attendance"
+      element={(
+        <PrivateRoute>
+          <AttendancePage />
+        </PrivateRoute>
+      )}
+    />
+    <Route
+      path="/reports"
+      element={(
+        <PrivateRoute>
+          <ReportsPage />
         </PrivateRoute>
       )}
     />

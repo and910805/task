@@ -4,6 +4,25 @@ import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
 
 const blankItem = () => ({ description: '', quantity: 1, unit_price: 0 });
+const INVOICE_TEMPLATES = [
+  {
+    id: 'project-stage',
+    label: '工程進度請款',
+    items: [
+      { description: '第一期工程款', quantity: 1, unit_price: 30000 },
+      { description: '第二期工程款', quantity: 1, unit_price: 25000 },
+    ],
+  },
+  {
+    id: 'monthly-service',
+    label: '月度維護服務',
+    items: [
+      { description: '駐點維護服務', quantity: 1, unit_price: 12000 },
+      { description: '設備巡檢', quantity: 1, unit_price: 4500 },
+      { description: '緊急叫修預備', quantity: 1, unit_price: 3000 },
+    ],
+  },
+];
 
 const CrmInvoicesPage = () => {
   const [customers, setCustomers] = useState([]);
@@ -23,6 +42,7 @@ const CrmInvoicesPage = () => {
     note: '',
   });
   const [items, setItems] = useState([blankItem()]);
+  const [templateId, setTemplateId] = useState('');
 
   const loadBase = async () => {
     const [customerRes, contactRes] = await Promise.all([
@@ -64,6 +84,12 @@ const CrmInvoicesPage = () => {
   const addItem = () => setItems((prev) => [...prev, blankItem()]);
   const removeItem = (index) =>
     setItems((prev) => prev.filter((_, idx) => idx !== index).length ? prev.filter((_, idx) => idx !== index) : [blankItem()]);
+  const applyTemplate = () => {
+    if (!templateId) return;
+    const template = INVOICE_TEMPLATES.find((item) => item.id === templateId);
+    if (!template) return;
+    setItems(template.items.map((item) => ({ ...item })));
+  };
 
   const submitInvoice = async (event) => {
     event.preventDefault();
@@ -175,9 +201,22 @@ const CrmInvoicesPage = () => {
           <div className="crm-line-items">
             <div className="panel-header">
               <h3>品項</h3>
-              <button type="button" className="secondary-btn" onClick={addItem}>
-                新增品項
-              </button>
+              <div className="crm-line-tools">
+                <select value={templateId} onChange={(event) => setTemplateId(event.target.value)}>
+                  <option value="">套用範本（選填）</option>
+                  {INVOICE_TEMPLATES.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" className="secondary-btn" onClick={applyTemplate} disabled={!templateId}>
+                  套用範本
+                </button>
+                <button type="button" className="secondary-btn" onClick={addItem}>
+                  新增品項
+                </button>
+              </div>
             </div>
             {items.map((item, idx) => (
               <div key={`${idx}-${item.description}`} className="crm-line-item">
