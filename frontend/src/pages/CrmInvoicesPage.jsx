@@ -1,0 +1,263 @@
+import { useEffect, useMemo, useState } from 'react';
+
+import api from '../api/client.js';
+import AppHeader from '../components/AppHeader.jsx';
+
+const blankItem = () => ({ description: '', quantity: 1, unit_price: 0 });
+
+const CrmInvoicesPage = () => {
+  const [customers, setCustomers] = useState([]);
+  const [contacts, setContacts] = useState([]);
+  const [invoices, setInvoices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const [form, setForm] = useState({
+    customer_id: '',
+    contact_id: '',
+    issue_date: '',
+    due_date: '',
+    currency: 'TWD',
+    tax_rate: 5,
+    note: '',
+  });
+  const [items, setItems] = useState([blankItem()]);
+
+  const loadBase = async () => {
+    const [customerRes, contactRes] = await Promise.all([
+      api.get('crm/customers'),
+      api.get('crm/contacts'),
+    ]);
+    setCustomers(Array.isArray(customerRes.data) ? customerRes.data : []);
+    setContacts(Array.isArray(contactRes.data) ? contactRes.data : []);
+  };
+
+  const loadInvoices = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const { data } = await api.get('crm/invoices');
+      setInvoices(Array.isArray(data) ? data : []);
+    } catch (err) {
+      const message = err?.networkMessage || err?.response?.data?.msg || '發票載入失敗';
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadBase();
+    loadInvoices();
+  }, []);
+
+  const handleChange = (event) => {
+    const { name, value } = event.target;
+    setForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleItemChange = (index, field, value) => {
+    setItems((prev) => prev.map((item, idx) => (idx === index ? { ...item, [field]: value } : item)));
+  };
+
+  const addItem = () => setItems((prev) => [...prev, blankItem()]);
+  const removeItem = (index) =>
+    setItems((prev) => prev.filter((_, idx) => idx !== index).length ? prev.filter((_, idx) => idx !== index) : [blankItem()]);
+
+  const submitInvoice = async (event) => {
+    event.preventDefault();
+    if (!form.customer_id) {
+      setError('請先選擇客戶');
+      return;
+    }
+    const validItems = items.filter((item) => item.description.trim());
+    if (validItems.length === 0) {
+      setError('請至少輸入一筆品項');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      await api.post('crm/invoices', {
+        ...form,
+        customer_id: Number(form.customer_id),
+        contact_id: form.contact_id ? Number(form.contact_id) : null,
+        items: validItems.map((item) => ({
+          description: item.description.trim(),
+          quantity: Number(item.quantity || 0),
+          unit_price: Number(item.unit_price || 0),
+        })),
+      });
+      setForm({
+        customer_id: '',
+        contact_id: '',
+        issue_date: '',
+        due_date: '',
+        currency: 'TWD',
+        tax_rate: 5,
+        note: '',
+      });
+      setItems([blankItem()]);
+      await loadInvoices();
+    } catch (err) {
+      const message = err?.response?.data?.msg || '新增發票失敗';
+      setError(message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openPdf = (invoiceId) => {
+    const base = (api.defaults.baseURL || '').replace(/\/$/, '');
+    window.open(`${base}/crm/invoices/${invoiceId}/pdf`, '_blank', 'noopener');
+  };
+
+  const contactOptions = useMemo(
+    () => contacts.filter((contact) => String(contact.customer_id) === String(form.customer_id)),
+    [contacts, form.customer_id],
+  );
+
+  return (
+    <div className="page">
+      <AppHeader title="發票" subtitle="建立收款發票與品項" />
+
+      {error && <p className="error-text">{error}</p>}
+
+      <section className="panel">
+        <h2>新增發票</h2>
+        <form className="stack" onSubmit={submitInvoice}>
+          <div className="crm-form-grid">
+            <label>
+              客戶
+              <select name="customer_id" value={form.customer_id} onChange={handleChange}>
+                <option value="">選擇客戶</option>
+                {customers.map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              聯絡人
+              <select name="contact_id" value={form.contact_id} onChange={handleChange}>
+                <option value="">選擇聯絡人</option>
+                {contactOptions.map((contact) => (
+                  <option key={contact.id} value={contact.id}>
+                    {contact.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              出單日期
+              <input type="date" name="issue_date" value={form.issue_date} onChange={handleChange} />
+            </label>
+            <label>
+              付款期限
+              <input type="date" name="due_date" value={form.due_date} onChange={handleChange} />
+            </label>
+            <label>
+              稅率 (%)
+              <input type="number" name="tax_rate" value={form.tax_rate} onChange={handleChange} step="0.1" />
+            </label>
+            <label>
+              幣別
+              <input name="currency" value={form.currency} onChange={handleChange} />
+            </label>
+            <label className="crm-span-2">
+              備註
+              <textarea name="note" value={form.note} onChange={handleChange} />
+            </label>
+          </div>
+
+          <div className="crm-line-items">
+            <div className="panel-header">
+              <h3>品項</h3>
+              <button type="button" className="secondary-btn" onClick={addItem}>
+                新增品項
+              </button>
+            </div>
+            {items.map((item, idx) => (
+              <div key={`${idx}-${item.description}`} className="crm-line-item">
+                <input
+                  value={item.description}
+                  onChange={(event) => handleItemChange(idx, 'description', event.target.value)}
+                  placeholder="品項說明"
+                />
+                <input
+                  type="number"
+                  value={item.quantity}
+                  onChange={(event) => handleItemChange(idx, 'quantity', event.target.value)}
+                  placeholder="數量"
+                  step="0.1"
+                />
+                <input
+                  type="number"
+                  value={item.unit_price}
+                  onChange={(event) => handleItemChange(idx, 'unit_price', event.target.value)}
+                  placeholder="單價"
+                  step="0.1"
+                />
+                <button type="button" className="secondary-btn" onClick={() => removeItem(idx)}>
+                  移除
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="crm-form-actions">
+            <button type="submit" disabled={saving}>
+              {saving ? '處理中...' : '建立發票'}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section className="panel panel--table">
+        <div className="panel-header">
+          <h2>發票列表</h2>
+        </div>
+        <div className="table-wrapper">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>編號</th>
+                <th>狀態</th>
+                <th>金額</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {invoices.map((invoice) => (
+                <tr key={invoice.id}>
+                  <td>{invoice.invoice_no}</td>
+                  <td>{invoice.status}</td>
+                  <td>{invoice.total_amount?.toFixed(2)}</td>
+                  <td className="crm-actions-cell">
+                    <button type="button" className="secondary-btn" onClick={() => openPdf(invoice.id)}>
+                      PDF
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {!loading && invoices.length === 0 && (
+                <tr>
+                  <td colSpan="4">尚無發票</td>
+                </tr>
+              )}
+              {loading && (
+                <tr>
+                  <td colSpan="4">載入中...</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+};
+
+export default CrmInvoicesPage;

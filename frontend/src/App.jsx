@@ -12,6 +12,11 @@ import TaskListPage from './pages/TaskListPage.jsx';
 import AdminPage from './pages/AdminPage.jsx';
 import ProfilePage from './pages/ProfilePage.jsx';
 import TaskCalendarPage from './pages/TaskCalendarPage.jsx';
+import CrmDashboardPage from './pages/CrmDashboardPage.jsx';
+import CrmCustomersPage from './pages/CrmCustomersPage.jsx';
+import CrmContactsPage from './pages/CrmContactsPage.jsx';
+import CrmQuotesPage from './pages/CrmQuotesPage.jsx';
+import CrmInvoicesPage from './pages/CrmInvoicesPage.jsx';
 import './App.css';
 
 const PrivateRoute = ({ children, roles }) => {
@@ -62,6 +67,46 @@ const AppRoutes = () => (
       element={(
         <PrivateRoute>
           <TaskCalendarPage />
+        </PrivateRoute>
+      )}
+    />
+    <Route
+      path="/crm"
+      element={(
+        <PrivateRoute>
+          <CrmDashboardPage />
+        </PrivateRoute>
+      )}
+    />
+    <Route
+      path="/crm/customers"
+      element={(
+        <PrivateRoute>
+          <CrmCustomersPage />
+        </PrivateRoute>
+      )}
+    />
+    <Route
+      path="/crm/contacts"
+      element={(
+        <PrivateRoute>
+          <CrmContactsPage />
+        </PrivateRoute>
+      )}
+    />
+    <Route
+      path="/crm/quotes"
+      element={(
+        <PrivateRoute>
+          <CrmQuotesPage />
+        </PrivateRoute>
+      )}
+    />
+    <Route
+      path="/crm/invoices"
+      element={(
+        <PrivateRoute>
+          <CrmInvoicesPage />
         </PrivateRoute>
       )}
     />

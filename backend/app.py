@@ -95,6 +95,7 @@ def create_app() -> Flask:
     from routes.tasks import tasks_bp
     from routes.uploads import upload_bp
     from routes.line import line_bp
+    from routes.crm import crm_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(tasks_bp, url_prefix="/api/tasks")
@@ -103,6 +104,7 @@ def create_app() -> Flask:
     app.register_blueprint(settings_bp, url_prefix="/api/settings")
     app.register_blueprint(line_bp, url_prefix="/api/line")
     app.register_blueprint(site_locations_bp, url_prefix="/api/site-locations")
+    app.register_blueprint(crm_bp, url_prefix="/api/crm")
 
     @app.route("/api/health")
     def health_check():

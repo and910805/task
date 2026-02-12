@@ -312,6 +312,222 @@ class Attachment(db.Model):
         }
 
 
+class Customer(db.Model):
+    __tablename__ = "customer"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255), nullable=False, unique=True)
+    tax_id = db.Column(db.String(64))
+    email = db.Column(db.String(255))
+    phone = db.Column(db.String(64))
+    address = db.Column(db.Text)
+    note = db.Column(db.Text)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    contacts = db.relationship("Contact", back_populates="customer", cascade="all, delete-orphan")
+    quotes = db.relationship("Quote", back_populates="customer")
+    invoices = db.relationship("Invoice", back_populates="customer")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "tax_id": self.tax_id,
+            "email": self.email,
+            "phone": self.phone,
+            "address": self.address,
+            "note": self.note,
+            "created_by_id": self.created_by_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class Contact(db.Model):
+    __tablename__ = "contact"
+
+    id = db.Column(db.Integer, primary_key=True)
+    customer_id = db.Column(db.Integer, db.ForeignKey("customer.id", ondelete="CASCADE"), nullable=False)
+    name = db.Column(db.String(255), nullable=False)
+    title = db.Column(db.String(120))
+    email = db.Column(db.String(255))
+    phone = db.Column(db.String(64))
+    is_primary = db.Column(db.Boolean, default=False)
+    note = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    customer = db.relationship("Customer", back_populates="contacts")
+    quotes = db.relationship("Quote", back_populates="contact")
+    invoices = db.relationship("Invoice", back_populates="contact")
+
+    __table_args__ = (
+        UniqueConstraint("customer_id", "email", name="uq_contact_customer_email"),
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "customer_id": self.customer_id,
+            "name": self.name,
+            "title": self.title,
+            "email": self.email,
+            "phone": self.phone,
+            "is_primary": bool(self.is_primary),
+            "note": self.note,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class Quote(db.Model):
+    __tablename__ = "quote"
+
+    id = db.Column(db.Integer, primary_key=True)
+    quote_no = db.Column(db.String(64), nullable=False, unique=True)
+    status = db.Column(db.String(32), nullable=False, default="draft")
+    customer_id = db.Column(db.Integer, db.ForeignKey("customer.id"), nullable=False)
+    contact_id = db.Column(db.Integer, db.ForeignKey("contact.id"), nullable=True)
+    issue_date = db.Column(db.Date)
+    expiry_date = db.Column(db.Date)
+    currency = db.Column(db.String(8), nullable=False, default="TWD")
+    subtotal = db.Column(db.Float, nullable=False, default=0.0)
+    tax_rate = db.Column(db.Float, nullable=False, default=0.0)
+    tax_amount = db.Column(db.Float, nullable=False, default=0.0)
+    total_amount = db.Column(db.Float, nullable=False, default=0.0)
+    note = db.Column(db.Text)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    customer = db.relationship("Customer", back_populates="quotes")
+    contact = db.relationship("Contact", back_populates="quotes")
+    items = db.relationship("QuoteItem", back_populates="quote", cascade="all, delete-orphan")
+    invoices = db.relationship("Invoice", back_populates="quote")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "quote_no": self.quote_no,
+            "status": self.status,
+            "customer_id": self.customer_id,
+            "contact_id": self.contact_id,
+            "issue_date": self.issue_date.isoformat() if self.issue_date else None,
+            "expiry_date": self.expiry_date.isoformat() if self.expiry_date else None,
+            "currency": self.currency,
+            "subtotal": round(self.subtotal or 0.0, 2),
+            "tax_rate": round(self.tax_rate or 0.0, 2),
+            "tax_amount": round(self.tax_amount or 0.0, 2),
+            "total_amount": round(self.total_amount or 0.0, 2),
+            "note": self.note,
+            "created_by_id": self.created_by_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "items": [item.to_dict() for item in self.items],
+        }
+
+
+class QuoteItem(db.Model):
+    __tablename__ = "quote_item"
+
+    id = db.Column(db.Integer, primary_key=True)
+    quote_id = db.Column(db.Integer, db.ForeignKey("quote.id", ondelete="CASCADE"), nullable=False)
+    description = db.Column(db.String(500), nullable=False)
+    quantity = db.Column(db.Float, nullable=False, default=1.0)
+    unit_price = db.Column(db.Float, nullable=False, default=0.0)
+    amount = db.Column(db.Float, nullable=False, default=0.0)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+
+    quote = db.relationship("Quote", back_populates="items")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "description": self.description,
+            "quantity": round(self.quantity or 0.0, 4),
+            "unit_price": round(self.unit_price or 0.0, 2),
+            "amount": round(self.amount or 0.0, 2),
+            "sort_order": self.sort_order,
+        }
+
+
+class Invoice(db.Model):
+    __tablename__ = "invoice"
+
+    id = db.Column(db.Integer, primary_key=True)
+    invoice_no = db.Column(db.String(64), nullable=False, unique=True)
+    status = db.Column(db.String(32), nullable=False, default="draft")
+    customer_id = db.Column(db.Integer, db.ForeignKey("customer.id"), nullable=False)
+    contact_id = db.Column(db.Integer, db.ForeignKey("contact.id"), nullable=True)
+    quote_id = db.Column(db.Integer, db.ForeignKey("quote.id"), nullable=True)
+    issue_date = db.Column(db.Date)
+    due_date = db.Column(db.Date)
+    currency = db.Column(db.String(8), nullable=False, default="TWD")
+    subtotal = db.Column(db.Float, nullable=False, default=0.0)
+    tax_rate = db.Column(db.Float, nullable=False, default=0.0)
+    tax_amount = db.Column(db.Float, nullable=False, default=0.0)
+    total_amount = db.Column(db.Float, nullable=False, default=0.0)
+    note = db.Column(db.Text)
+    paid_at = db.Column(db.DateTime)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    customer = db.relationship("Customer", back_populates="invoices")
+    contact = db.relationship("Contact", back_populates="invoices")
+    quote = db.relationship("Quote", back_populates="invoices")
+    items = db.relationship("InvoiceItem", back_populates="invoice", cascade="all, delete-orphan")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "invoice_no": self.invoice_no,
+            "status": self.status,
+            "customer_id": self.customer_id,
+            "contact_id": self.contact_id,
+            "quote_id": self.quote_id,
+            "issue_date": self.issue_date.isoformat() if self.issue_date else None,
+            "due_date": self.due_date.isoformat() if self.due_date else None,
+            "currency": self.currency,
+            "subtotal": round(self.subtotal or 0.0, 2),
+            "tax_rate": round(self.tax_rate or 0.0, 2),
+            "tax_amount": round(self.tax_amount or 0.0, 2),
+            "total_amount": round(self.total_amount or 0.0, 2),
+            "note": self.note,
+            "paid_at": self.paid_at.isoformat() if self.paid_at else None,
+            "created_by_id": self.created_by_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "items": [item.to_dict() for item in self.items],
+        }
+
+
+class InvoiceItem(db.Model):
+    __tablename__ = "invoice_item"
+
+    id = db.Column(db.Integer, primary_key=True)
+    invoice_id = db.Column(db.Integer, db.ForeignKey("invoice.id", ondelete="CASCADE"), nullable=False)
+    description = db.Column(db.String(500), nullable=False)
+    quantity = db.Column(db.Float, nullable=False, default=1.0)
+    unit_price = db.Column(db.Float, nullable=False, default=0.0)
+    amount = db.Column(db.Float, nullable=False, default=0.0)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+
+    invoice = db.relationship("Invoice", back_populates="items")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "description": self.description,
+            "quantity": round(self.quantity or 0.0, 4),
+            "unit_price": round(self.unit_price or 0.0, 2),
+            "amount": round(self.amount or 0.0, 2),
+            "sort_order": self.sort_order,
+        }
+
+
 class RoleLabel(db.Model):
     __tablename__ = "role_label"
 
