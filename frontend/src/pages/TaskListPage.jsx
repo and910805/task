@@ -10,10 +10,10 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { useRoleLabels } from '../context/RoleLabelContext.jsx';
 
 const statusOptions = [
-  { value: '尚未?�單', label: '尚未?�單' },
-  { value: '已接??, label: '已接?? },
-  { value: '?��?�?, label: '?��?�? },
-  { value: '已�???, label: '已�??? },
+  { value: '尚未接單', label: '尚未接單' },
+  { value: '已接單', label: '已接單' },
+  { value: '進行中', label: '進行中' },
+  { value: '已完成', label: '已完成' },
 ];
 
 const initialForm = {
@@ -22,18 +22,18 @@ const initialForm = {
   location: '',
   location_url: '',
   expected_time: '',
-  status: '尚未?�單',
+  status: '尚未接單',
   assignee_ids: [],
 };
 
 const statusFilterOptions = [
-  { value: 'all', label: '?�部任�?' },
+  { value: 'all', label: '全部任務' },
   ...statusOptions,
 ];
 
 const sortOptions = [
-  { value: 'due_soon', label: '?�近截�? },
-  { value: 'created_desc', label: '?�?�建�? },
+  { value: 'due_soon', label: '最近截止' },
+  { value: 'created_desc', label: '最新建立' },
 ];
 
 const TaskListPage = () => {
@@ -70,7 +70,7 @@ const TaskListPage = () => {
     () =>
       users.map((item) => ({
         value: item.id,
-        label: `${item.username}�?{labels[item.role] || item.role}）`,
+        label: `${item.username}（${labels[item.role] || item.role}）`,
       })),
     [users, labels],
   );
@@ -104,7 +104,7 @@ const TaskListPage = () => {
       const { data } = await api.get('tasks/');
       setTasks(data);
     } catch (err) {
-      const message = getErrorMessage(err, '?��??��?任�??�表??);
+      const message = getErrorMessage(err, '無法取得任務列表。');
       setError(message);
     } finally {
       if (showLoading) {
@@ -121,7 +121,7 @@ const TaskListPage = () => {
       const { data } = await api.get('tasks/', { params: { available: 1 } });
       setAvailableTasks(data);
     } catch (err) {
-      const message = getErrorMessage(err, '?��??��??�接?�任?��?);
+      const message = getErrorMessage(err, '無法取得可接單任務。');
       setError(message);
     } finally {
       if (showLoading) {
@@ -136,7 +136,7 @@ const TaskListPage = () => {
       const { data } = await api.get('auth/assignable-users');
       setUsers(data);
     } catch (err) {
-      console.error('?��??��?使用?��?�?, err);
+      console.error('無法取得使用者列表', err);
     }
   };
 
@@ -148,7 +148,7 @@ const TaskListPage = () => {
       const list = Array.isArray(data) ? data : data?.locations ?? [];
       setSiteLocations(list);
     } catch (err) {
-      console.error('?��??��?常用?��?', err);
+      console.error('無法取得常用地點', err);
     } finally {
       setLoadingLocations(false);
     }
@@ -190,13 +190,13 @@ const TaskListPage = () => {
     const trimmedLocationUrl = form.location_url.trim();
 
     if (!trimmedTitle || !trimmedDescription || !trimmedLocation || !form.expected_time) {
-      setError('請�??�填寫任?��?稱、地點、�?述�??��?完�??��???);
+      setError('請完整填寫任務名稱、地點、描述與預計完成時間。');
       return;
     }
 
     const expectedDate = new Date(form.expected_time);
     if (Number.isNaN(expectedDate.getTime())) {
-      setError('?��?完�??��??��?不正確�?);
+      setError('預計完成時間格式不正確。');
       return;
     }
 
@@ -215,7 +215,7 @@ const TaskListPage = () => {
       setCreating(false);
       await loadTasks();
     } catch (err) {
-      const message = getErrorMessage(err, '建�?任�?失�???);
+      const message = getErrorMessage(err, '建立任務失敗。');
       setError(message);
     }
   };
@@ -226,7 +226,7 @@ const TaskListPage = () => {
       await api.patch(`tasks/update/${taskId}`, { status: nextStatus });
       await loadTasks({ showLoading: false });
     } catch (err) {
-      const message = getErrorMessage(err, '?�新任�??�?�失?��?);
+      const message = getErrorMessage(err, '更新任務狀態失敗。');
       setError(message);
     }
   };
@@ -238,7 +238,7 @@ const TaskListPage = () => {
       await api.patch(`tasks/update/${taskId}`, { assignee_ids: values });
       await loadTasks({ showLoading: false });
     } catch (err) {
-      const message = getErrorMessage(err, '?�新?�派對象失�???);
+      const message = getErrorMessage(err, '更新指派對象失敗。');
       setError(message);
     } finally {
       setAssigningTaskId(null);
@@ -268,7 +268,7 @@ const TaskListPage = () => {
         await loadAvailableTasks({ showLoading: false });
       }
     } catch (err) {
-      const message = getErrorMessage(err, '?�單失�???);
+      const message = getErrorMessage(err, '接單失敗。');
       setError(message);
     } finally {
       setAcceptingTaskId(null);
@@ -276,7 +276,7 @@ const TaskListPage = () => {
   };
 
   const handleDeleteTask = async (taskId, taskTitle) => {
-    const confirmed = window.confirm(`確�?要刪?��?{taskTitle}?�任?��?？`);
+    const confirmed = window.confirm(`確定要刪除「${taskTitle}」任務嗎？`);
     if (!confirmed) {
       return;
     }
@@ -287,7 +287,7 @@ const TaskListPage = () => {
       await api.delete(`tasks/${taskId}`);
       await loadTasks({ showLoading: false });
     } catch (err) {
-      const message = getErrorMessage(err, '?�除任�?失�???);
+      const message = getErrorMessage(err, '刪除任務失敗。');
       setError(message);
     } finally {
       setDeletingTaskId(null);
@@ -341,16 +341,16 @@ const TaskListPage = () => {
   const toolbarFilters = (
     <>
       <label>
-        ?��??��?
+        地點搜尋
         <input
           type="search"
           value={locationFilter}
           onChange={(event) => setLocationFilter(event.target.value)}
-          placeholder="輸入?��??�鍵�?
+          placeholder="輸入地點關鍵字"
         />
       </label>
       <label>
-        ?��??��?
+        排序方式
         <select
           value={sortOption}
           onChange={(event) => setSortOption(event.target.value)}
@@ -366,10 +366,10 @@ const TaskListPage = () => {
   );
 
   const statusBadgeClass = {
-    尚未?�單: 'status-badge status-pending',
-    已接?? 'status-badge status-in-progress',
-    ?��?�? 'status-badge status-in-progress',
-    已�??? 'status-badge status-completed',
+    尚未接單: 'status-badge status-pending',
+    已接單: 'status-badge status-in-progress',
+    進行中: 'status-badge status-in-progress',
+    已完成: 'status-badge status-completed',
   };
 
   const headerActions = isManager ? (
@@ -380,7 +380,7 @@ const TaskListPage = () => {
           checked={availableOnly}
           onChange={(event) => setAvailableOnly(event.target.checked)}
         />
-        ?�顯示可?�單
+        只顯示可接單
       </label>
       <label>
         <input
@@ -388,10 +388,10 @@ const TaskListPage = () => {
           checked={showOverdue}
           onChange={(event) => setShowOverdue(event.target.checked)}
         />
-        顯示?��??��?
+        顯示逾期提醒
       </label>
       <label>
-        顯示?�??
+        顯示狀態
         <select
           value={statusFilter}
           onChange={(event) => setStatusFilter(event.target.value)}
@@ -413,7 +413,7 @@ const TaskListPage = () => {
           checked={availableOnly}
           onChange={(event) => setAvailableOnly(event.target.checked)}
         />
-        ?�顯示可?�單
+        只顯示可接單
       </label>
       <label>
         <input
@@ -421,7 +421,7 @@ const TaskListPage = () => {
           checked={showOverdue}
           onChange={(event) => setShowOverdue(event.target.checked)}
         />
-        顯示?��??��?
+        顯示逾期提醒
       </label>
       {toolbarFilters}
       <button
@@ -430,64 +430,64 @@ const TaskListPage = () => {
         onClick={handleRefresh}
         disabled={refreshing}
       >
-        {refreshing ? '?�新中�? : '?? ?�新任�?'}
+        {refreshing ? '刷新中…' : '🔄 刷新任務'}
       </button>
     </div>
   );
 
   const emptyStateMessage =
     availableOnly
-      ? '?��?沒�??�接?�任?��?
+      ? '目前沒有可接單任務。'
       : statusFilter === 'all'
-      ? '?��?沒�?任�???
-      : '此�??��??�符?��?任�???;
+      ? '目前沒有任務。'
+      : '此狀態沒有符合的任務。';
 
   return (
     <div className="page">
       <AppHeader
-        title="任�?管�??�板"
-        subtitle="檢�??��?派任??
+        title="任務管理面板"
+        subtitle="檢視與指派任務"
         actions={headerActions}
       />
       {isManager && (
         <section className="panel">
           <button type="button" onClick={() => setCreating((prev) => !prev)}>
-            {creating ? '?��?建�?表單' : '?��?任�?'}
+            {creating ? '關閉建立表單' : '新增任務'}
           </button>
           {creating && (
             <form className="stack" onSubmit={handleCreate}>
               <label>
-                任�??�稱
+                任務名稱
                 <input
                   name="title"
                   value={form.title}
                   onChange={handleChange}
-                  placeholder="輸入任�??�稱"
+                  placeholder="輸入任務名稱"
                   required
                 />
               </label>
               <label>
-                任�??�述
+                任務描述
                 <textarea
                   name="description"
                   value={form.description}
                   onChange={handleChange}
-                  placeholder="?�述任�??�容"
+                  placeholder="描述任務內容"
                   required
                 />
               </label>
               <label>
-                任�??��?
+                任務地點
                 <CreatableSelect
                   classNamePrefix="location-select"
-                  placeholder="?��??��?尋常?�地�?
+                  placeholder="選擇或搜尋常用地點"
                   options={locationOptions}
                   value={selectedLocation}
                   isClearable
                   isSearchable
                   isLoading={loadingLocations}
-                  formatCreateLabel={(value) => `?��???{value}?�`}
-                  noOptionsMessage={() => '沒�?符�??�地�?}
+                  formatCreateLabel={(value) => `新增「${value}」`}
+                  noOptionsMessage={() => '沒有符合的地點'}
                   onChange={(option) =>
                     setForm((prev) => ({ ...prev, location: option?.value || '' }))
                   }
@@ -502,32 +502,32 @@ const TaskListPage = () => {
                     rel="noreferrer"
                     className="inline-link"
                   >
-                    ?��? Google Maps
+                    查看 Google Maps
                   </a>
                 ) : null}
               </label>
               <label>
-                ?��????
+                地圖連結
                 <input
                   type="url"
                   name="location_url"
                   value={form.location_url}
                   onChange={handleChange}
-                  placeholder="?�貼�?Google ?��????"
+                  placeholder="可貼上 Google 地圖連結"
                 />
               </label>
               <label>
-                ?��????
+                地圖連結
                 <input
                   type="url"
                   name="location_url"
                   value={form.location_url}
                   onChange={handleChange}
-                  placeholder="?�貼�?Google ?��????"
+                  placeholder="可貼上 Google 地圖連結"
                 />
               </label>
               <label>
-                ?��?完�??��?
+                預計完成時間
                 <input
                   type="datetime-local"
                   name="expected_time"
@@ -537,7 +537,7 @@ const TaskListPage = () => {
                 />
               </label>
               <label>
-                任�??�度
+                任務進度
                 <select name="status" value={form.status} onChange={handleChange}>
                   {statusOptions.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -548,11 +548,11 @@ const TaskListPage = () => {
               </label>
               {isManager ? (
                 <label>
-                  ?�派�?
+                  指派給
                   <Select
                     isMulti
                     classNamePrefix="assignee-select"
-                    placeholder="?��?負責人�??��??��?"
+                    placeholder="選擇負責人（可複選）"
                     options={assigneeOptions}
                     value={assigneeOptions.filter((option) =>
                       form.assignee_ids.includes(option.value),
@@ -568,7 +568,7 @@ const TaskListPage = () => {
                   />
                 </label>
               ) : null}
-              <button type="submit">建�?任�?</button>
+              <button type="submit">建立任務</button>
             </form>
           )}
         </section>
@@ -577,14 +577,14 @@ const TaskListPage = () => {
         <div className="error-text" style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
           <span>{error}</span>
           <button type="button" className="secondary-button" onClick={handleRefresh}>
-            ?�試
+            重試
           </button>
         </div>
       )}
       <section className="panel">
-        <h2>任�??�表</h2>
+        <h2>任務列表</h2>
         {loading || (availableOnly && loadingAvailable) ? (
-          <p>載入�?..</p>
+          <p>載入中...</p>
         ) : filteredTasks.length === 0 ? (
           <p>{emptyStateMessage}</p>
         ) : (
@@ -598,11 +598,11 @@ const TaskListPage = () => {
               const isOverdue =
                 task.is_overdue ||
                 (task.due_date &&
-                  task.status !== '已�??? &&
+                  task.status !== '已完成' &&
                   new Date(task.due_date).getTime() < Date.now());
               const showOverdueIndicator = showOverdue && isOverdue;
               const canAccept =
-                isWorker && task.status === '尚未?�單' && !task.assigned_to_id;
+                isWorker && task.status === '尚未接單' && !task.assigned_to_id;
               const hasMissingAssignee =
                 isManager &&
                 taskAssigneeIds.length > 0 &&
@@ -610,7 +610,7 @@ const TaskListPage = () => {
               const dueDateLabel = task.due_date || task.expected_time;
               const dueDateText = dueDateLabel
                 ? new Date(dueDateLabel).toLocaleString()
-                : '?�設�?;
+                : '未設定';
               return (
                 <li
                   key={task.id}
@@ -623,16 +623,16 @@ const TaskListPage = () => {
                       </h3>
                       <div className="task-card__status">
                         <span className={statusBadgeClass[task.status] || 'status-badge'}>
-                          ??{task.status}
+                          ● {task.status}
                         </span>
                         {showOverdueIndicator && (
-                          <span className="status-badge status-overdue">?��? ?��?</span>
+                          <span className="status-badge status-overdue">⚠️ 逾期</span>
                         )}
                       </div>
                     </div>
                     <div className="task-card__meta">
-                      <span>?��?：{task.location}</span>
-                      <span>?�止?��?：{dueDateText}</span>
+                      <span>地點：{task.location}</span>
+                      <span>截止日期：{dueDateText}</span>
                     </div>
                     <div className="task-card__cta">
                       {isManager ? (
@@ -655,7 +655,7 @@ const TaskListPage = () => {
                           onClick={() => handleAcceptTask(task.id)}
                           disabled={acceptingTaskId === task.id}
                         >
-                          {acceptingTaskId === task.id ? '?�單中�? : '?�單'}
+                          {acceptingTaskId === task.id ? '接單中…' : '接單'}
                         </button>
                       ) : null}
                     </div>
@@ -664,26 +664,26 @@ const TaskListPage = () => {
                     <h3 className="task-title">
                       <Link to={`/tasks/${task.id}`}>{task.title}</Link>
                     </h3>
-                    <p className="task-secondary">{task.description || '沒�??�述'}</p>
-                    <p className="task-secondary">?��?：{task.location}</p>
+                    <p className="task-secondary">{task.description || '沒有描述'}</p>
+                    <p className="task-secondary">地點：{task.location}</p>
                     <p className="task-secondary">
-                      ?��?完�?�?
+                      預計完成：
                       {task.expected_time
                         ? new Date(task.expected_time).toLocaleString()
-                        : '?�設�?}
+                        : '未設定'}
                     </p>
                     <p className="task-secondary">
-                      總工?��?{(task.total_work_hours ?? 0).toFixed(2)} 小�?
+                      總工時：{(task.total_work_hours ?? 0).toFixed(2)} 小時
                     </p>
                     <p className="task-status-row">
-                      任�??�度�?
+                      任務進度：
                       {isManager ? (
                         <span className="task-status-control">
                           <span className={statusBadgeClass[task.status] || 'status-badge'}>
-                            ??{task.status}
+                            ● {task.status}
                           </span>
                           {showOverdueIndicator && (
-                            <span className="status-badge status-overdue">?��? ?��?</span>
+                            <span className="status-badge status-overdue">⚠️ 逾期</span>
                           )}
                           <select
                             value={task.status}
@@ -701,10 +701,10 @@ const TaskListPage = () => {
                       ) : (
                         <>
                           <span className={statusBadgeClass[task.status] || 'status-badge'}>
-                            ??{task.status}
+                            ● {task.status}
                           </span>
                           {showOverdueIndicator && (
-                            <span className="status-badge status-overdue">?��? ?��?</span>
+                            <span className="status-badge status-overdue">⚠️ 逾期</span>
                           )}
                           {canAccept && (
                             <button
@@ -713,14 +713,14 @@ const TaskListPage = () => {
                               onClick={() => handleAcceptTask(task.id)}
                               disabled={acceptingTaskId === task.id}
                             >
-                              {acceptingTaskId === task.id ? '?�單中�? : '?�單'}
+                              {acceptingTaskId === task.id ? '接單中…' : '接單'}
                             </button>
                           )}
                         </>
                       )}
                     </p>
                     <div>
-                      <strong>?�派對象�?/strong>
+                      <strong>指派對象：</strong>
                       {assignedUsers.length > 0 ? (
                         <div className="chip-list">
                           {assignedUsers.map((assignee) => (
@@ -730,20 +730,20 @@ const TaskListPage = () => {
                           ))}
                         </div>
                       ) : (
-                        <span className="hint-text">?��?�?/span>
+                        <span className="hint-text">未指派</span>
                       )}
                       {hasMissingAssignee ? (
-                        <p className="error-text">?��??�派對象已被移除</p>
+                        <p className="error-text">部分指派對象已被移除</p>
                       ) : null}
                     </div>
                     {isManager && (
                       <div className="task-actions">
                         <div className="task-toolbar">
-                          <div className="task-assignee-select">
+                          <div style={{ minWidth: '220px' }}>
                             <Select
                               isMulti
                               classNamePrefix="assignee-select"
-                              placeholder="?��?負責�?
+                              placeholder="選擇負責人"
                               options={assigneeOptions}
                               value={selectValue}
                               onChange={(selected) =>
@@ -763,7 +763,7 @@ const TaskListPage = () => {
                             onClick={() => handleDeleteTask(task.id, task.title)}
                             disabled={deletingTaskId === task.id}
                           >
-                            {deletingTaskId === task.id ? '?�除中�? : '?�除任�?'}
+                            {deletingTaskId === task.id ? '刪除中…' : '刪除任務'}
                           </button>
                         </div>
                       </div>
@@ -780,4 +780,3 @@ const TaskListPage = () => {
 };
 
 export default TaskListPage;
-
