@@ -18,7 +18,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
   const logoSrc = branding.logoUrl || brandFallback;
   const roleLabel = labels[user?.role] || user?.role || '';
   const navItems = [
-    { to: '/', label: '任務清單' },
+    { to: '/app', label: '任務清單' },
     { to: '/attendance', label: '出勤' },
     { to: '/calendar', label: '行事曆' },
     { to: '/crm', label: '營運中台' },
@@ -47,7 +47,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
             <NavLink
               key={item.to}
               to={item.to}
-              end={item.to === '/'}
+              end={item.to === '/app'}
               className={({ isActive }) =>
                 `app-sidebar__link${isActive ? ' is-active' : ''}`
               }

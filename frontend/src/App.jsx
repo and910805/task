@@ -19,6 +19,7 @@ import CrmQuotesPage from './pages/CrmQuotesPage.jsx';
 import CrmInvoicesPage from './pages/CrmInvoicesPage.jsx';
 import AttendancePage from './pages/AttendancePage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
+import LandingPage from './pages/LandingPage.jsx';
 import './App.css';
 
 const PrivateRoute = ({ children, roles }) => {
@@ -32,16 +33,17 @@ const PrivateRoute = ({ children, roles }) => {
     return <Navigate to="/login" replace />;
   }
   if (roles && !roles.includes(user?.role)) {
-    return <Navigate to="/" replace />;
+    return <Navigate to="/app" replace />;
   }
   return children;
 };
 
 const AppRoutes = () => (
   <Routes>
+    <Route path="/" element={<LandingPage />} />
     <Route path="/login" element={<LoginPage />} />
     <Route
-      path="/"
+      path="/app"
       element={(
         <PrivateRoute>
           <TaskListPage />

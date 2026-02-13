@@ -668,7 +668,7 @@ const TaskDetailPage = () => {
   return (
     <div className="page task-detail-page mobile-tabs">
       <AppHeader title={task.title} subtitle={`任務編號：${task.id}`}>
-        <Link to="/" className="link-button">
+        <Link to="/app" className="link-button">
           ← 返回任務列表
         </Link>
       </AppHeader>

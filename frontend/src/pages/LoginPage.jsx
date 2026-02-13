@@ -26,7 +26,7 @@ const LoginPage = () => {
       if (mode === 'login') {
         await login({ username: form.username, password: form.password });
         refreshBranding().catch(() => {});
-        navigate('/');
+        navigate('/app');
       } else {
         await register({
           username: form.username,
