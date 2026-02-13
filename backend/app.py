@@ -116,7 +116,7 @@ def create_app() -> Flask:
             return None
         path = request.path or "/"
         public_paths = {"/", "/login", "/favicon.ico", "/index.html", "/api/auth/login", "/api/auth/register", "/api/health"}
-        if path in public_paths or path.startswith(("/static/", "/assets/", "/api/")):
+        if path in public_paths or path.startswith(("/static/", "/assets/", "/api/", "/salesite/")):
             return None
         try:
             verify_jwt_in_request()
