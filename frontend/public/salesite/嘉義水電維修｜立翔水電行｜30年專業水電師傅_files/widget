@@ -1,0 +1,34 @@
+const vapiidget = document.createElement('vapi-widget');
+vapiidget.setAttribute('assistant-id', '56ec7dcc-f734-4e10-ad7e-443490b320b7');
+vapiidget.setAttribute('public-key', '3f316145-e21e-4681-9bf0-7479538e1e33');
+
+const currentScript = document.currentScript;
+if (currentScript) {
+    const attributes = currentScript.attributes;
+    for (let i = 0; i < attributes.length; i++) {
+        const attr = attributes[i];
+        vapiidget.setAttribute(attr.name, attr.value);
+    }
+    if(!currentScript.attributes.cta_title) {
+        vapiidget.setAttribute('cta-title', 'Talk with Us');
+    }
+    if(!currentScript.attributes.size) {
+        vapiidget.setAttribute('size', 'compact');
+    }
+    if(!currentScript.attributes.mode) {
+        vapiidget.setAttribute('mode', 'hybrid');
+    }
+    if(!currentScript.attributes['voice-show-transcript']) {
+        vapiidget.setAttribute('voice-show-transcript', 'true');
+    }
+    if (!currentScript.attributes.title) {
+        vapiidget.setAttribute("title", "Talk with Us");
+    }
+}
+
+const script = document.createElement('script');
+script.src = 'https://static.readdy.ai/assistant/widget.umd.js';
+script.async = true;
+script.type = 'text/javascript';
+document.body.appendChild(vapiidget);
+document.body.appendChild(script);

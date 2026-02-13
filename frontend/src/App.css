@@ -2058,6 +2058,34 @@ button:disabled {
   color: #13233a;
 }
 
+.sale-shell {
+  position: relative;
+  min-height: 100vh;
+  background: #ffffff;
+}
+
+.sale-shell__frame {
+  width: 100%;
+  min-height: 100vh;
+  border: none;
+  display: block;
+}
+
+.sale-shell__actions {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 80;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.sale-shell__fallback {
+  display: none;
+  padding: 1rem;
+  text-align: center;
+}
+
 .landing-nav {
   max-width: 1200px;
   margin: 0 auto;
@@ -2212,6 +2240,16 @@ button:disabled {
 }
 
 @media (max-width: 640px) {
+  .sale-shell__actions {
+    top: 8px;
+    right: 8px;
+  }
+
+  .sale-shell__actions .landing-btn {
+    padding: 0.45rem 0.85rem;
+    font-size: 0.85rem;
+  }
+
   .landing-page {
     padding: 1rem 0.9rem 2rem;
   }

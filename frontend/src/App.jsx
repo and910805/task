@@ -41,6 +41,7 @@ const PrivateRoute = ({ children, roles }) => {
 const AppRoutes = () => (
   <Routes>
     <Route path="/" element={<LandingPage />} />
+    <Route path="/sale" element={<LandingPage />} />
     <Route path="/login" element={<LoginPage />} />
     <Route
       path="/app"
