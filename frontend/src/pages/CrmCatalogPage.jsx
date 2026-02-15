@@ -256,13 +256,12 @@ const CrmCatalogPage = () => {
               {historyRows.map((row) => {
                 const customer = row.customer || {};
                 const quoteCount = Array.isArray(row.quotes) ? row.quotes.length : 0;
-                const invoiceCount = Array.isArray(row.invoices) ? row.invoices.length : 0;
                 const latestQuote = quoteCount > 0 ? row.quotes[0] : null;
                 return (
                   <tr key={customer.id}>
                     <td>{customer.name || '-'}</td>
                     <td>{customer.phone || '-'}</td>
-                    <td>報價 {quoteCount} / 發票 {invoiceCount}</td>
+                    <td>報價 {quoteCount}</td>
                     <td>
                       {latestQuote?.items?.[0]?.description || '-'}
                     </td>

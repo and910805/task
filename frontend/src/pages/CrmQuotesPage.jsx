@@ -11,7 +11,7 @@ const CrmQuotesPage = () => {
   const [contacts, setContacts] = useState([]);
   const [catalogItems, setCatalogItems] = useState([]);
   const [quotes, setQuotes] = useState([]);
-  const [history, setHistory] = useState({ quotes: [], invoices: [] });
+  const [history, setHistory] = useState({ quotes: [] });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -46,13 +46,12 @@ const CrmQuotesPage = () => {
 
   const loadHistory = async (customerId) => {
     if (!customerId) {
-      setHistory({ quotes: [], invoices: [] });
+      setHistory({ quotes: [] });
       return;
     }
     const { data } = await api.get(`crm/customers/${customerId}/service-history`);
     setHistory({
       quotes: Array.isArray(data?.quotes) ? data.quotes : [],
-      invoices: Array.isArray(data?.invoices) ? data.invoices : [],
     });
   };
 
@@ -75,7 +74,7 @@ const CrmQuotesPage = () => {
     if (form.customer_id) {
       loadHistory(form.customer_id).catch(() => null);
     } else {
-      setHistory({ quotes: [], invoices: [] });
+      setHistory({ quotes: [] });
     }
   }, [form.customer_id]);
 
@@ -161,21 +160,12 @@ const CrmQuotesPage = () => {
         note: '',
       });
       setItems([blankItem()]);
-      setHistory({ quotes: [], invoices: [] });
+      setHistory({ quotes: [] });
       await loadQuotes();
     } catch (err) {
       setError(err?.response?.data?.msg || '新增報價失敗');
     } finally {
       setSaving(false);
-    }
-  };
-
-  const convertToInvoice = async (quoteId) => {
-    try {
-      await api.post(`crm/quotes/${quoteId}/convert-to-invoice`);
-      await loadQuotes();
-    } catch (err) {
-      setError(err?.response?.data?.msg || '轉發票失敗');
     }
   };
 
@@ -357,16 +347,7 @@ const CrmQuotesPage = () => {
                   <td>{quoteDisplayAmount(row)}</td>
                 </tr>
               ))}
-              {history.invoices.map((row) => (
-                <tr key={`i-${row.id}`}>
-                  <td>發票</td>
-                  <td>{row.invoice_no}</td>
-                  <td>{row.issue_date || '-'}</td>
-                  <td>{row.items?.[0]?.description || '-'}</td>
-                  <td>{quoteDisplayAmount(row)}</td>
-                </tr>
-              ))}
-              {history.quotes.length === 0 && history.invoices.length === 0 ? (
+              {history.quotes.length === 0 ? (
                 <tr>
                   <td colSpan="5">選擇客戶後可查看歷史紀錄</td>
                 </tr>
@@ -402,9 +383,6 @@ const CrmQuotesPage = () => {
                     </button>
                     <button type="button" className="secondary-btn" onClick={() => downloadXlsx(quote.id)}>
                       XLSX
-                    </button>
-                    <button type="button" onClick={() => convertToInvoice(quote.id)}>
-                      轉發票
                     </button>
                   </td>
                 </tr>

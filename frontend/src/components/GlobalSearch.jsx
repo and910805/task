@@ -46,15 +46,8 @@ const GlobalSearch = () => {
       subtitle: `${quote.status || 'draft'} · ${Number(quote.total_amount || 0).toFixed(2)}`,
       href: '/crm/quotes',
     }));
-    const invoiceItems = (Array.isArray(boot.invoices) ? boot.invoices : []).map((invoice) => ({
-      id: `invoice-${invoice.id}`,
-      type: '發票',
-      title: invoice.invoice_no || `Invoice #${invoice.id}`,
-      subtitle: `${invoice.status || 'draft'} · ${Number(invoice.total_amount || 0).toFixed(2)}`,
-      href: '/crm/invoices',
-    }));
 
-    return [...shortcutItems, ...taskItems, ...customerItems, ...contactItems, ...quoteItems, ...invoiceItems];
+    return [...shortcutItems, ...taskItems, ...customerItems, ...contactItems, ...quoteItems];
   };
 
   const ensureIndex = async () => {
@@ -101,7 +94,7 @@ const GlobalSearch = () => {
       <input
         value={query}
         onChange={(event) => setQuery(event.target.value)}
-        placeholder="全域搜尋：任務 / 客戶 / 報價 / 發票"
+        placeholder="全域搜尋：任務 / 客戶 / 報價"
       />
       {open ? (
         <div className="global-search__panel">
