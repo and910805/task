@@ -1293,6 +1293,22 @@ def crm_pdf_font_health():
     return jsonify(_pdf_font_health_payload())
 
 
+@crm_bp.get("/health/db")
+@role_required(*READ_ROLES)
+def crm_db_health():
+    engine = db.engine
+    url = engine.url
+    return jsonify(
+        {
+            "dialect": engine.dialect.name,
+            "driver": engine.dialect.driver,
+            "database": url.database,
+            "host": url.host,
+            "port": url.port,
+        }
+    )
+
+
 @crm_bp.get("/invoices/<int:invoice_id>/pdf")
 @role_required(*READ_ROLES)
 def invoice_pdf(invoice_id: int):
