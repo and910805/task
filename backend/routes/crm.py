@@ -41,6 +41,23 @@ PDF_FONT_CANDIDATES = (
     "/usr/share/fonts/opentype/source-han-sans/SourceHanSansTW-Regular.otf",
 )
 PDF_CID_FALLBACKS = ("MSung-Light", "STSong-Light")
+PDF_CJK_PROBE = "估價單發票台照"
+
+
+def _font_supports_traditional_chinese(font_name: str) -> bool:
+    if font_name in PDF_CID_FALLBACKS:
+        return True
+    try:
+        font = pdfmetrics.getFont(font_name)
+    except Exception:
+        return False
+
+    face = getattr(font, "face", None)
+    char_widths = getattr(face, "charWidths", None)
+    if not isinstance(char_widths, dict):
+        return False
+
+    return all(ord(ch) in char_widths for ch in PDF_CJK_PROBE)
 
 
 def _ensure_pdf_font():
@@ -52,17 +69,19 @@ def _ensure_pdf_font():
             if os.path.exists(candidate):
                 font_path = candidate
                 break
-    if PDF_FONT_NAME in ("CustomFont", *PDF_CID_FALLBACKS):
+    if PDF_FONT_NAME in ("CustomFont", *PDF_CID_FALLBACKS) and _font_supports_traditional_chinese(PDF_FONT_NAME):
         return
 
     if font_path and os.path.exists(font_path):
         # Noto CJK on Debian is usually a .ttc. Try multiple subfont indexes.
-        ttc_indices = (0, 1, 2, 3) if font_path.lower().endswith(".ttc") else (0,)
+        # Prefer TC/HK indices first, then SC/KR/JP.
+        ttc_indices = (3, 4, 2, 1, 0) if font_path.lower().endswith(".ttc") else (0,)
         for idx in ttc_indices:
             try:
                 pdfmetrics.registerFont(TTFont("CustomFont", font_path, subfontIndex=idx))
-                PDF_FONT_NAME = "CustomFont"
-                return
+                if _font_supports_traditional_chinese("CustomFont"):
+                    PDF_FONT_NAME = "CustomFont"
+                    return
             except Exception:
                 continue
 
@@ -70,8 +89,9 @@ def _ensure_pdf_font():
     for cid_name in PDF_CID_FALLBACKS:
         try:
             pdfmetrics.registerFont(UnicodeCIDFont(cid_name))
-            PDF_FONT_NAME = cid_name
-            return
+            if _font_supports_traditional_chinese(cid_name):
+                PDF_FONT_NAME = cid_name
+                return
         except Exception:
             continue
 
