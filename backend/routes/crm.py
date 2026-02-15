@@ -130,6 +130,13 @@ def _next_doc_no(prefix: str) -> str:
     return f"{prefix}-{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')[:-3]}"
 
 
+def _quote_display_total_without_tax(quote: Quote) -> float:
+    # The template-style quote output is tax-exclusive.
+    if quote.subtotal is not None:
+        return float(quote.subtotal)
+    return float(quote.total_amount or 0)
+
+
 def _to_roc_date_text(value: date | None) -> str:
     value = value or date.today()
     roc_year = value.year - 1911
@@ -192,7 +199,7 @@ def _apply_quote_to_template_sheet(ws, quote: Quote, customer: Customer | None, 
         ws[f"H{row}"] = float(item.unit_price or 0)
         ws[f"I{row}"] = float(item.amount or 0)
 
-    total_amount = float(quote.total_amount or 0)
+    total_amount = _quote_display_total_without_tax(quote)
     ws["C27"] = "合計"
     ws["E27"] = "新台幣"
     ws["F27"] = total_amount
@@ -307,6 +314,129 @@ def _build_pdf_document(title: str, meta_rows: list[list[str]], item_rows: list[
         )
     )
     story.append(totals_table)
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+
+def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: Contact | None):
+    _ensure_pdf_font()
+
+    customer_name = (customer.name if customer else "") or ""
+    contact_name = (contact.name if contact else "") or ""
+    recipient = contact_name or customer_name
+    if customer_name and contact_name and customer_name != contact_name:
+        recipient = f"{customer_name} {contact_name}"
+
+    ordered_items = sorted(
+        quote.items,
+        key=lambda item: (
+            item.sort_order if item.sort_order is not None else 10**9,
+            item.id if item.id is not None else 10**9,
+        ),
+    )
+
+    rows = [["項目", "項目名稱", "規格內容", "單位", "數量", "單價", "總額", "備註"]]
+    for idx in range(20):
+        item = ordered_items[idx] if idx < len(ordered_items) else None
+        if item is None:
+            rows.append([str(idx + 1), "", "", "", "", "", "", ""])
+            continue
+        rows.append(
+            [
+                str(idx + 1),
+                item.description or "",
+                "",
+                item.unit or "式",
+                f"{float(item.quantity or 0):.2f}",
+                f"{float(item.unit_price or 0):.2f}",
+                f"{float(item.amount or 0):.2f}",
+                "",
+            ]
+        )
+
+    total_amount = _quote_display_total_without_tax(quote)
+    rows.append(
+        [
+            "合計",
+            "",
+            "新台幣",
+            f"{total_amount:.2f}",
+            "",
+            "NT$",
+            f"{total_amount:.2f}",
+            "",
+        ]
+    )
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=10 * mm,
+        rightMargin=10 * mm,
+        topMargin=10 * mm,
+        bottomMargin=10 * mm,
+        title=f"quote-{quote.quote_no}",
+    )
+
+    styles = getSampleStyleSheet()
+    title_style = styles["Heading1"].clone("QuoteTemplateTitle")
+    title_style.fontName = PDF_FONT_NAME
+    title_style.alignment = 1
+    title_style.fontSize = 18
+    title_style.leading = 22
+
+    subtitle_style = styles["Normal"].clone("QuoteTemplateSubtitle")
+    subtitle_style.fontName = PDF_FONT_NAME
+    subtitle_style.alignment = 1
+    subtitle_style.fontSize = 12
+    subtitle_style.leading = 16
+
+    body_style = styles["Normal"].clone("QuoteTemplateBody")
+    body_style.fontName = PDF_FONT_NAME
+    body_style.fontSize = 10
+    body_style.leading = 14
+
+    story = [
+        Paragraph("立翔水電行", title_style),
+        Paragraph("估價單", subtitle_style),
+        Spacer(1, 3 * mm),
+        Paragraph(f"{recipient} 台照", body_style),
+        Paragraph(_to_roc_date_text(quote.issue_date), body_style),
+        Spacer(1, 4 * mm),
+    ]
+
+    table = Table(
+        rows,
+        colWidths=[12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm],
+        repeatRows=1,
+        hAlign="LEFT",
+    )
+    table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, -1), PDF_FONT_NAME),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f3f4f6")),
+                ("ALIGN", (0, 0), (0, -1), "CENTER"),
+                ("ALIGN", (3, 0), (5, -1), "CENTER"),
+                ("ALIGN", (6, 0), (6, -1), "RIGHT"),
+                ("ALIGN", (7, 0), (7, -1), "LEFT"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#9ca3af")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#fafafa")]),
+                ("FONTNAME", (0, -1), (-1, -1), PDF_FONT_NAME),
+                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#eef2ff")),
+                ("LINEABOVE", (0, -1), (-1, -1), 1.0, colors.HexColor("#4b5563")),
+            ]
+        )
+    )
+    story.append(table)
+
+    if quote.note:
+        story.extend([Spacer(1, 4 * mm), Paragraph(f"備註：{quote.note}", body_style)])
 
     doc.build(story)
     buffer.seek(0)
@@ -1085,40 +1215,7 @@ def quote_pdf(quote_id: int):
     customer = Customer.query.get(quote.customer_id)
     contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
 
-    meta_rows = [
-        ["No", quote.quote_no],
-        ["Status", quote.status],
-        ["Customer", customer.name if customer else ""],
-        ["Contact", contact.name if contact else ""],
-        ["Email", contact.email if contact else (customer.email if customer else "")],
-        ["Phone", contact.phone if contact else (customer.phone if customer else "")],
-        ["Issue Date", quote.issue_date.isoformat() if quote.issue_date else ""],
-        ["Expiry Date", quote.expiry_date.isoformat() if quote.expiry_date else ""],
-        ["Currency", quote.currency],
-    ]
-
-    item_rows = [["Item", "Unit", "Qty", "Unit Price", "Amount"]]
-    for item in quote.items:
-        item_rows.append(
-            [
-                item.description,
-                item.unit or "",
-                f"{item.quantity:.2f}",
-                f"{item.unit_price:.2f}",
-                f"{item.amount:.2f}",
-            ]
-        )
-
-    totals_rows = [
-        ["Subtotal", f"{quote.subtotal:.2f}"],
-        [f"Tax ({quote.tax_rate:.2f}%)", f"{quote.tax_amount:.2f}"],
-        ["Total", f"{quote.total_amount:.2f}"],
-    ]
-
-    if quote.note:
-        meta_rows.append(["Note", quote.note])
-
-    buffer = _build_pdf_document("Quote", meta_rows, item_rows, totals_rows)
+    buffer = _build_quote_template_pdf(quote, customer, contact)
     filename = f"quote-{quote.quote_no}.pdf"
     return send_file(
         buffer,

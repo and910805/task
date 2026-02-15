@@ -22,7 +22,7 @@ const CrmQuotesPage = () => {
     issue_date: '',
     expiry_date: '',
     currency: 'TWD',
-    tax_rate: 5,
+    tax_rate: 0,
     note: '',
   });
   const [items, setItems] = useState([blankItem()]);
@@ -151,7 +151,7 @@ const CrmQuotesPage = () => {
         issue_date: '',
         expiry_date: '',
         currency: 'TWD',
-        tax_rate: 5,
+        tax_rate: 0,
         note: '',
       });
       setItems([blankItem()]);
