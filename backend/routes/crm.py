@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import date, datetime
 from io import BytesIO
 import os
+from pathlib import Path
 
 from flask import Blueprint, jsonify, request, send_file
 from flask_jwt_extended import jwt_required
+from openpyxl import load_workbook
 from sqlalchemy.orm import selectinload
 
 from decorators import role_required
@@ -126,6 +128,76 @@ def _apply_totals(entity, items: list[dict], tax_rate_raw):
 
 def _next_doc_no(prefix: str) -> str:
     return f"{prefix}-{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')[:-3]}"
+
+
+def _to_roc_date_text(value: date | None) -> str:
+    value = value or date.today()
+    roc_year = value.year - 1911
+    return f"中華民國  {roc_year} 年 {value.month} 月 {value.day} 日"
+
+
+def _find_quote_template_path() -> Path | None:
+    configured = (os.environ.get("QUOTE_TEMPLATE_XLSX") or "").strip()
+    if configured:
+        candidate = Path(configured)
+        if candidate.exists() and candidate.is_file():
+            return candidate
+
+    backend_dir = Path(__file__).resolve().parents[1]
+    data_dir = backend_dir.parent / "data"
+    if not data_dir.exists():
+        return None
+
+    candidates = sorted(data_dir.glob("*.xlsx"))
+    return candidates[0] if candidates else None
+
+
+def _apply_quote_to_template_sheet(ws, quote: Quote, customer: Customer | None, contact: Contact | None) -> None:
+    customer_name = (customer.name if customer else "") or ""
+    contact_name = (contact.name if contact else "") or ""
+    if customer_name and contact_name and customer_name != contact_name:
+        recipient = f"{customer_name} {contact_name}"
+    else:
+        recipient = contact_name or customer_name or ""
+
+    ws["D2"] = "立翔水電行"
+    ws["D3"] = "估價單"
+    ws["D4"] = recipient
+    ws["E4"] = "台照"
+    ws["D5"] = _to_roc_date_text(quote.issue_date)
+
+    # Template reserves rows 7-26 for up to 20 line items.
+    for idx, row in enumerate(range(7, 27), start=1):
+        ws[f"C{row}"] = idx
+        ws[f"D{row}"] = None
+        ws[f"E{row}"] = None
+        ws[f"F{row}"] = None
+        ws[f"G{row}"] = None
+        ws[f"H{row}"] = None
+        ws[f"I{row}"] = 0
+        ws[f"J{row}"] = None
+
+    ordered_items = sorted(
+        quote.items,
+        key=lambda item: (
+            item.sort_order if item.sort_order is not None else 10**9,
+            item.id if item.id is not None else 10**9,
+        ),
+    )
+    for index, item in enumerate(ordered_items[:20]):
+        row = 7 + index
+        ws[f"D{row}"] = item.description or ""
+        ws[f"F{row}"] = item.unit or "式"
+        ws[f"G{row}"] = float(item.quantity or 0)
+        ws[f"H{row}"] = float(item.unit_price or 0)
+        ws[f"I{row}"] = float(item.amount or 0)
+
+    total_amount = float(quote.total_amount or 0)
+    ws["C27"] = "合計"
+    ws["E27"] = "新台幣"
+    ws["F27"] = total_amount
+    ws["H27"] = "NT$"
+    ws["I27"] = total_amount
 
 
 def _validate_customer_contact(customer_id, contact_id):
@@ -956,6 +1028,54 @@ def update_invoice(invoice_id: int):
     db.session.commit()
     invoice = Invoice.query.options(selectinload(Invoice.items)).get(invoice.id)
     return jsonify(invoice.to_dict())
+
+
+@crm_bp.get("/quotes/<int:quote_id>/xlsx")
+@role_required(*READ_ROLES)
+def quote_xlsx(quote_id: int):
+    quote = Quote.query.options(selectinload(Quote.items)).get_or_404(quote_id)
+    customer = Customer.query.get(quote.customer_id)
+    contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
+
+    template_path = _find_quote_template_path()
+    if template_path is None:
+        return jsonify({"msg": "Quote template not found"}), 500
+
+    try:
+        workbook = load_workbook(template_path)
+    except Exception:
+        return jsonify({"msg": "Quote template cannot be opened"}), 500
+
+    if not workbook.worksheets:
+        return jsonify({"msg": "Quote template has no worksheet"}), 500
+
+    sheet_name = (request.args.get("sheet") or "").strip()
+    if sheet_name:
+        worksheet = workbook[sheet_name] if sheet_name in workbook.sheetnames else None
+        if worksheet is None:
+            return jsonify({"msg": f"Template sheet not found: {sheet_name}"}), 400
+    else:
+        worksheet = workbook.worksheets[0]
+
+    for existing_sheet in list(workbook.worksheets):
+        if existing_sheet.title != worksheet.title:
+            workbook.remove(existing_sheet)
+
+    safe_title = (quote.quote_no or "估價單").strip()[:31] or "估價單"
+    worksheet.title = safe_title
+    _apply_quote_to_template_sheet(worksheet, quote, customer, contact)
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+
+    filename = f"quote-{quote.quote_no}.xlsx"
+    return send_file(
+        output,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=filename,
+    )
 
 
 @crm_bp.get("/quotes/<int:quote_id>/pdf")

@@ -30,6 +30,7 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 
 COPY backend/ ./backend
 COPY --from=frontend_builder /app/frontend/dist ./frontend/dist
+COPY data/ ./data
 
 # A writable directory for SQLite + uploads (mount a Zeabur volume here if you need persistence)
 RUN mkdir -p /app/backend/uploads

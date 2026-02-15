@@ -191,6 +191,24 @@ const CrmQuotesPage = () => {
     }
   };
 
+  const downloadXlsx = async (quoteId) => {
+    try {
+      const { data } = await api.get(`crm/quotes/${quoteId}/xlsx`, { responseType: 'blob' });
+      const blobUrl = URL.createObjectURL(
+        new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+      );
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = `quote-${quoteId}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (err) {
+      setError(err?.networkMessage || err?.response?.data?.msg || '下載估價單失敗');
+    }
+  };
+
   return (
     <div className="page">
       <AppHeader title="報價單" subtitle="可從價目資料庫帶入品項，並查看客戶歷史施工紀錄。" />
@@ -375,6 +393,9 @@ const CrmQuotesPage = () => {
                   <td className="crm-actions-cell">
                     <button type="button" className="secondary-btn" onClick={() => openPdf(quote.id)}>
                       PDF
+                    </button>
+                    <button type="button" className="secondary-btn" onClick={() => downloadXlsx(quote.id)}>
+                      XLSX
                     </button>
                     <button type="button" onClick={() => convertToInvoice(quote.id)}>
                       轉發票
