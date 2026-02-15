@@ -120,5 +120,78 @@
   });
 })();
 </script>
+<style id="section-nav-enhance">
+section[id] { scroll-margin-top: 110px; }
+@media (max-width: 768px) {
+  nav .max-w-7xl { padding-left: 12px !important; padding-right: 12px !important; }
+  nav .flex.items-center.justify-between { flex-direction: column !important; align-items: flex-start !important; gap: 10px !important; }
+  nav .hidden.md\:flex {
+    display: flex !important;
+    width: 100%;
+    overflow-x: auto;
+    gap: 12px !important;
+    padding: 4px 2px 8px;
+    white-space: nowrap;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  nav .hidden.md\:flex::-webkit-scrollbar { display: none; }
+  nav a[href^="tel:"] { padding: 8px 12px !important; font-size: 13px !important; }
+
+  #hero h2 { font-size: clamp(2rem, 9vw, 3rem) !important; line-height: 1.2 !important; }
+  #about h2, #services h2, #pricing h2, #testimonials h2, #contact h2 {
+    font-size: clamp(1.7rem, 7.8vw, 2.5rem) !important;
+    line-height: 1.2 !important;
+  }
+
+  #hero .flex.items-end.justify-center.gap-6.mt-20 {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+    margin-top: 24px !important;
+  }
+  #hero .w-64, #hero .w-72 {
+    width: min(86vw, 320px) !important;
+    height: auto !important;
+    margin: 0 auto !important;
+  }
+
+  section { overflow: hidden; }
+}
+</style>
+<script id="section-nav-enhance-script">
+(function () {
+  var ids = ['hero', 'about', 'services', 'pricing', 'testimonials', 'contact'];
+  var nav = document.querySelector('nav');
+  if (!nav) return;
+
+  var buttons = nav.querySelectorAll('.hidden.md\\:flex button');
+  buttons.forEach(function (btn, index) {
+    btn.style.cursor = 'pointer';
+    btn.addEventListener('click', function () {
+      var targetId = ids[index];
+      var target = targetId ? document.getElementById(targetId) : null;
+      if (!target) return;
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (history && history.replaceState) {
+        history.replaceState(null, '', '#' + targetId);
+      }
+    });
+  });
+
+  var brand = nav.querySelector('.flex.items-center.gap-3.cursor-pointer');
+  if (brand) {
+    brand.addEventListener('click', function () {
+      var hero = document.getElementById('hero');
+      if (!hero) return;
+      hero.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (history && history.replaceState) {
+        history.replaceState(null, '', '#hero');
+      }
+    });
+  }
+})();
+</script>
 </body></html>
+
 

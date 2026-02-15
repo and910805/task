@@ -129,6 +129,14 @@ def create_app() -> Flask:
         if path.startswith(("api/", "uploads/", "static/", "favicon.", "manifest", "robots")):
             return jsonify({"error": "Not found"}), 404
         dist_dir = app.static_folder
+        sale_dir = os.path.join(dist_dir, "salesite")
+        sale_entry = os.path.join(sale_dir, "sale.html")
+
+        # Serve marketing page directly at "/" and "/sale" to avoid SPA/iframe recursion.
+        if path in ("", "sale"):
+            if os.path.exists(sale_entry):
+                return send_from_directory(sale_dir, "sale.html")
+
         requested_path = os.path.join(dist_dir, path)
         if os.path.exists(requested_path) and not os.path.isdir(requested_path):
             return send_from_directory(dist_dir, path)

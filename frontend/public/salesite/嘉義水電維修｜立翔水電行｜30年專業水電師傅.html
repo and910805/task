@@ -57,4 +57,141 @@
     <script src="./?儔瘞湧蝬凋耨嚚?蝧偌?餉?嚚?0撟游?璆剜偌?餃葦?files/widget" mode="hybrid" voice-show-transcript="true" theme="light" size="compact" accent-color="#14B8A6" button-base-color="#000000" button-accent-color="#FFFFFF" defer=""></script>
   
 
+<script>
+(function () {
+  const form = document.getElementById('contact-form');
+  if (!form) return;
+
+  const submitBtn = form.querySelector('button[type="submit"]');
+  const hint = document.createElement('p');
+  hint.id = 'booking-submit-hint';
+  hint.style.marginTop = '10px';
+  hint.style.fontSize = '14px';
+  form.appendChild(hint);
+
+  const setHint = function (text, ok) {
+    hint.textContent = text || '';
+    hint.style.color = ok ? '#0f766e' : '#dc2626';
+  };
+
+  form.addEventListener('submit', async function (event) {
+    event.preventDefault();
+
+    const name = (form.querySelector('[name="name"]')?.value || '').trim();
+    const phone = (form.querySelector('[name="phone"]')?.value || '').trim();
+    const email = (form.querySelector('[name="email"]')?.value || '').trim();
+    const service = (form.querySelector('[name="service"]')?.value || '').trim();
+    const message = (form.querySelector('[name="message"]')?.value || '').trim();
+
+    if (!name || !phone || !service) {
+      setHint('請填寫姓名、電話與服務項目。', false);
+      return;
+    }
+
+    if (submitBtn) submitBtn.disabled = true;
+    setHint('送出中，請稍候...', true);
+
+    try {
+      const res = await fetch('/api/crm/public/bookings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          phone,
+          email,
+          service,
+          message,
+          source_url: window.location.href
+        })
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.msg || '送出失敗，請稍後再試。');
+      }
+
+      setHint('預約已送出，我們會盡快與您聯絡。', true);
+      form.reset();
+    } catch (err) {
+      setHint(err.message || '送出失敗，請稍後再試。', false);
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  });
+})();
+</script>
+<style id="section-nav-enhance">
+section[id] { scroll-margin-top: 110px; }
+@media (max-width: 768px) {
+  nav .max-w-7xl { padding-left: 12px !important; padding-right: 12px !important; }
+  nav .flex.items-center.justify-between { flex-direction: column !important; align-items: flex-start !important; gap: 10px !important; }
+  nav .hidden.md\:flex {
+    display: flex !important;
+    width: 100%;
+    overflow-x: auto;
+    gap: 12px !important;
+    padding: 4px 2px 8px;
+    white-space: nowrap;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  nav .hidden.md\:flex::-webkit-scrollbar { display: none; }
+  nav a[href^="tel:"] { padding: 8px 12px !important; font-size: 13px !important; }
+
+  #hero h2 { font-size: clamp(2rem, 9vw, 3rem) !important; line-height: 1.2 !important; }
+  #about h2, #services h2, #pricing h2, #testimonials h2, #contact h2 {
+    font-size: clamp(1.7rem, 7.8vw, 2.5rem) !important;
+    line-height: 1.2 !important;
+  }
+
+  #hero .flex.items-end.justify-center.gap-6.mt-20 {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+    margin-top: 24px !important;
+  }
+  #hero .w-64, #hero .w-72 {
+    width: min(86vw, 320px) !important;
+    height: auto !important;
+    margin: 0 auto !important;
+  }
+
+  section { overflow: hidden; }
+}
+</style>
+<script id="section-nav-enhance-script">
+(function () {
+  var ids = ['hero', 'about', 'services', 'pricing', 'testimonials', 'contact'];
+  var nav = document.querySelector('nav');
+  if (!nav) return;
+
+  var buttons = nav.querySelectorAll('.hidden.md\\:flex button');
+  buttons.forEach(function (btn, index) {
+    btn.style.cursor = 'pointer';
+    btn.addEventListener('click', function () {
+      var targetId = ids[index];
+      var target = targetId ? document.getElementById(targetId) : null;
+      if (!target) return;
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (history && history.replaceState) {
+        history.replaceState(null, '', '#' + targetId);
+      }
+    });
+  });
+
+  var brand = nav.querySelector('.flex.items-center.gap-3.cursor-pointer');
+  if (brand) {
+    brand.addEventListener('click', function () {
+      var hero = document.getElementById('hero');
+      if (!hero) return;
+      hero.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (history && history.replaceState) {
+        history.replaceState(null, '', '#hero');
+      }
+    });
+  }
+})();
+</script>
 </body></html>
+
+
