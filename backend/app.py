@@ -27,7 +27,11 @@ def _normalize_database_url(db_url: str | None) -> str | None:
     if not db_url:
         return None
     if db_url.startswith("postgres://"):
-        return db_url.replace("postgres://", "postgresql://", 1)
+        return db_url.replace("postgres://", "postgresql+psycopg://", 1)
+    if db_url.startswith("postgresql://"):
+        return db_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    if db_url.startswith("postgresql+psycopg2://"):
+        return db_url.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
     return db_url
 
 

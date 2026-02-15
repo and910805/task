@@ -14,7 +14,11 @@ def _normalize_database_url(db_url: str | None) -> str | None:
     if not db_url:
         return None
     if db_url.startswith("postgres://"):
-        return db_url.replace("postgres://", "postgresql://", 1)
+        return db_url.replace("postgres://", "postgresql+psycopg://", 1)
+    if db_url.startswith("postgresql://"):
+        return db_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    if db_url.startswith("postgresql+psycopg2://"):
+        return db_url.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
     return db_url
 
 
@@ -116,7 +120,10 @@ def main():
     target_url = _normalize_database_url(args.target)
     if not target_url:
         raise SystemExit("Target DATABASE_URL is required (use --target or env DATABASE_URL).")
-    if not target_url.startswith("postgresql://"):
+    if not (
+        target_url.startswith("postgresql://")
+        or target_url.startswith("postgresql+psycopg://")
+    ):
         raise SystemExit("Target DATABASE_URL must be PostgreSQL.")
 
     source_engine = create_engine(f"sqlite:///{source_path}")
