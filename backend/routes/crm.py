@@ -23,8 +23,8 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 
 crm_bp = Blueprint("crm", __name__)
 
-READ_ROLES = ("site_supervisor", "hq_staff")
-WRITE_ROLES = ("site_supervisor", "hq_staff")
+READ_ROLES = ("site_supervisor", "hq_staff", "admin")
+WRITE_ROLES = ("site_supervisor", "hq_staff", "admin")
 VALID_QUOTE_STATUS = {"draft", "sent", "accepted", "rejected", "expired"}
 VALID_INVOICE_STATUS = {"draft", "issued", "partially_paid", "paid", "cancelled"}
 
@@ -209,6 +209,152 @@ def _build_pdf_document(title: str, meta_rows: list[list[str]], item_rows: list[
     doc.build(story)
     buffer.seek(0)
     return buffer
+
+
+def _trim(value):
+    return (value or "").strip()
+
+
+def _append_note(original: str | None, extra: str) -> str:
+    current = _trim(original)
+    return f"{current}\n{extra}" if current else extra
+
+
+def _find_or_create_customer(name: str, phone: str, email: str, address: str, note_line: str):
+    customer = None
+    if phone:
+        customer = Customer.query.filter(Customer.phone == phone).first()
+    if not customer and email:
+        customer = Customer.query.filter(Customer.email == email).first()
+    if not customer and name:
+        customer = Customer.query.filter(Customer.name == name).first()
+
+    if customer:
+        if phone and not customer.phone:
+            customer.phone = phone
+        if email and not customer.email:
+            customer.email = email
+        if address and not customer.address:
+            customer.address = address
+        customer.note = _append_note(customer.note, note_line)
+        return customer
+
+    base_name = name or f"網站預約-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    candidate = base_name
+    suffix = 2
+    while Customer.query.filter(Customer.name == candidate).first():
+        candidate = f"{base_name}-{suffix}"
+        suffix += 1
+
+    customer = Customer(
+        name=candidate,
+        email=email or None,
+        phone=phone or None,
+        address=address or None,
+        note=note_line,
+        created_by_id=None,
+    )
+    db.session.add(customer)
+    db.session.flush()
+    return customer
+
+
+def _find_or_create_contact(customer: Customer, name: str, phone: str, email: str, note_line: str):
+    contact = None
+    if email:
+        contact = Contact.query.filter(
+            Contact.customer_id == customer.id,
+            Contact.email == email,
+        ).first()
+    if not contact and phone:
+        contact = Contact.query.filter(
+            Contact.customer_id == customer.id,
+            Contact.phone == phone,
+            Contact.name == name,
+        ).first()
+
+    if contact:
+        if phone and not contact.phone:
+            contact.phone = phone
+        if email and not contact.email:
+            contact.email = email
+        contact.note = _append_note(contact.note, note_line)
+        return contact
+
+    is_primary = Contact.query.filter(Contact.customer_id == customer.id).count() == 0
+    contact = Contact(
+        customer_id=customer.id,
+        name=name or customer.name,
+        email=email or None,
+        phone=phone or None,
+        is_primary=is_primary,
+        note=note_line,
+    )
+    db.session.add(contact)
+    db.session.flush()
+    return contact
+
+
+@crm_bp.post("/public/bookings")
+def create_public_booking():
+    data = request.get_json(silent=True) or {}
+    name = _trim(data.get("name"))
+    phone = _trim(data.get("phone"))
+    email = _trim(data.get("email"))
+    service = _trim(data.get("service"))
+    message = _trim(data.get("message"))
+    address = _trim(data.get("address"))
+    source_url = _trim(data.get("source_url")) or _trim(request.referrer)
+    user_agent = _trim(request.headers.get("User-Agent"))
+    client_ip = _trim((request.headers.get("X-Forwarded-For") or "").split(",")[0]) or _trim(request.remote_addr)
+
+    if not name:
+        return jsonify({"msg": "name is required"}), 400
+    if not phone:
+        return jsonify({"msg": "phone is required"}), 400
+    if not service:
+        return jsonify({"msg": "service is required"}), 400
+
+    booking_note_parts = [
+        "來源: 官網線上預約",
+        f"服務項目: {service}",
+    ]
+    if message:
+        booking_note_parts.append(f"需求描述: {message}")
+    if source_url:
+        booking_note_parts.append(f"來源頁面: {source_url}")
+    if client_ip:
+        booking_note_parts.append(f"IP: {client_ip}")
+    if user_agent:
+        booking_note_parts.append(f"UA: {user_agent}")
+    booking_note = "\n".join(booking_note_parts)
+
+    customer = _find_or_create_customer(
+        name=name,
+        phone=phone,
+        email=email,
+        address=address,
+        note_line=booking_note,
+    )
+    contact = _find_or_create_contact(
+        customer=customer,
+        name=name,
+        phone=phone,
+        email=email,
+        note_line=booking_note,
+    )
+    db.session.commit()
+
+    return (
+        jsonify(
+            {
+                "msg": "booking received",
+                "customer_id": customer.id,
+                "contact_id": contact.id,
+            }
+        ),
+        201,
+    )
 
 
 @crm_bp.get("/customers")

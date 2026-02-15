@@ -57,4 +57,68 @@
     <script src="./?儔瘞湧蝬凋耨嚚?蝧偌?餉?嚚?0撟游?璆剜偌?餃葦?files/widget" mode="hybrid" voice-show-transcript="true" theme="light" size="compact" accent-color="#14B8A6" button-base-color="#000000" button-accent-color="#FFFFFF" defer=""></script>
   
 
+<script>
+(function () {
+  const form = document.getElementById('contact-form');
+  if (!form) return;
+
+  const submitBtn = form.querySelector('button[type="submit"]');
+  const hint = document.createElement('p');
+  hint.id = 'booking-submit-hint';
+  hint.style.marginTop = '10px';
+  hint.style.fontSize = '14px';
+  form.appendChild(hint);
+
+  const setHint = function (text, ok) {
+    hint.textContent = text || '';
+    hint.style.color = ok ? '#0f766e' : '#dc2626';
+  };
+
+  form.addEventListener('submit', async function (event) {
+    event.preventDefault();
+
+    const name = (form.querySelector('[name="name"]')?.value || '').trim();
+    const phone = (form.querySelector('[name="phone"]')?.value || '').trim();
+    const email = (form.querySelector('[name="email"]')?.value || '').trim();
+    const service = (form.querySelector('[name="service"]')?.value || '').trim();
+    const message = (form.querySelector('[name="message"]')?.value || '').trim();
+
+    if (!name || !phone || !service) {
+      setHint('請填寫姓名、電話與服務項目。', false);
+      return;
+    }
+
+    if (submitBtn) submitBtn.disabled = true;
+    setHint('送出中，請稍候...', true);
+
+    try {
+      const res = await fetch('/api/crm/public/bookings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          phone,
+          email,
+          service,
+          message,
+          source_url: window.location.href
+        })
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.msg || '送出失敗，請稍後再試。');
+      }
+
+      setHint('預約已送出，我們會盡快與您聯絡。', true);
+      form.reset();
+    } catch (err) {
+      setHint(err.message || '送出失敗，請稍後再試。', false);
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  });
+})();
+</script>
 </body></html>
+
