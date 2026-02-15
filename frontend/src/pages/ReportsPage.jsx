@@ -65,14 +65,15 @@ const ReportsPage = () => {
   }, [quotes]);
 
   const reportRows = useMemo(() => {
-    return quotes.map((row) => ({
+    return quotes
+      .map((row) => ({
       doc_type: 'quote',
       no: row.quote_no || '',
       status: row.status || '',
       amount: Number(row.total_amount || 0),
       date: toDateValue(row.issue_date || row.created_at),
       raw: row,
-    })
+      }))
       .filter((row) => {
         if (filters.status !== 'all' && row.status !== filters.status) return false;
         if (filters.date_from && row.date && row.date < filters.date_from) return false;
