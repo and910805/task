@@ -12,6 +12,14 @@ from typing import Any
 from urllib.parse import urljoin
 
 import requests
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
 class APIError(Exception):
@@ -22,7 +30,6 @@ class TaskGoAPI:
     def __init__(self) -> None:
         self.base_url = "https://task.kuanlin.pro"
         self.token = ""
-        self.user: dict[str, Any] | None = None
 
     def set_base_url(self, base_url: str) -> None:
         cleaned = (base_url or "").strip().rstrip("/")
@@ -32,95 +39,84 @@ class TaskGoAPI:
             raise APIError("系統網址必須以 http:// 或 https:// 開頭")
         self.base_url = cleaned
 
-    def _request(
-        self,
-        method: str,
-        path: str,
-        *,
-        auth_required: bool = True,
-        timeout: int = 25,
-        **kwargs: Any,
-    ) -> requests.Response:
+    def _request(self, method: str, path: str, *, auth_required: bool = True, **kwargs: Any) -> requests.Response:
         headers = kwargs.pop("headers", {}) or {}
         if auth_required:
             if not self.token:
                 raise APIError("請先登入")
             headers["Authorization"] = f"Bearer {self.token}"
-
         url = urljoin(f"{self.base_url}/", path.lstrip("/"))
         try:
-            response = requests.request(method, url, headers=headers, timeout=timeout, **kwargs)
+            resp = requests.request(method, url, headers=headers, timeout=25, **kwargs)
         except requests.RequestException as exc:
             raise APIError(f"連線失敗: {exc}") from exc
-
-        if response.ok:
-            return response
-
-        error_message = f"HTTP {response.status_code}"
+        if resp.ok:
+            return resp
         try:
-            payload = response.json()
-            if isinstance(payload, dict) and payload.get("msg"):
-                error_message = str(payload["msg"])
-        except ValueError:
-            pass
-        raise APIError(error_message)
+            msg = (resp.json() or {}).get("msg") or f"HTTP {resp.status_code}"
+        except Exception:
+            msg = f"HTTP {resp.status_code}"
+        raise APIError(str(msg))
 
-    def login(self, username: str, password: str) -> dict[str, Any]:
-        response = self._request(
+    def login(self, username: str, password: str) -> None:
+        payload = self._request(
             "POST",
             "/api/auth/login",
             auth_required=False,
             json={"username": username, "password": password},
-        )
-        payload = response.json()
+        ).json()
         token = payload.get("token")
         if not token:
             raise APIError("登入成功但沒有收到 token")
         self.token = token
-        self.user = payload.get("user")
-        return payload
 
     def get_customers(self) -> list[dict[str, Any]]:
-        response = self._request("GET", "/api/crm/customers")
-        payload = response.json()
-        return payload if isinstance(payload, list) else []
+        data = self._request("GET", "/api/crm/customers").json()
+        return data if isinstance(data, list) else []
 
     def get_contacts(self) -> list[dict[str, Any]]:
-        response = self._request("GET", "/api/crm/contacts")
-        payload = response.json()
-        return payload if isinstance(payload, list) else []
+        data = self._request("GET", "/api/crm/contacts").json()
+        return data if isinstance(data, list) else []
+
+    def get_catalog_items(self) -> list[dict[str, Any]]:
+        data = self._request("GET", "/api/crm/catalog-items").json()
+        return data if isinstance(data, list) else []
 
     def get_quotes(self) -> list[dict[str, Any]]:
-        response = self._request("GET", "/api/crm/quotes")
-        payload = response.json()
-        return payload if isinstance(payload, list) else []
+        data = self._request("GET", "/api/crm/quotes").json()
+        return data if isinstance(data, list) else []
 
     def create_quote(self, payload: dict[str, Any]) -> dict[str, Any]:
-        response = self._request("POST", "/api/crm/quotes", json=payload)
-        result = response.json()
-        return result if isinstance(result, dict) else {}
+        data = self._request("POST", "/api/crm/quotes", json=payload).json()
+        return data if isinstance(data, dict) else {}
 
     def download_quote_pdf(self, quote_id: int) -> bytes:
-        response = self._request("GET", f"/api/crm/quotes/{quote_id}/pdf")
-        return response.content
+        return self._request("GET", f"/api/crm/quotes/{quote_id}/pdf").content
 
     def download_quote_xlsx(self, quote_id: int) -> bytes:
-        response = self._request("GET", f"/api/crm/quotes/{quote_id}/xlsx")
-        return response.content
+        return self._request("GET", f"/api/crm/quotes/{quote_id}/xlsx").content
 
 
 class DesktopQuoteTool:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("TaskGo 會計報價工具")
-        self.root.geometry("1240x840")
+        self.root.geometry("1280x820")
         self.root.minsize(1100, 720)
 
         self.api = TaskGoAPI()
         self.customers: list[dict[str, Any]] = []
         self.contacts: list[dict[str, Any]] = []
+        self.catalog_items: list[dict[str, Any]] = []
         self.quotes: list[dict[str, Any]] = []
-        self.quote_row_to_data: dict[str, dict[str, Any]] = {}
+        self.current_items: list[dict[str, Any]] = []
+        self.local_pdf_font = "Helvetica"
+
+        self.customer_map: dict[str, int] = {}
+        self.contact_map: dict[str, int] = {}
+        self.catalog_map: dict[str, dict[str, Any]] = {}
+        self.quote_map: dict[str, dict[str, Any]] = {}
+        self.item_row_map: dict[str, int] = {}
 
         self.base_url_var = tk.StringVar(value="https://task.kuanlin.pro")
         self.username_var = tk.StringVar()
@@ -132,98 +128,57 @@ class DesktopQuoteTool:
         self.issue_date_var = tk.StringVar(value=date.today().isoformat())
         self.expiry_date_var = tk.StringVar()
         self.currency_var = tk.StringVar(value="TWD")
-        self.tax_rate_var = tk.StringVar(value="0")
+        self.note_var = tk.StringVar()
 
-        self.customer_label_to_id: dict[str, int] = {}
-        self.contact_label_to_id: dict[str, int] = {}
+        self.catalog_pick_var = tk.StringVar()
+        self.item_desc_var = tk.StringVar()
+        self.item_unit_var = tk.StringVar(value="式")
+        self.item_qty_var = tk.StringVar(value="1")
+        self.item_price_var = tk.StringVar(value="0")
+        self.total_var = tk.StringVar(value="0.00")
 
-        self._apply_style()
         self._build_ui()
 
-    def _apply_style(self) -> None:
-        family = self._pick_font_family(
-            [
-                "Microsoft JhengHei UI",
-                "Microsoft JhengHei",
-                "Noto Sans CJK TC",
-                "PingFang TC",
-                "Arial",
-            ]
-        )
-        self.root.option_add("*Font", (family, 10))
+    def _build_ui(self) -> None:
+        self.root.option_add("*Font", (self._pick_font(), 10))
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(1, weight=1)
 
-        style = ttk.Style(self.root)
-        if "vista" in style.theme_names():
-            style.theme_use("vista")
+        top = ttk.LabelFrame(self.root, text="系統連線", padding=8)
+        top.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
+        for col in range(10):
+            top.columnconfigure(col, weight=1 if col in (1, 3, 5, 9) else 0)
+        ttk.Label(top, text="網址").grid(row=0, column=0, sticky="w")
+        ttk.Entry(top, textvariable=self.base_url_var).grid(row=0, column=1, sticky="ew", padx=4)
+        ttk.Label(top, text="帳號").grid(row=0, column=2, sticky="w")
+        ttk.Entry(top, textvariable=self.username_var).grid(row=0, column=3, sticky="ew", padx=4)
+        ttk.Label(top, text="密碼").grid(row=0, column=4, sticky="w")
+        ttk.Entry(top, textvariable=self.password_var, show="*").grid(row=0, column=5, sticky="ew", padx=4)
+        ttk.Button(top, text="登入", command=self.login).grid(row=0, column=6, padx=4)
+        ttk.Button(top, text="載入主檔", command=self.load_master).grid(row=0, column=7, padx=4)
+        ttk.Button(top, text="刷新報價", command=self.refresh_quotes).grid(row=0, column=8, padx=4)
+        ttk.Label(top, textvariable=self.status_var).grid(row=0, column=9, sticky="e")
 
-        style.configure("Title.TLabel", font=(family, 14, "bold"))
-        style.configure("Section.TLabelframe", padding=8)
-        style.configure("Section.TLabelframe.Label", font=(family, 11, "bold"))
-        style.configure("StatusOk.TLabel", foreground="#1f6f43")
-        style.configure("StatusError.TLabel", foreground="#b42318")
+        notebook = ttk.Notebook(self.root)
+        notebook.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.query_tab = ttk.Frame(notebook, padding=10)
+        self.create_tab = ttk.Frame(notebook, padding=10)
+        notebook.add(self.query_tab, text="報價查詢")
+        notebook.add(self.create_tab, text="建立估價單")
+        self._build_query_tab()
+        self._build_create_tab()
 
     @staticmethod
-    def _pick_font_family(candidates: list[str]) -> str:
+    def _pick_font() -> str:
+        candidates = ["Microsoft JhengHei UI", "Microsoft JhengHei", "Noto Sans CJK TC", "Arial"]
         try:
             installed = set(tkfont.families())
         except tk.TclError:
             installed = set()
-        for item in candidates:
-            if item in installed:
-                return item
+        for c in candidates:
+            if c in installed:
+                return c
         return "TkDefaultFont"
-
-    def _build_ui(self) -> None:
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-
-        main = ttk.Frame(self.root, padding=12)
-        main.grid(row=0, column=0, sticky="nsew")
-        main.columnconfigure(0, weight=1)
-        main.rowconfigure(1, weight=1)
-
-        title = ttk.Label(main, text="TaskGo 會計報價工具", style="Title.TLabel")
-        title.grid(row=0, column=0, sticky="w", pady=(0, 10))
-
-        content = ttk.Frame(main)
-        content.grid(row=1, column=0, sticky="nsew")
-        content.columnconfigure(0, weight=1)
-        content.rowconfigure(1, weight=1)
-
-        self._build_login_card(content)
-
-        notebook = ttk.Notebook(content)
-        notebook.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
-
-        self.query_tab = ttk.Frame(notebook, padding=10)
-        self.create_tab = ttk.Frame(notebook, padding=10)
-        notebook.add(self.query_tab, text="報價單查詢")
-        notebook.add(self.create_tab, text="建立報價單")
-
-        self._build_query_tab()
-        self._build_create_tab()
-
-    def _build_login_card(self, parent: ttk.Frame) -> None:
-        card = ttk.LabelFrame(parent, text="系統連線", style="Section.TLabelframe")
-        card.grid(row=0, column=0, sticky="ew")
-        for i in range(10):
-            card.columnconfigure(i, weight=1 if i in (1, 3, 5, 9) else 0)
-
-        ttk.Label(card, text="系統網址").grid(row=0, column=0, sticky="w", padx=(4, 2), pady=6)
-        ttk.Entry(card, textvariable=self.base_url_var).grid(row=0, column=1, sticky="ew", padx=4)
-
-        ttk.Label(card, text="帳號").grid(row=0, column=2, sticky="w", padx=(10, 2), pady=6)
-        ttk.Entry(card, textvariable=self.username_var).grid(row=0, column=3, sticky="ew", padx=4)
-
-        ttk.Label(card, text="密碼").grid(row=0, column=4, sticky="w", padx=(10, 2), pady=6)
-        ttk.Entry(card, textvariable=self.password_var, show="*").grid(row=0, column=5, sticky="ew", padx=4)
-
-        ttk.Button(card, text="登入", command=self.login).grid(row=0, column=6, padx=4)
-        ttk.Button(card, text="載入客戶資料", command=self.load_reference_data).grid(row=0, column=7, padx=4)
-        ttk.Button(card, text="刷新報價列表", command=self.refresh_quotes).grid(row=0, column=8, padx=4)
-
-        self.status_label = ttk.Label(card, textvariable=self.status_var, style="StatusOk.TLabel")
-        self.status_label.grid(row=0, column=9, sticky="e", padx=(8, 4))
 
     def _build_query_tab(self) -> None:
         self.query_tab.columnconfigure(0, weight=1)
@@ -231,465 +186,497 @@ class DesktopQuoteTool:
 
         actions = ttk.Frame(self.query_tab)
         actions.grid(row=0, column=0, sticky="ew")
-
-        ttk.Button(actions, text="重新整理", command=self.refresh_quotes).grid(row=0, column=0, padx=(0, 6), pady=(0, 8))
-        ttk.Button(actions, text="開啟 PDF", command=self.open_selected_pdf).grid(row=0, column=1, padx=6, pady=(0, 8))
-        ttk.Button(actions, text="開啟 XLSX", command=self.open_selected_xlsx).grid(row=0, column=2, padx=6, pady=(0, 8))
+        ttk.Button(actions, text="重新整理", command=self.refresh_quotes).grid(row=0, column=0, padx=4)
+        ttk.Button(actions, text="PDF（地端繁中）", command=self.open_local_pdf).grid(row=0, column=1, padx=4)
+        ttk.Button(actions, text="PDF（系統）", command=self.open_server_pdf).grid(row=0, column=2, padx=4)
+        ttk.Button(actions, text="XLSX", command=self.open_xlsx).grid(row=0, column=3, padx=4)
 
         paned = ttk.Panedwindow(self.query_tab, orient="vertical")
-        paned.grid(row=1, column=0, sticky="nsew")
+        paned.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
 
-        table_frame = ttk.LabelFrame(paned, text="報價單列表", style="Section.TLabelframe")
-        table_frame.columnconfigure(0, weight=1)
-        table_frame.rowconfigure(0, weight=1)
-
-        columns = ("quote_no", "status", "amount", "customer_id", "issue_date")
-        self.quote_tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=16)
-        self.quote_tree.heading("quote_no", text="單號")
-        self.quote_tree.heading("status", text="狀態")
-        self.quote_tree.heading("amount", text="金額")
-        self.quote_tree.heading("customer_id", text="客戶 ID")
-        self.quote_tree.heading("issue_date", text="報價日期")
-
-        self.quote_tree.column("quote_no", width=310, anchor="w")
-        self.quote_tree.column("status", width=120, anchor="center")
-        self.quote_tree.column("amount", width=140, anchor="e")
-        self.quote_tree.column("customer_id", width=120, anchor="center")
-        self.quote_tree.column("issue_date", width=160, anchor="center")
-
-        y_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.quote_tree.yview)
-        x_scroll = ttk.Scrollbar(table_frame, orient="horizontal", command=self.quote_tree.xview)
-        self.quote_tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
-
+        list_frame = ttk.LabelFrame(paned, text="報價列表", padding=6)
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+        cols = ("quote_no", "status", "amount", "customer", "issue_date")
+        self.quote_tree = ttk.Treeview(list_frame, columns=cols, show="headings", height=15)
+        for c, t, w, a in [
+            ("quote_no", "單號", 320, "w"),
+            ("status", "狀態", 100, "center"),
+            ("amount", "金額", 130, "e"),
+            ("customer", "客戶", 240, "w"),
+            ("issue_date", "日期", 140, "center"),
+        ]:
+            self.quote_tree.heading(c, text=t)
+            self.quote_tree.column(c, width=w, anchor=a)
         self.quote_tree.grid(row=0, column=0, sticky="nsew")
-        y_scroll.grid(row=0, column=1, sticky="ns")
-        x_scroll.grid(row=1, column=0, sticky="ew")
-        self.quote_tree.bind("<<TreeviewSelect>>", self.on_quote_selected)
+        ttk.Scrollbar(list_frame, orient="vertical", command=self.quote_tree.yview).grid(row=0, column=1, sticky="ns")
+        self.quote_tree.bind("<<TreeviewSelect>>", self.show_quote_detail)
 
-        detail_frame = ttk.LabelFrame(paned, text="報價明細", style="Section.TLabelframe")
-        detail_frame.columnconfigure(0, weight=1)
-        detail_frame.rowconfigure(0, weight=1)
-
-        self.detail_text = tk.Text(detail_frame, height=12, wrap="word")
-        detail_scroll = ttk.Scrollbar(detail_frame, orient="vertical", command=self.detail_text.yview)
-        self.detail_text.configure(yscrollcommand=detail_scroll.set)
+        detail = ttk.LabelFrame(paned, text="明細", padding=6)
+        detail.columnconfigure(0, weight=1)
+        detail.rowconfigure(0, weight=1)
+        self.detail_text = tk.Text(detail, wrap="word", height=10)
         self.detail_text.grid(row=0, column=0, sticky="nsew")
-        detail_scroll.grid(row=0, column=1, sticky="ns")
-        self.detail_text.insert("1.0", "請先從上方列表選擇一筆報價單。")
+        self.detail_text.insert("1.0", "請在上方選擇一筆報價。")
         self.detail_text.configure(state="disabled")
 
-        paned.add(table_frame, weight=3)
-        paned.add(detail_frame, weight=2)
+        paned.add(list_frame, weight=3)
+        paned.add(detail, weight=2)
 
     def _build_create_tab(self) -> None:
         self.create_tab.columnconfigure(0, weight=1)
         self.create_tab.rowconfigure(1, weight=1)
 
-        base_frame = ttk.LabelFrame(self.create_tab, text="基本資料", style="Section.TLabelframe")
-        base_frame.grid(row=0, column=0, sticky="ew")
-        for i in range(4):
-            base_frame.columnconfigure(i, weight=1 if i in (1, 3) else 0)
-
-        ttk.Label(base_frame, text="客戶").grid(row=0, column=0, sticky="w", pady=4)
-        self.customer_combo = ttk.Combobox(base_frame, textvariable=self.customer_var, state="readonly")
-        self.customer_combo.grid(row=0, column=1, sticky="ew", padx=4, pady=4)
+        base = ttk.LabelFrame(self.create_tab, text="基本資料", padding=8)
+        base.grid(row=0, column=0, sticky="ew")
+        for col in range(4):
+            base.columnconfigure(col, weight=1 if col in (1, 3) else 0)
+        ttk.Label(base, text="客戶").grid(row=0, column=0, sticky="w")
+        self.customer_combo = ttk.Combobox(base, textvariable=self.customer_var, state="readonly")
+        self.customer_combo.grid(row=0, column=1, sticky="ew", padx=4, pady=2)
         self.customer_combo.bind("<<ComboboxSelected>>", self.on_customer_changed)
+        ttk.Label(base, text="聯絡人").grid(row=0, column=2, sticky="w")
+        self.contact_combo = ttk.Combobox(base, textvariable=self.contact_var, state="readonly")
+        self.contact_combo.grid(row=0, column=3, sticky="ew", padx=4, pady=2)
+        ttk.Label(base, text="報價日期").grid(row=1, column=0, sticky="w")
+        ttk.Entry(base, textvariable=self.issue_date_var).grid(row=1, column=1, sticky="ew", padx=4, pady=2)
+        ttk.Label(base, text="有效日期").grid(row=1, column=2, sticky="w")
+        ttk.Entry(base, textvariable=self.expiry_date_var).grid(row=1, column=3, sticky="ew", padx=4, pady=2)
+        ttk.Label(base, text="幣別").grid(row=2, column=0, sticky="w")
+        ttk.Entry(base, textvariable=self.currency_var).grid(row=2, column=1, sticky="ew", padx=4, pady=2)
+        ttk.Label(base, text="稅率").grid(row=2, column=2, sticky="w")
+        ttk.Label(base, text="固定 0%（未稅）").grid(row=2, column=3, sticky="w", padx=4)
+        ttk.Label(base, text="備註").grid(row=3, column=0, sticky="w")
+        ttk.Entry(base, textvariable=self.note_var).grid(row=3, column=1, columnspan=3, sticky="ew", padx=4, pady=2)
 
-        ttk.Label(base_frame, text="聯絡人").grid(row=0, column=2, sticky="w", pady=4)
-        self.contact_combo = ttk.Combobox(base_frame, textvariable=self.contact_var, state="readonly")
-        self.contact_combo.grid(row=0, column=3, sticky="ew", padx=4, pady=4)
+        items = ttk.LabelFrame(self.create_tab, text="品項", padding=8)
+        items.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+        items.columnconfigure(0, weight=1)
+        items.rowconfigure(1, weight=1)
 
-        ttk.Label(base_frame, text="報價日期 (YYYY-MM-DD)").grid(row=1, column=0, sticky="w", pady=4)
-        ttk.Entry(base_frame, textvariable=self.issue_date_var).grid(row=1, column=1, sticky="ew", padx=4, pady=4)
+        source = ttk.Frame(items)
+        source.grid(row=0, column=0, sticky="ew")
+        source.columnconfigure(1, weight=1)
+        ttk.Label(source, text="價目表").grid(row=0, column=0, sticky="w")
+        self.catalog_combo = ttk.Combobox(source, textvariable=self.catalog_pick_var, state="readonly")
+        self.catalog_combo.grid(row=0, column=1, sticky="ew", padx=4)
+        ttk.Button(source, text="帶入", command=self.add_from_catalog).grid(row=0, column=2, padx=4)
+        ttk.Entry(source, textvariable=self.item_desc_var).grid(row=1, column=1, sticky="ew", padx=4, pady=4)
+        ttk.Entry(source, textvariable=self.item_unit_var, width=8).grid(row=1, column=2, padx=2, pady=4)
+        ttk.Entry(source, textvariable=self.item_qty_var, width=8).grid(row=1, column=3, padx=2, pady=4)
+        ttk.Entry(source, textvariable=self.item_price_var, width=10).grid(row=1, column=4, padx=2, pady=4)
+        ttk.Button(source, text="手動新增", command=self.add_manual_item).grid(row=1, column=5, padx=4, pady=4)
+        ttk.Label(source, text="品名").grid(row=2, column=1, sticky="w", padx=4)
+        ttk.Label(source, text="單位").grid(row=2, column=2, sticky="w", padx=2)
+        ttk.Label(source, text="數量").grid(row=2, column=3, sticky="w", padx=2)
+        ttk.Label(source, text="單價").grid(row=2, column=4, sticky="w", padx=2)
 
-        ttk.Label(base_frame, text="有效日期 (YYYY-MM-DD)").grid(row=1, column=2, sticky="w", pady=4)
-        ttk.Entry(base_frame, textvariable=self.expiry_date_var).grid(row=1, column=3, sticky="ew", padx=4, pady=4)
+        table = ttk.Frame(items)
+        table.grid(row=1, column=0, sticky="nsew")
+        table.columnconfigure(0, weight=1)
+        table.rowconfigure(0, weight=1)
+        cols = ("desc", "unit", "qty", "price", "amount")
+        self.item_tree = ttk.Treeview(table, columns=cols, show="headings", height=12)
+        for c, t, w, a in [
+            ("desc", "品名", 430, "w"),
+            ("unit", "單位", 90, "center"),
+            ("qty", "數量", 120, "e"),
+            ("price", "單價", 150, "e"),
+            ("amount", "小計", 150, "e"),
+        ]:
+            self.item_tree.heading(c, text=t)
+            self.item_tree.column(c, width=w, anchor=a)
+        self.item_tree.grid(row=0, column=0, sticky="nsew")
+        ttk.Scrollbar(table, orient="vertical", command=self.item_tree.yview).grid(row=0, column=1, sticky="ns")
 
-        ttk.Label(base_frame, text="幣別").grid(row=2, column=0, sticky="w", pady=4)
-        ttk.Entry(base_frame, textvariable=self.currency_var).grid(row=2, column=1, sticky="ew", padx=4, pady=4)
+        bottom = ttk.Frame(items)
+        bottom.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        bottom.columnconfigure(6, weight=1)
+        ttk.Button(bottom, text="刪除選取", command=self.remove_selected_item).grid(row=0, column=0, padx=4)
+        ttk.Button(bottom, text="清空全部", command=self.clear_items).grid(row=0, column=1, padx=4)
+        ttk.Label(bottom, text="未稅合計").grid(row=0, column=4, padx=(18, 4))
+        ttk.Label(bottom, textvariable=self.total_var).grid(row=0, column=5, padx=4)
+        ttk.Button(bottom, text="建立估價單", command=self.create_quote).grid(row=0, column=7, padx=4)
 
-        ttk.Label(base_frame, text="稅率 (%)").grid(row=2, column=2, sticky="w", pady=4)
-        ttk.Entry(base_frame, textvariable=self.tax_rate_var).grid(row=2, column=3, sticky="ew", padx=4, pady=4)
-
-        ttk.Label(base_frame, text="備註").grid(row=3, column=0, sticky="nw", pady=4)
-        self.note_entry = tk.Text(base_frame, height=3, wrap="word")
-        self.note_entry.grid(row=3, column=1, columnspan=3, sticky="ew", padx=4, pady=4)
-
-        items_frame = ttk.LabelFrame(self.create_tab, text="品項輸入", style="Section.TLabelframe")
-        items_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
-        items_frame.columnconfigure(0, weight=1)
-        items_frame.rowconfigure(2, weight=1)
-
-        helper = (
-            "每一行代表一個品項，格式：品名,單位,數量,單價\n"
-            "例如：\n"
-            "管路施作,式,1,15000\n"
-            "8P8C安裝,式,1,5000\n"
-            "可使用英文逗號 , 或中文逗號 ，"
-        )
-        ttk.Label(items_frame, text=helper, justify="left").grid(row=0, column=0, sticky="w", padx=4, pady=(2, 8))
-
-        item_action = ttk.Frame(items_frame)
-        item_action.grid(row=1, column=0, sticky="w", padx=2, pady=(0, 6))
-        ttk.Button(item_action, text="填入範例", command=self.fill_sample_items).grid(row=0, column=0, padx=(0, 6))
-        ttk.Button(item_action, text="清空品項", command=self.clear_items).grid(row=0, column=1, padx=6)
-
-        text_wrap = ttk.Frame(items_frame)
-        text_wrap.grid(row=2, column=0, sticky="nsew")
-        text_wrap.columnconfigure(0, weight=1)
-        text_wrap.rowconfigure(0, weight=1)
-
-        self.items_text = tk.Text(text_wrap, height=14, wrap="none")
-        item_y_scroll = ttk.Scrollbar(text_wrap, orient="vertical", command=self.items_text.yview)
-        item_x_scroll = ttk.Scrollbar(text_wrap, orient="horizontal", command=self.items_text.xview)
-        self.items_text.configure(yscrollcommand=item_y_scroll.set, xscrollcommand=item_x_scroll.set)
-
-        self.items_text.grid(row=0, column=0, sticky="nsew")
-        item_y_scroll.grid(row=0, column=1, sticky="ns")
-        item_x_scroll.grid(row=1, column=0, sticky="ew")
-
-        bottom_actions = ttk.Frame(items_frame)
-        bottom_actions.grid(row=3, column=0, sticky="e", pady=(8, 2))
-        ttk.Button(bottom_actions, text="建立報價單", command=self.create_quote).grid(row=0, column=0, padx=4)
-
-    def _set_status(self, message: str, *, is_error: bool = False) -> None:
-        self.status_var.set(message)
-        self.status_label.configure(style="StatusError.TLabel" if is_error else "StatusOk.TLabel")
-
-    def _ensure_login(self) -> bool:
+    def _require_login(self) -> bool:
         if self.api.token:
             return True
         messagebox.showerror("尚未登入", "請先登入系統。")
         return False
 
     def login(self) -> None:
-        username = self.username_var.get().strip()
-        password = self.password_var.get().strip()
-        if not username or not password:
+        if not self.username_var.get().strip() or not self.password_var.get().strip():
             messagebox.showerror("資料不完整", "請輸入帳號與密碼。")
             return
-
         try:
             self.api.set_base_url(self.base_url_var.get())
-            payload = self.api.login(username, password)
+            self.api.login(self.username_var.get().strip(), self.password_var.get().strip())
+            self.status_var.set("登入成功")
+            self.load_master()
+            self.refresh_quotes()
         except APIError as exc:
-            self._set_status(f"登入失敗: {exc}", is_error=True)
+            self.status_var.set(f"登入失敗: {exc}")
             messagebox.showerror("登入失敗", str(exc))
-            return
 
-        user = payload.get("user") or {}
-        role = user.get("role", "-")
-        self._set_status(f"已登入: {username} ({role})")
-        self.load_reference_data()
-        self.refresh_quotes()
-
-    def load_reference_data(self) -> None:
-        if not self._ensure_login():
+    def load_master(self) -> None:
+        if not self._require_login():
             return
         try:
             self.customers = self.api.get_customers()
             self.contacts = self.api.get_contacts()
+            self.catalog_items = self.api.get_catalog_items()
         except APIError as exc:
-            self._set_status(f"載入資料失敗: {exc}", is_error=True)
+            self.status_var.set(f"載入失敗: {exc}")
             messagebox.showerror("載入失敗", str(exc))
             return
-
-        self.populate_customer_options()
+        self._populate_customers()
+        self._populate_catalog()
         self.on_customer_changed(None)
-        self._set_status(f"已載入客戶 {len(self.customers)} 筆、聯絡人 {len(self.contacts)} 筆")
+        self.status_var.set(f"主檔完成 客戶{len(self.customers)} 價目{len(self.catalog_items)}")
 
-    def populate_customer_options(self) -> None:
-        labels: list[str] = []
-        self.customer_label_to_id.clear()
-        for customer in self.customers:
-            customer_id = customer.get("id")
-            name = customer.get("name") or ""
-            if customer_id is None:
+    def _populate_customers(self) -> None:
+        self.customer_map.clear()
+        vals = []
+        for c in self.customers:
+            cid = c.get("id")
+            if cid is None:
                 continue
-            label = f"{customer_id} - {name}"
-            labels.append(label)
-            self.customer_label_to_id[label] = int(customer_id)
+            label = f"{cid} - {c.get('name', '')}"
+            vals.append(label)
+            self.customer_map[label] = int(cid)
+        self.customer_combo["values"] = vals
+        if vals and self.customer_var.get() not in vals:
+            self.customer_var.set(vals[0])
 
-        self.customer_combo["values"] = labels
-        if labels and self.customer_var.get() not in labels:
-            self.customer_var.set(labels[0])
+    def _populate_catalog(self) -> None:
+        self.catalog_map.clear()
+        vals = []
+        for item in self.catalog_items:
+            iid = item.get("id")
+            if iid is None:
+                continue
+            unit = item.get("unit") or "式"
+            price = float(item.get("unit_price") or 0)
+            label = f"{iid} - {item.get('name', '')}（{unit} / {price:.0f}）"
+            vals.append(label)
+            self.catalog_map[label] = item
+        self.catalog_combo["values"] = vals
+        if vals and self.catalog_pick_var.get() not in vals:
+            self.catalog_pick_var.set(vals[0])
 
     def on_customer_changed(self, _event: Any) -> None:
-        label = self.customer_var.get()
-        customer_id = self.customer_label_to_id.get(label)
-        filtered = [c for c in self.contacts if customer_id and int(c.get("customer_id", 0)) == customer_id]
-
-        self.contact_label_to_id.clear()
-        contact_labels = [""]
-        for contact in filtered:
-            contact_id = contact.get("id")
-            name = contact.get("name") or ""
-            if contact_id is None:
-                continue
-            item = f"{contact_id} - {name}"
-            contact_labels.append(item)
-            self.contact_label_to_id[item] = int(contact_id)
-
-        self.contact_combo["values"] = contact_labels
-        if self.contact_var.get() not in contact_labels:
+        cid = self.customer_map.get(self.customer_var.get())
+        vals = [""]
+        self.contact_map.clear()
+        for c in self.contacts:
+            if cid and int(c.get("customer_id") or 0) == cid:
+                label = f"{c.get('id')} - {c.get('name', '')}"
+                vals.append(label)
+                self.contact_map[label] = int(c.get("id") or 0)
+        self.contact_combo["values"] = vals
+        if self.contact_var.get() not in vals:
             self.contact_var.set("")
 
-    def refresh_quotes(self) -> None:
-        if not self._ensure_login():
-            return
+    def _customer_name(self, customer_id: Any) -> str:
+        for c in self.customers:
+            if str(c.get("id")) == str(customer_id):
+                return str(c.get("name") or customer_id)
+        return str(customer_id or "")
 
+    def refresh_quotes(self) -> None:
+        if not self._require_login():
+            return
         try:
             self.quotes = self.api.get_quotes()
         except APIError as exc:
-            self._set_status(f"讀取報價失敗: {exc}", is_error=True)
+            self.status_var.set(f"報價讀取失敗: {exc}")
             messagebox.showerror("讀取失敗", str(exc))
             return
-
-        for row_id in self.quote_tree.get_children():
-            self.quote_tree.delete(row_id)
-        self.quote_row_to_data.clear()
-
-        for quote in self.quotes:
-            quote_id = quote.get("id")
-            if quote_id is None:
+        for rid in self.quote_tree.get_children():
+            self.quote_tree.delete(rid)
+        self.quote_map.clear()
+        for q in self.quotes:
+            qid = q.get("id")
+            if qid is None:
                 continue
-            subtotal = quote.get("subtotal")
-            total_amount = quote.get("total_amount")
-            amount = subtotal if subtotal is not None else (total_amount or 0)
-
+            amount = float(q.get("subtotal") if q.get("subtotal") is not None else q.get("total_amount") or 0)
             row = self.quote_tree.insert(
                 "",
                 "end",
-                values=(
-                    quote.get("quote_no", ""),
-                    quote.get("status", ""),
-                    f"{float(amount):.2f}",
-                    quote.get("customer_id", ""),
-                    quote.get("issue_date", "") or "",
-                ),
+                values=(q.get("quote_no", ""), q.get("status", ""), f"{amount:.2f}", self._customer_name(q.get("customer_id")), q.get("issue_date") or ""),
             )
-            self.quote_row_to_data[row] = quote
+            self.quote_map[row] = q
+        self.status_var.set(f"報價共 {len(self.quotes)} 筆")
 
-        self._set_status(f"報價列表已更新，共 {len(self.quotes)} 筆")
+    def _selected_quote(self) -> dict[str, Any] | None:
+        sel = self.quote_tree.selection()
+        if not sel:
+            messagebox.showerror("未選取", "請先選一筆報價。")
+            return None
+        return self.quote_map.get(sel[0])
 
-    def on_quote_selected(self, _event: Any) -> None:
-        selected = self.quote_tree.selection()
-        if not selected:
+    def show_quote_detail(self, _event: Any) -> None:
+        q = self._selected_quote()
+        if not q:
             return
-
-        quote = self.quote_row_to_data.get(selected[0])
-        if not quote:
-            return
-
-        lines: list[str] = []
-        lines.append(f"單號: {quote.get('quote_no', '')}")
-        lines.append(f"狀態: {quote.get('status', '')}")
-        lines.append(f"客戶 ID: {quote.get('customer_id', '')}")
-        lines.append(f"聯絡人 ID: {quote.get('contact_id', '')}")
-        lines.append(f"報價日期: {quote.get('issue_date', '') or '-'}")
-        lines.append(f"有效日期: {quote.get('expiry_date', '') or '-'}")
-        lines.append(f"幣別: {quote.get('currency', '')}")
-        subtotal = float(quote.get("subtotal") or 0)
-        tax_amount = float(quote.get("tax_amount") or 0)
-        total_amount = float(quote.get("total_amount") or 0)
-        lines.append(f"未稅金額: {subtotal:.2f}")
-        lines.append(f"稅額: {tax_amount:.2f}")
-        lines.append(f"總金額: {total_amount:.2f}")
-        lines.append("")
-        lines.append("品項:")
-
-        items = quote.get("items") or []
-        if not items:
-            lines.append("- (無品項)")
-        else:
-            for idx, item in enumerate(items, start=1):
-                lines.append(
-                    f"{idx}. {item.get('description', '')} | 單位: {item.get('unit', '')} | "
-                    f"數量: {float(item.get('quantity') or 0):.2f} | "
-                    f"單價: {float(item.get('unit_price') or 0):.2f} | "
-                    f"金額: {float(item.get('amount') or 0):.2f}"
-                )
-
-        note = (quote.get("note") or "").strip()
-        if note:
-            lines.append("")
-            lines.append(f"備註: {note}")
-
+        lines = [
+            f"單號: {q.get('quote_no', '')}",
+            f"狀態: {q.get('status', '')}",
+            f"客戶: {self._customer_name(q.get('customer_id'))}",
+            f"日期: {q.get('issue_date') or '-'}",
+            f"有效: {q.get('expiry_date') or '-'}",
+            f"幣別: {q.get('currency') or 'TWD'}",
+            f"未稅金額: {float(q.get('subtotal') or 0):.2f}",
+            "",
+            "品項:",
+        ]
+        for idx, item in enumerate(q.get("items") or [], start=1):
+            lines.append(f"{idx}. {item.get('description','')} | {item.get('unit','')} | {float(item.get('quantity') or 0):.2f} x {float(item.get('unit_price') or 0):.2f}")
         self.detail_text.configure(state="normal")
         self.detail_text.delete("1.0", tk.END)
         self.detail_text.insert("1.0", "\n".join(lines))
         self.detail_text.configure(state="disabled")
 
-    def _selected_quote_id(self) -> int | None:
-        selected = self.quote_tree.selection()
-        if not selected:
-            messagebox.showerror("未選取資料", "請先在列表中選擇一筆報價單。")
-            return None
-        quote = self.quote_row_to_data.get(selected[0])
-        if not quote:
-            messagebox.showerror("資料錯誤", "找不到所選的報價資料。")
-            return None
-        quote_id = quote.get("id")
-        if quote_id is None:
-            messagebox.showerror("資料錯誤", "這筆報價沒有 id。")
-            return None
-        return int(quote_id)
-
-    def open_selected_pdf(self) -> None:
-        if not self._ensure_login():
+    def _ensure_local_font(self) -> None:
+        if self.local_pdf_font != "Helvetica":
             return
-        quote_id = self._selected_quote_id()
-        if quote_id is None:
-            return
+        candidates = []
+        if os.name == "nt":
+            win = os.environ.get("WINDIR", r"C:\Windows")
+            candidates += [os.path.join(win, "Fonts", "msjh.ttc"), os.path.join(win, "Fonts", "mingliu.ttc")]
+        for path in candidates:
+            if not os.path.exists(path):
+                continue
+            for idx in (0, 1, 2, 3):
+                try:
+                    pdfmetrics.registerFont(TTFont("LocalCJK", path, subfontIndex=idx))
+                    self.local_pdf_font = "LocalCJK"
+                    return
+                except Exception:
+                    continue
+        for cid in ("MSung-Light", "STSong-Light"):
+            try:
+                pdfmetrics.registerFont(UnicodeCIDFont(cid))
+                self.local_pdf_font = cid
+                return
+            except Exception:
+                continue
 
+    def _build_local_pdf(self, q: dict[str, Any]) -> bytes:
+        self._ensure_local_font()
+        font = self.local_pdf_font
+        quote_no = str(q.get("quote_no") or "")
+        customer = self._customer_name(q.get("customer_id"))
+        issue = str(q.get("issue_date") or date.today().isoformat())
+        rows = [["項次", "項目名稱", "規格內容", "單位", "數量", "單價", "金額", "備註"]]
+        items = q.get("items") or []
+        for i in range(20):
+            item = items[i] if i < len(items) else None
+            if not item:
+                rows.append([str(i + 1), "", "", "", "", "", "", ""])
+            else:
+                rows.append(
+                    [
+                        str(i + 1),
+                        str(item.get("description") or ""),
+                        "",
+                        str(item.get("unit") or "式"),
+                        f"{float(item.get('quantity') or 0):.2f}",
+                        f"{float(item.get('unit_price') or 0):.2f}",
+                        f"{float(item.get('amount') or 0):.2f}",
+                        "",
+                    ]
+                )
+        total = float(q.get("subtotal") if q.get("subtotal") is not None else q.get("total_amount") or 0)
+        rows.append(["合計", "", "新台幣", f"{total:.2f}", "", "NT$", f"{total:.2f}", ""])
+
+        temp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="taskgo-local-quote-").name
+        doc = SimpleDocTemplate(temp, pagesize=A4, leftMargin=10 * mm, rightMargin=10 * mm, topMargin=10 * mm, bottomMargin=10 * mm)
+        styles = getSampleStyleSheet()
+        title = styles["Heading1"].clone("t")
+        title.fontName = font
+        title.alignment = 1
+        body = styles["Normal"].clone("b")
+        body.fontName = font
+        story = [Paragraph("立翔水電行", title), Paragraph("估價單（地端繁中）", body), Spacer(1, 3 * mm), Paragraph(f"{customer} 台照", body), Paragraph(f"日期：{issue}", body), Paragraph(f"單號：{quote_no}", body), Spacer(1, 4 * mm)]
+        table = Table(rows, colWidths=[12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm], repeatRows=1)
+        table.setStyle(
+            TableStyle(
+                [
+                    ("FONTNAME", (0, 0), (-1, -1), font),
+                    ("FONTSIZE", (0, 0), (-1, -1), 9),
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f3f4f6")),
+                    ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#9ca3af")),
+                    ("ALIGN", (0, 0), (0, -1), "CENTER"),
+                    ("ALIGN", (6, 0), (6, -1), "RIGHT"),
+                ]
+            )
+        )
+        story.append(table)
+        doc.build(story)
+        with open(temp, "rb") as f:
+            content = f.read()
+        os.unlink(temp)
+        return content
+
+    def open_local_pdf(self) -> None:
+        q = self._selected_quote()
+        if not q:
+            return
+        data = self._build_local_pdf(q)
+        path = self._save_temp(data, ".pdf", "quote-local-")
+        self._open_file(path)
+
+    def open_server_pdf(self) -> None:
+        q = self._selected_quote()
+        if not q:
+            return
+        qid = int(q.get("id") or 0)
+        if qid <= 0:
+            return
         try:
-            binary = self.api.download_quote_pdf(quote_id)
-            path = self._save_temp_file(binary, ".pdf", f"quote-{quote_id}-")
+            data = self.api.download_quote_pdf(qid)
+            path = self._save_temp(data, ".pdf", "quote-server-")
             self._open_file(path)
-            self._set_status(f"已開啟 PDF: quote-{quote_id}")
         except APIError as exc:
-            self._set_status(f"PDF 下載失敗: {exc}", is_error=True)
-            messagebox.showerror("PDF 下載失敗", str(exc))
+            messagebox.showerror("PDF 錯誤", str(exc))
 
-    def open_selected_xlsx(self) -> None:
-        if not self._ensure_login():
+    def open_xlsx(self) -> None:
+        q = self._selected_quote()
+        if not q:
             return
-        quote_id = self._selected_quote_id()
-        if quote_id is None:
+        qid = int(q.get("id") or 0)
+        if qid <= 0:
             return
-
         try:
-            binary = self.api.download_quote_xlsx(quote_id)
-            path = self._save_temp_file(binary, ".xlsx", f"quote-{quote_id}-")
+            data = self.api.download_quote_xlsx(qid)
+            path = self._save_temp(data, ".xlsx", "quote-")
             self._open_file(path)
-            self._set_status(f"已開啟 XLSX: quote-{quote_id}")
         except APIError as exc:
-            self._set_status(f"XLSX 下載失敗: {exc}", is_error=True)
-            messagebox.showerror("XLSX 下載失敗", str(exc))
+            messagebox.showerror("XLSX 錯誤", str(exc))
+
+    def add_from_catalog(self) -> None:
+        item = self.catalog_map.get(self.catalog_pick_var.get())
+        if not item:
+            messagebox.showerror("未選擇", "請先選擇價目。")
+            return
+        self.current_items.append(
+            {
+                "description": str(item.get("name") or "").strip(),
+                "unit": str(item.get("unit") or "式").strip() or "式",
+                "quantity": 1.0,
+                "unit_price": float(item.get("unit_price") or 0),
+            }
+        )
+        self._refresh_items()
+
+    def add_manual_item(self) -> None:
+        desc = self.item_desc_var.get().strip()
+        if not desc:
+            messagebox.showerror("資料不完整", "請輸入品名。")
+            return
+        try:
+            qty = float((self.item_qty_var.get() or "0").strip())
+            price = float((self.item_price_var.get() or "0").strip())
+        except ValueError:
+            messagebox.showerror("格式錯誤", "數量、單價需為數字。")
+            return
+        if qty < 0 or price < 0:
+            messagebox.showerror("格式錯誤", "數量、單價不可小於 0。")
+            return
+        self.current_items.append({"description": desc, "unit": (self.item_unit_var.get() or "式").strip() or "式", "quantity": qty, "unit_price": price})
+        self.item_desc_var.set("")
+        self.item_unit_var.set("式")
+        self.item_qty_var.set("1")
+        self.item_price_var.set("0")
+        self._refresh_items()
+
+    def remove_selected_item(self) -> None:
+        sel = self.item_tree.selection()
+        if not sel:
+            messagebox.showerror("未選取", "請先選擇品項。")
+            return
+        idxs = sorted((self.item_row_map[s] for s in sel if s in self.item_row_map), reverse=True)
+        for idx in idxs:
+            if 0 <= idx < len(self.current_items):
+                self.current_items.pop(idx)
+        self._refresh_items()
+
+    def clear_items(self) -> None:
+        self.current_items.clear()
+        self._refresh_items()
+
+    def _refresh_items(self) -> None:
+        for rid in self.item_tree.get_children():
+            self.item_tree.delete(rid)
+        self.item_row_map.clear()
+        total = 0.0
+        for idx, item in enumerate(self.current_items):
+            qty = float(item["quantity"])
+            price = float(item["unit_price"])
+            amount = qty * price
+            total += amount
+            row = self.item_tree.insert("", "end", values=(item["description"], item["unit"], f"{qty:.2f}", f"{price:.2f}", f"{amount:.2f}"))
+            self.item_row_map[row] = idx
+        self.total_var.set(f"{total:.2f}")
+
+    def create_quote(self) -> None:
+        if not self._require_login():
+            return
+        customer_id = self.customer_map.get(self.customer_var.get())
+        if not customer_id:
+            messagebox.showerror("資料不完整", "請選擇客戶。")
+            return
+        if not self.current_items:
+            messagebox.showerror("資料不完整", "請至少加入一筆品項。")
+            return
+        issue = self.issue_date_var.get().strip()
+        expiry = self.expiry_date_var.get().strip()
+        for label, value in (("報價日期", issue), ("有效日期", expiry)):
+            if value:
+                try:
+                    date.fromisoformat(value)
+                except ValueError:
+                    messagebox.showerror("日期格式錯誤", f"{label}需為 YYYY-MM-DD")
+                    return
+        payload = {
+            "customer_id": customer_id,
+            "contact_id": self.contact_map.get(self.contact_var.get()) or None,
+            "issue_date": issue or None,
+            "expiry_date": expiry or None,
+            "currency": (self.currency_var.get() or "TWD").strip().upper(),
+            "tax_rate": 0,
+            "note": self.note_var.get().strip(),
+            "items": [
+                {"description": i["description"], "unit": i["unit"], "quantity": float(i["quantity"]), "unit_price": float(i["unit_price"])}
+                for i in self.current_items
+            ],
+        }
+        try:
+            created = self.api.create_quote(payload)
+        except APIError as exc:
+            messagebox.showerror("建立失敗", str(exc))
+            return
+        messagebox.showinfo("建立成功", f"已建立：{created.get('quote_no', '(無單號)')}")
+        self.current_items.clear()
+        self.note_var.set("")
+        self._refresh_items()
+        self.refresh_quotes()
 
     @staticmethod
-    def _save_temp_file(content: bytes, suffix: str, prefix: str) -> str:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, prefix=prefix) as temp_file:
-            temp_file.write(content)
-            return temp_file.name
+    def _save_temp(content: bytes, suffix: str, prefix: str) -> str:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, prefix=prefix) as f:
+            f.write(content)
+            return f.name
 
     @staticmethod
     def _open_file(path: str) -> None:
         if sys.platform.startswith("win"):
             os.startfile(path)  # type: ignore[attr-defined]
-            return
-        if sys.platform == "darwin":
+        elif sys.platform == "darwin":
             subprocess.run(["open", path], check=False)
-            return
-        subprocess.run(["xdg-open", path], check=False)
-
-    def clear_items(self) -> None:
-        self.items_text.delete("1.0", tk.END)
-
-    def fill_sample_items(self) -> None:
-        self.items_text.delete("1.0", tk.END)
-        self.items_text.insert("1.0", "管路施作,式,1,15000\n8P8C安裝,式,1,5000")
-
-    def create_quote(self) -> None:
-        if not self._ensure_login():
-            return
-
-        customer_label = self.customer_var.get()
-        customer_id = self.customer_label_to_id.get(customer_label)
-        if not customer_id:
-            messagebox.showerror("資料不完整", "請選擇客戶。")
-            return
-
-        contact_id = self.contact_label_to_id.get(self.contact_var.get())
-        note = self.note_entry.get("1.0", tk.END).strip()
-
-        try:
-            tax_rate = float((self.tax_rate_var.get() or "0").strip())
-        except ValueError:
-            messagebox.showerror("資料格式錯誤", "稅率必須是數字。")
-            return
-
-        issue_date_text = self.issue_date_var.get().strip()
-        expiry_date_text = self.expiry_date_var.get().strip()
-
-        if issue_date_text:
-            try:
-                date.fromisoformat(issue_date_text)
-            except ValueError:
-                messagebox.showerror("日期格式錯誤", "報價日期格式需為 YYYY-MM-DD")
-                return
-        if expiry_date_text:
-            try:
-                date.fromisoformat(expiry_date_text)
-            except ValueError:
-                messagebox.showerror("日期格式錯誤", "有效日期格式需為 YYYY-MM-DD")
-                return
-
-        raw_items = self.items_text.get("1.0", tk.END)
-        try:
-            items = self._parse_items(raw_items)
-        except APIError as exc:
-            messagebox.showerror("品項格式錯誤", str(exc))
-            return
-
-        payload: dict[str, Any] = {
-            "customer_id": customer_id,
-            "contact_id": contact_id,
-            "issue_date": issue_date_text or None,
-            "expiry_date": expiry_date_text or None,
-            "currency": (self.currency_var.get() or "TWD").strip().upper(),
-            "tax_rate": tax_rate,
-            "note": note,
-            "items": items,
-        }
-
-        if not payload["contact_id"]:
-            payload["contact_id"] = None
-
-        try:
-            quote = self.api.create_quote(payload)
-        except APIError as exc:
-            self._set_status(f"建立報價失敗: {exc}", is_error=True)
-            messagebox.showerror("建立失敗", str(exc))
-            return
-
-        quote_no = quote.get("quote_no", "(無單號)")
-        self._set_status(f"建立成功: {quote_no}")
-        messagebox.showinfo("建立成功", f"報價單已建立：{quote_no}")
-        self.refresh_quotes()
-
-    def _parse_items(self, raw_text: str) -> list[dict[str, Any]]:
-        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-        if not lines:
-            raise APIError("請至少輸入一筆品項。")
-
-        items: list[dict[str, Any]] = []
-        for idx, line in enumerate(lines, start=1):
-            normalized = line.replace("，", ",")
-            parts = [p.strip() for p in normalized.split(",")]
-            if len(parts) != 4:
-                raise APIError(f"第 {idx} 行格式錯誤，請使用：品名,單位,數量,單價")
-
-            description, unit, quantity_text, unit_price_text = parts
-            if not description:
-                raise APIError(f"第 {idx} 行缺少品名。")
-
-            try:
-                quantity = float(quantity_text)
-                unit_price = float(unit_price_text)
-            except ValueError as exc:
-                raise APIError(f"第 {idx} 行數量或單價不是數字。") from exc
-
-            items.append(
-                {
-                    "description": description,
-                    "unit": unit or "式",
-                    "quantity": quantity,
-                    "unit_price": unit_price,
-                }
-            )
-
-        return items
+        else:
+            subprocess.run(["xdg-open", path], check=False)
 
 
 def main() -> None:

@@ -1,1 +1,2 @@
 requests>=2.32.0,<3
+reportlab>=4.2.0,<5
