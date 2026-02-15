@@ -25,6 +25,10 @@ RUN npm run build -- --debug
 FROM python:3.12-slim AS backend
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY backend/requirements.txt ./backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
@@ -36,5 +40,6 @@ COPY data/ ./data
 RUN mkdir -p /app/backend/uploads
 
 ENV PYTHONUNBUFFERED=1
+ENV PDF_FONT_PATH=/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
 
 CMD ["sh", "-c", "gunicorn --chdir backend -w ${WEB_CONCURRENCY:-1} --threads ${WEB_THREADS:-2} -b 0.0.0.0:${PORT:-5000} app:app"]

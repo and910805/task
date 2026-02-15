@@ -32,19 +32,34 @@ VALID_INVOICE_STATUS = {"draft", "issued", "partially_paid", "paid", "cancelled"
 
 PDF_FONT_NAME = "Helvetica"
 PDF_FONT_ENV = "PDF_FONT_PATH"
+PDF_FONT_CANDIDATES = (
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSerifCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/source-han-sans/SourceHanSansTW-Regular.otf",
+)
 
 
 def _ensure_pdf_font():
+    global PDF_FONT_NAME
+
     font_path = os.environ.get(PDF_FONT_ENV, "").strip()
     if not font_path:
+        for candidate in PDF_FONT_CANDIDATES:
+            if os.path.exists(candidate):
+                font_path = candidate
+                break
+    if not font_path or not os.path.exists(font_path):
         return
-    if not os.path.exists(font_path):
+
+    if PDF_FONT_NAME == "CustomFont":
         return
+
     try:
         pdfmetrics.registerFont(TTFont("CustomFont", font_path))
     except Exception:
         return
-    global PDF_FONT_NAME
     PDF_FONT_NAME = "CustomFont"
 
 
