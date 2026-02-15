@@ -125,13 +125,12 @@ def main():
     db.Model.metadata.create_all(bind=target_engine)
 
     source_meta = MetaData()
-    source_meta.reflect(bind=source_engine, only=TABLE_ORDER)
+    source_meta.reflect(bind=source_engine)
+    available_tables = set(source_meta.tables.keys())
+    ordered_tables = [name for name in TABLE_ORDER if name in available_tables]
 
     with source_engine.connect() as source_conn, target_engine.begin() as target_conn:
-        for table_name in TABLE_ORDER:
-            if table_name not in source_meta.tables:
-                continue
-
+        for table_name in ordered_tables:
             target_table = db.Model.metadata.tables.get(table_name)
             if target_table is None:
                 continue
