@@ -137,6 +137,13 @@ def _quote_display_total_without_tax(quote: Quote) -> float:
     return float(quote.total_amount or 0)
 
 
+def _invoice_display_total_without_tax(invoice: Invoice) -> float:
+    # Keep invoice PDF aligned with quote output: tax-exclusive amount.
+    if invoice.subtotal is not None:
+        return float(invoice.subtotal)
+    return float(invoice.total_amount or 0)
+
+
 def _to_roc_date_text(value: date | None) -> str:
     value = value or date.today()
     roc_year = value.year - 1911
@@ -437,6 +444,132 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
 
     if quote.note:
         story.extend([Spacer(1, 4 * mm), Paragraph(f"備註：{quote.note}", body_style)])
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+
+def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, contact: Contact | None):
+    _ensure_pdf_font()
+
+    customer_name = (customer.name if customer else "") or ""
+    contact_name = (contact.name if contact else "") or ""
+    recipient = contact_name or customer_name
+    if customer_name and contact_name and customer_name != contact_name:
+        recipient = f"{customer_name} {contact_name}"
+
+    ordered_items = sorted(
+        invoice.items,
+        key=lambda item: (
+            item.sort_order if item.sort_order is not None else 10**9,
+            item.id if item.id is not None else 10**9,
+        ),
+    )
+
+    rows = [["No", "Description", "Spec", "Unit", "Qty", "Unit Price", "Amount", "Remark"]]
+    for idx in range(20):
+        item = ordered_items[idx] if idx < len(ordered_items) else None
+        if item is None:
+            rows.append([str(idx + 1), "", "", "", "", "", "", ""])
+            continue
+        rows.append(
+            [
+                str(idx + 1),
+                item.description or "",
+                "",
+                item.unit or "",
+                f"{float(item.quantity or 0):.2f}",
+                f"{float(item.unit_price or 0):.2f}",
+                f"{float(item.amount or 0):.2f}",
+                "",
+            ]
+        )
+
+    total_amount = _invoice_display_total_without_tax(invoice)
+    rows.append(
+        [
+            "Total",
+            "",
+            "Amount",
+            f"{total_amount:.2f}",
+            "",
+            "NT$",
+            f"{total_amount:.2f}",
+            "",
+        ]
+    )
+
+    issue_date_text = invoice.issue_date.isoformat() if invoice.issue_date else date.today().isoformat()
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=10 * mm,
+        rightMargin=10 * mm,
+        topMargin=10 * mm,
+        bottomMargin=10 * mm,
+        title=f"invoice-{invoice.invoice_no}",
+    )
+
+    styles = getSampleStyleSheet()
+    title_style = styles["Heading1"].clone("InvoiceTemplateTitle")
+    title_style.fontName = PDF_FONT_NAME
+    title_style.alignment = 1
+    title_style.fontSize = 18
+    title_style.leading = 22
+
+    subtitle_style = styles["Normal"].clone("InvoiceTemplateSubtitle")
+    subtitle_style.fontName = PDF_FONT_NAME
+    subtitle_style.alignment = 1
+    subtitle_style.fontSize = 12
+    subtitle_style.leading = 16
+
+    body_style = styles["Normal"].clone("InvoiceTemplateBody")
+    body_style.fontName = PDF_FONT_NAME
+    body_style.fontSize = 10
+    body_style.leading = 14
+
+    story = [
+        Paragraph("Lixiang Plumbing", title_style),
+        Paragraph("Invoice", subtitle_style),
+        Spacer(1, 3 * mm),
+        Paragraph(f"To: {recipient}", body_style),
+        Paragraph(f"Date: {issue_date_text}", body_style),
+        Paragraph(f"No: {invoice.invoice_no}", body_style),
+        Spacer(1, 4 * mm),
+    ]
+
+    table = Table(
+        rows,
+        colWidths=[12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm],
+        repeatRows=1,
+        hAlign="LEFT",
+    )
+    table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, -1), PDF_FONT_NAME),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f3f4f6")),
+                ("ALIGN", (0, 0), (0, -1), "CENTER"),
+                ("ALIGN", (3, 0), (5, -1), "CENTER"),
+                ("ALIGN", (6, 0), (6, -1), "RIGHT"),
+                ("ALIGN", (7, 0), (7, -1), "LEFT"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#9ca3af")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#fafafa")]),
+                ("FONTNAME", (0, -1), (-1, -1), PDF_FONT_NAME),
+                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#eef2ff")),
+                ("LINEABOVE", (0, -1), (-1, -1), 1.0, colors.HexColor("#4b5563")),
+            ]
+        )
+    )
+    story.append(table)
+
+    if invoice.note:
+        story.extend([Spacer(1, 4 * mm), Paragraph(f"Note: {invoice.note}", body_style)])
 
     doc.build(story)
     buffer.seek(0)
@@ -1232,40 +1365,8 @@ def invoice_pdf(invoice_id: int):
     customer = Customer.query.get(invoice.customer_id)
     contact = Contact.query.get(invoice.contact_id) if invoice.contact_id else None
 
-    meta_rows = [
-        ["No", invoice.invoice_no],
-        ["Status", invoice.status],
-        ["Customer", customer.name if customer else ""],
-        ["Contact", contact.name if contact else ""],
-        ["Email", contact.email if contact else (customer.email if customer else "")],
-        ["Phone", contact.phone if contact else (customer.phone if customer else "")],
-        ["Issue Date", invoice.issue_date.isoformat() if invoice.issue_date else ""],
-        ["Due Date", invoice.due_date.isoformat() if invoice.due_date else ""],
-        ["Currency", invoice.currency],
-    ]
-
-    item_rows = [["Item", "Unit", "Qty", "Unit Price", "Amount"]]
-    for item in invoice.items:
-        item_rows.append(
-            [
-                item.description,
-                item.unit or "",
-                f"{item.quantity:.2f}",
-                f"{item.unit_price:.2f}",
-                f"{item.amount:.2f}",
-            ]
-        )
-
-    totals_rows = [
-        ["Subtotal", f"{invoice.subtotal:.2f}"],
-        [f"Tax ({invoice.tax_rate:.2f}%)", f"{invoice.tax_amount:.2f}"],
-        ["Total", f"{invoice.total_amount:.2f}"],
-    ]
-
-    if invoice.note:
-        meta_rows.append(["Note", invoice.note])
-
-    buffer = _build_pdf_document("Invoice", meta_rows, item_rows, totals_rows)
+    # Keep invoice PDF output aligned with the quote template style and tax-exclusive totals.
+    buffer = _build_invoice_template_pdf(invoice, customer, contact)
     filename = f"invoice-{invoice.invoice_no}.pdf"
     return send_file(
         buffer,

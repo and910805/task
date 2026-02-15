@@ -6,6 +6,7 @@ import AppHeader from '../components/AppHeader.jsx';
 const blankItem = () => ({ description: '', quantity: 1, unit_price: 0 });
 const DRAFT_KEY = 'taskgo.invoice.draft.v1';
 const VERSION_KEY = 'taskgo.invoice.versions.v1';
+const invoiceDisplayAmount = (invoice) => Number(invoice?.subtotal ?? invoice?.total_amount ?? 0).toFixed(2);
 const INVOICE_TEMPLATES = [
   {
     id: 'project-stage',
@@ -40,7 +41,7 @@ const CrmInvoicesPage = () => {
     issue_date: '',
     due_date: '',
     currency: 'TWD',
-    tax_rate: 5,
+    tax_rate: 0,
     note: '',
   });
   const [items, setItems] = useState([blankItem()]);
@@ -156,7 +157,7 @@ const CrmInvoicesPage = () => {
         issue_date: '',
         due_date: '',
         currency: 'TWD',
-        tax_rate: 5,
+        tax_rate: 0,
         note: '',
       });
       setItems([blankItem()]);
@@ -276,7 +277,7 @@ const CrmInvoicesPage = () => {
                   issue_date: '',
                   due_date: '',
                   currency: 'TWD',
-                  tax_rate: 5,
+                  tax_rate: 0,
                   note: '',
                 });
                 setItems([blankItem()]);
@@ -403,7 +404,7 @@ const CrmInvoicesPage = () => {
                 <tr key={invoice.id}>
                   <td>{invoice.invoice_no}</td>
                   <td>{invoice.status}</td>
-                  <td>{invoice.total_amount?.toFixed(2)}</td>
+                  <td>{invoiceDisplayAmount(invoice)}</td>
                   <td className="crm-actions-cell">
                     <button type="button" className="secondary-btn" onClick={() => openPdf(invoice.id)}>
                       PDF
