@@ -143,10 +143,12 @@ def create_app() -> Flask:
         return send_from_directory(dist_dir, "index.html")
 
     with app.app_context():
-        from models import Attachment, RoleLabel, SiteLocation, SiteSetting, Task, TaskUpdate, User
+        from models import Attachment, RoleLabel, ServiceCatalogItem, SiteLocation, SiteSetting, Task, TaskUpdate, User
         db.create_all()
         _ensure_user_reminder_frequency_column()
         _ensure_task_location_url_column()
+        _ensure_quote_item_unit_column()
+        _ensure_invoice_item_unit_column()
 
 
     @app.cli.command("send-due-reminders")
@@ -191,6 +193,32 @@ def _ensure_task_location_url_column() -> None:
     db.session.execute(
         text("ALTER TABLE task ADD COLUMN location_url VARCHAR(500)")
     )
+    db.session.commit()
+
+
+def _ensure_quote_item_unit_column() -> None:
+    inspector = inspect(db.engine)
+    if "quote_item" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("quote_item")}
+    if "unit" in columns:
+        return
+    if db.engine.dialect.name != "sqlite":
+        return
+    db.session.execute(text("ALTER TABLE quote_item ADD COLUMN unit VARCHAR(32)"))
+    db.session.commit()
+
+
+def _ensure_invoice_item_unit_column() -> None:
+    inspector = inspect(db.engine)
+    if "invoice_item" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("invoice_item")}
+    if "unit" in columns:
+        return
+    if db.engine.dialect.name != "sqlite":
+        return
+    db.session.execute(text("ALTER TABLE invoice_item ADD COLUMN unit VARCHAR(32)"))
     db.session.commit()
 
 

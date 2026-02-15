@@ -3,37 +3,18 @@ import { useEffect, useMemo, useState } from 'react';
 import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
 
-const blankItem = () => ({ description: '', quantity: 1, unit_price: 0 });
-const DRAFT_KEY = 'taskgo.quote.draft.v1';
-const VERSION_KEY = 'taskgo.quote.versions.v1';
-const QUOTE_TEMPLATES = [
-  {
-    id: 'electrical-basic',
-    label: '標準水電施工',
-    items: [
-      { description: '現場施工工資', quantity: 1, unit_price: 8500 },
-      { description: '材料費', quantity: 1, unit_price: 4200 },
-      { description: '測試與驗收', quantity: 1, unit_price: 1500 },
-    ],
-  },
-  {
-    id: 'maintenance',
-    label: '維修保養方案',
-    items: [
-      { description: '定期巡檢', quantity: 1, unit_price: 3200 },
-      { description: '故障檢修', quantity: 1, unit_price: 2600 },
-      { description: '耗材更新', quantity: 1, unit_price: 1800 },
-    ],
-  },
-];
+const blankItem = () => ({ description: '', unit: '式', quantity: 1, unit_price: 0 });
 
 const CrmQuotesPage = () => {
   const [customers, setCustomers] = useState([]);
   const [contacts, setContacts] = useState([]);
+  const [catalogItems, setCatalogItems] = useState([]);
   const [quotes, setQuotes] = useState([]);
+  const [history, setHistory] = useState({ quotes: [], invoices: [] });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [catalogPick, setCatalogPick] = useState('');
 
   const [form, setForm] = useState({
     customer_id: '',
@@ -45,72 +26,69 @@ const CrmQuotesPage = () => {
     note: '',
   });
   const [items, setItems] = useState([blankItem()]);
-  const [templateId, setTemplateId] = useState('');
-  const [versionHistory, setVersionHistory] = useState([]);
-
-  const persistDraft = (payload) => {
-    localStorage.setItem(DRAFT_KEY, JSON.stringify(payload));
-  };
-
-  const pushVersion = (label = '手動儲存') => {
-    const snapshot = {
-      id: `${Date.now()}`,
-      label,
-      saved_at: new Date().toISOString(),
-      form,
-      items,
-    };
-    const versions = [snapshot, ...versionHistory].slice(0, 12);
-    setVersionHistory(versions);
-    localStorage.setItem(VERSION_KEY, JSON.stringify(versions));
-  };
 
   const loadBase = async () => {
-    const [customerRes, contactRes] = await Promise.all([
+    const [customerRes, contactRes, catalogRes] = await Promise.all([
       api.get('crm/customers'),
       api.get('crm/contacts'),
+      api.get('crm/catalog-items'),
     ]);
     setCustomers(Array.isArray(customerRes.data) ? customerRes.data : []);
     setContacts(Array.isArray(contactRes.data) ? contactRes.data : []);
+    setCatalogItems(Array.isArray(catalogRes.data) ? catalogRes.data : []);
   };
 
   const loadQuotes = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const { data } = await api.get('crm/quotes');
-      setQuotes(Array.isArray(data) ? data : []);
-    } catch (err) {
-      const message = err?.networkMessage || err?.response?.data?.msg || '報價單載入失敗';
-      setError(message);
-    } finally {
-      setLoading(false);
+    const { data } = await api.get('crm/quotes');
+    setQuotes(Array.isArray(data) ? data : []);
+  };
+
+  const loadHistory = async (customerId) => {
+    if (!customerId) {
+      setHistory({ quotes: [], invoices: [] });
+      return;
     }
+    const { data } = await api.get(`crm/customers/${customerId}/service-history`);
+    setHistory({
+      quotes: Array.isArray(data?.quotes) ? data.quotes : [],
+      invoices: Array.isArray(data?.invoices) ? data.invoices : [],
+    });
   };
 
   useEffect(() => {
-    loadBase();
-    loadQuotes();
-    try {
-      const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
-      if (draft?.form && Array.isArray(draft?.items)) {
-        setForm((prev) => ({ ...prev, ...draft.form }));
-        setItems(draft.items.length ? draft.items : [blankItem()]);
+    const bootstrap = async () => {
+      setLoading(true);
+      setError('');
+      try {
+        await Promise.all([loadBase(), loadQuotes()]);
+      } catch (err) {
+        setError(err?.networkMessage || err?.response?.data?.msg || '報價資料載入失敗');
+      } finally {
+        setLoading(false);
       }
-      const versions = JSON.parse(localStorage.getItem(VERSION_KEY) || '[]');
-      setVersionHistory(Array.isArray(versions) ? versions : []);
-    } catch {
-      // ignore invalid local cache
-    }
+    };
+    bootstrap();
   }, []);
 
   useEffect(() => {
-    persistDraft({ form, items, updated_at: new Date().toISOString() });
-  }, [form, items]);
+    if (form.customer_id) {
+      loadHistory(form.customer_id).catch(() => null);
+    } else {
+      setHistory({ quotes: [], invoices: [] });
+    }
+  }, [form.customer_id]);
+
+  const contactOptions = useMemo(
+    () => contacts.filter((contact) => String(contact.customer_id) === String(form.customer_id)),
+    [contacts, form.customer_id],
+  );
 
   const handleChange = (event) => {
     const { name, value } = event.target;
     setForm((prev) => ({ ...prev, [name]: value }));
+    if (name === 'customer_id') {
+      setForm((prev) => ({ ...prev, customer_id: value, contact_id: '' }));
+    }
   };
 
   const handleItemChange = (index, field, value) => {
@@ -119,12 +97,25 @@ const CrmQuotesPage = () => {
 
   const addItem = () => setItems((prev) => [...prev, blankItem()]);
   const removeItem = (index) =>
-    setItems((prev) => prev.filter((_, idx) => idx !== index).length ? prev.filter((_, idx) => idx !== index) : [blankItem()]);
-  const applyTemplate = () => {
-    if (!templateId) return;
-    const template = QUOTE_TEMPLATES.find((item) => item.id === templateId);
-    if (!template) return;
-    setItems(template.items.map((item) => ({ ...item })));
+    setItems((prev) => {
+      const next = prev.filter((_, idx) => idx !== index);
+      return next.length ? next : [blankItem()];
+    });
+
+  const addFromCatalog = () => {
+    if (!catalogPick) return;
+    const selected = catalogItems.find((item) => String(item.id) === String(catalogPick));
+    if (!selected) return;
+    setItems((prev) => [
+      ...prev,
+      {
+        description: selected.name || '',
+        unit: selected.unit || '式',
+        quantity: 1,
+        unit_price: Number(selected.unit_price || 0),
+      },
+    ]);
+    setCatalogPick('');
   };
 
   const submitQuote = async (event) => {
@@ -135,9 +126,10 @@ const CrmQuotesPage = () => {
     }
     const validItems = items.filter((item) => item.description.trim());
     if (validItems.length === 0) {
-      setError('請至少輸入一筆品項');
+      setError('請至少填寫一個品項');
       return;
     }
+
     setSaving(true);
     setError('');
     try {
@@ -145,8 +137,10 @@ const CrmQuotesPage = () => {
         ...form,
         customer_id: Number(form.customer_id),
         contact_id: form.contact_id ? Number(form.contact_id) : null,
+        tax_rate: Number(form.tax_rate || 0),
         items: validItems.map((item) => ({
           description: item.description.trim(),
+          unit: (item.unit || '式').trim(),
           quantity: Number(item.quantity || 0),
           unit_price: Number(item.unit_price || 0),
         })),
@@ -161,12 +155,10 @@ const CrmQuotesPage = () => {
         note: '',
       });
       setItems([blankItem()]);
-      localStorage.removeItem(DRAFT_KEY);
-      pushVersion('送出前快照');
+      setHistory({ quotes: [], invoices: [] });
       await loadQuotes();
     } catch (err) {
-      const message = err?.response?.data?.msg || '新增報價失敗';
-      setError(message);
+      setError(err?.response?.data?.msg || '新增報價失敗');
     } finally {
       setSaving(false);
     }
@@ -177,8 +169,7 @@ const CrmQuotesPage = () => {
       await api.post(`crm/quotes/${quoteId}/convert-to-invoice`);
       await loadQuotes();
     } catch (err) {
-      const message = err?.response?.data?.msg || '轉發票失敗';
-      setError(message);
+      setError(err?.response?.data?.msg || '轉換發票失敗');
     }
   };
 
@@ -187,14 +178,9 @@ const CrmQuotesPage = () => {
     window.open(`${base}/crm/quotes/${quoteId}/pdf`, '_blank', 'noopener');
   };
 
-  const contactOptions = useMemo(
-    () => contacts.filter((contact) => String(contact.customer_id) === String(form.customer_id)),
-    [contacts, form.customer_id],
-  );
-
   return (
     <div className="page">
-      <AppHeader title="報價單" subtitle="建立報價單與品項" />
+      <AppHeader title="報價單" subtitle="可從價目資料庫帶入品項，並查看客戶歷史施工紀錄。" />
 
       {error && <p className="error-text">{error}</p>}
 
@@ -205,7 +191,7 @@ const CrmQuotesPage = () => {
             <label>
               客戶
               <select name="customer_id" value={form.customer_id} onChange={handleChange}>
-                <option value="">選擇客戶</option>
+                <option value="">請選擇客戶</option>
                 {customers.map((customer) => (
                   <option key={customer.id} value={customer.id}>
                     {customer.name}
@@ -216,7 +202,7 @@ const CrmQuotesPage = () => {
             <label>
               聯絡人
               <select name="contact_id" value={form.contact_id} onChange={handleChange}>
-                <option value="">選擇聯絡人</option>
+                <option value="">請選擇聯絡人</option>
                 {contactOptions.map((contact) => (
                   <option key={contact.id} value={contact.id}>
                     {contact.name}
@@ -225,11 +211,11 @@ const CrmQuotesPage = () => {
               </select>
             </label>
             <label>
-              出單日期
+              報價日期
               <input type="date" name="issue_date" value={form.issue_date} onChange={handleChange} />
             </label>
             <label>
-              到期日
+              有效日期
               <input type="date" name="expiry_date" value={form.expiry_date} onChange={handleChange} />
             </label>
             <label>
@@ -246,70 +232,38 @@ const CrmQuotesPage = () => {
             </label>
           </div>
 
-          <div className="crm-line-tools">
-            <button type="button" className="secondary-btn" onClick={() => pushVersion()}>
-              儲存版本
-            </button>
-            <button
-              type="button"
-              className="secondary-btn"
-              onClick={() => {
-                const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
-                if (draft?.form && Array.isArray(draft?.items)) {
-                  setForm((prev) => ({ ...prev, ...draft.form }));
-                  setItems(draft.items.length ? draft.items : [blankItem()]);
-                }
-              }}
-            >
-              載入草稿
-            </button>
-            <button
-              type="button"
-              className="secondary-btn"
-              onClick={() => {
-                localStorage.removeItem(DRAFT_KEY);
-                setForm({
-                  customer_id: '',
-                  contact_id: '',
-                  issue_date: '',
-                  expiry_date: '',
-                  currency: 'TWD',
-                  tax_rate: 5,
-                  note: '',
-                });
-                setItems([blankItem()]);
-              }}
-            >
-              清除草稿
-            </button>
-          </div>
-
           <div className="crm-line-items">
             <div className="panel-header">
               <h3>品項</h3>
               <div className="crm-line-tools">
-                <select value={templateId} onChange={(event) => setTemplateId(event.target.value)}>
-                  <option value="">套用範本（選填）</option>
-                  {QUOTE_TEMPLATES.map((item) => (
+                <select value={catalogPick} onChange={(event) => setCatalogPick(event.target.value)}>
+                  <option value="">從價目資料庫加入</option>
+                  {catalogItems.map((item) => (
                     <option key={item.id} value={item.id}>
-                      {item.label}
+                      {item.name}（{item.unit} / {Number(item.unit_price || 0).toFixed(0)}）
                     </option>
                   ))}
                 </select>
-                <button type="button" className="secondary-btn" onClick={applyTemplate} disabled={!templateId}>
-                  套用範本
+                <button type="button" className="secondary-btn" onClick={addFromCatalog} disabled={!catalogPick}>
+                  帶入品項
                 </button>
                 <button type="button" className="secondary-btn" onClick={addItem}>
-                  新增品項
+                  新增一列
                 </button>
               </div>
             </div>
+
             {items.map((item, idx) => (
               <div key={`${idx}-${item.description}`} className="crm-line-item">
                 <input
                   value={item.description}
                   onChange={(event) => handleItemChange(idx, 'description', event.target.value)}
-                  placeholder="品項說明"
+                  placeholder="項目名稱"
+                />
+                <input
+                  value={item.unit}
+                  onChange={(event) => handleItemChange(idx, 'unit', event.target.value)}
+                  placeholder="單位"
                 />
                 <input
                   type="number"
@@ -326,53 +280,11 @@ const CrmQuotesPage = () => {
                   step="0.1"
                 />
                 <button type="button" className="secondary-btn" onClick={() => removeItem(idx)}>
-                  移除
+                  刪除
                 </button>
               </div>
             ))}
           </div>
-
-          {versionHistory.length > 0 ? (
-            <div className="panel">
-              <div className="panel-header">
-                <h3>版本紀錄</h3>
-                <span className="panel-tag">{versionHistory.length} 筆</span>
-              </div>
-              <div className="table-wrapper">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>時間</th>
-                      <th>標籤</th>
-                      <th>客戶</th>
-                      <th>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {versionHistory.map((version) => (
-                      <tr key={version.id}>
-                        <td>{new Date(version.saved_at).toLocaleString('zh-TW', { hour12: false })}</td>
-                        <td>{version.label}</td>
-                        <td>{version.form?.customer_id || '-'}</td>
-                        <td>
-                          <button
-                            type="button"
-                            className="secondary-btn"
-                            onClick={() => {
-                              setForm((prev) => ({ ...prev, ...(version.form || {}) }));
-                              setItems(Array.isArray(version.items) && version.items.length ? version.items : [blankItem()]);
-                            }}
-                          >
-                            還原
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ) : null}
 
           <div className="crm-form-actions">
             <button type="submit" disabled={saving}>
@@ -384,13 +296,58 @@ const CrmQuotesPage = () => {
 
       <section className="panel panel--table">
         <div className="panel-header">
+          <h2>客戶歷史施工紀錄</h2>
+          <span className="panel-tag">依目前選取客戶</span>
+        </div>
+        <div className="table-wrapper">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>類型</th>
+                <th>單號</th>
+                <th>日期</th>
+                <th>第一項目</th>
+                <th>金額</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.quotes.map((row) => (
+                <tr key={`q-${row.id}`}>
+                  <td>報價</td>
+                  <td>{row.quote_no}</td>
+                  <td>{row.issue_date || '-'}</td>
+                  <td>{row.items?.[0]?.description || '-'}</td>
+                  <td>{Number(row.total_amount || 0).toFixed(2)}</td>
+                </tr>
+              ))}
+              {history.invoices.map((row) => (
+                <tr key={`i-${row.id}`}>
+                  <td>發票</td>
+                  <td>{row.invoice_no}</td>
+                  <td>{row.issue_date || '-'}</td>
+                  <td>{row.items?.[0]?.description || '-'}</td>
+                  <td>{Number(row.total_amount || 0).toFixed(2)}</td>
+                </tr>
+              ))}
+              {history.quotes.length === 0 && history.invoices.length === 0 ? (
+                <tr>
+                  <td colSpan="5">選擇客戶後可查看歷史紀錄</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel panel--table">
+        <div className="panel-header">
           <h2>報價單列表</h2>
         </div>
         <div className="table-wrapper">
           <table className="data-table">
             <thead>
               <tr>
-                <th>編號</th>
+                <th>單號</th>
                 <th>狀態</th>
                 <th>金額</th>
                 <th>操作</th>
@@ -401,27 +358,27 @@ const CrmQuotesPage = () => {
                 <tr key={quote.id}>
                   <td>{quote.quote_no}</td>
                   <td>{quote.status}</td>
-                  <td>{quote.total_amount?.toFixed(2)}</td>
+                  <td>{Number(quote.total_amount || 0).toFixed(2)}</td>
                   <td className="crm-actions-cell">
                     <button type="button" className="secondary-btn" onClick={() => openPdf(quote.id)}>
                       PDF
                     </button>
                     <button type="button" onClick={() => convertToInvoice(quote.id)}>
-                      轉成發票
+                      轉發票
                     </button>
                   </td>
                 </tr>
               ))}
-              {!loading && quotes.length === 0 && (
+              {!loading && quotes.length === 0 ? (
                 <tr>
                   <td colSpan="4">尚無報價單</td>
                 </tr>
-              )}
-              {loading && (
+              ) : null}
+              {loading ? (
                 <tr>
                   <td colSpan="4">載入中...</td>
                 </tr>
-              )}
+              ) : null}
             </tbody>
           </table>
         </div>

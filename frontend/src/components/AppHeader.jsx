@@ -22,6 +22,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
     { to: '/attendance', label: '出勤' },
     { to: '/calendar', label: '行事曆' },
     { to: '/crm', label: '營運中台' },
+    { to: '/crm/catalog', label: '價目資料庫' },
     { to: '/reports', label: '報表' },
     { to: '/profile', label: '個人設定' },
     { to: '/admin', label: '管理後台', adminOnly: true },
@@ -48,9 +49,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
               key={item.to}
               to={item.to}
               end={item.to === '/app'}
-              className={({ isActive }) =>
-                `app-sidebar__link${isActive ? ' is-active' : ''}`
-              }
+              className={({ isActive }) => `app-sidebar__link${isActive ? ' is-active' : ''}`}
             >
               {item.label}
             </NavLink>

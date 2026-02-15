@@ -435,6 +435,7 @@ class QuoteItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     quote_id = db.Column(db.Integer, db.ForeignKey("quote.id", ondelete="CASCADE"), nullable=False)
     description = db.Column(db.String(500), nullable=False)
+    unit = db.Column(db.String(32))
     quantity = db.Column(db.Float, nullable=False, default=1.0)
     unit_price = db.Column(db.Float, nullable=False, default=0.0)
     amount = db.Column(db.Float, nullable=False, default=0.0)
@@ -446,6 +447,7 @@ class QuoteItem(db.Model):
         return {
             "id": self.id,
             "description": self.description,
+            "unit": self.unit,
             "quantity": round(self.quantity or 0.0, 4),
             "unit_price": round(self.unit_price or 0.0, 2),
             "amount": round(self.amount or 0.0, 2),
@@ -510,6 +512,7 @@ class InvoiceItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     invoice_id = db.Column(db.Integer, db.ForeignKey("invoice.id", ondelete="CASCADE"), nullable=False)
     description = db.Column(db.String(500), nullable=False)
+    unit = db.Column(db.String(32))
     quantity = db.Column(db.Float, nullable=False, default=1.0)
     unit_price = db.Column(db.Float, nullable=False, default=0.0)
     amount = db.Column(db.Float, nullable=False, default=0.0)
@@ -521,10 +524,38 @@ class InvoiceItem(db.Model):
         return {
             "id": self.id,
             "description": self.description,
+            "unit": self.unit,
             "quantity": round(self.quantity or 0.0, 4),
             "unit_price": round(self.unit_price or 0.0, 2),
             "amount": round(self.amount or 0.0, 2),
             "sort_order": self.sort_order,
+        }
+
+
+class ServiceCatalogItem(db.Model):
+    __tablename__ = "service_catalog_item"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255), nullable=False, unique=True)
+    unit = db.Column(db.String(32), nullable=False, default="式")
+    unit_price = db.Column(db.Float, nullable=False, default=0.0)
+    category = db.Column(db.String(64))
+    note = db.Column(db.Text)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "unit": self.unit,
+            "unit_price": round(self.unit_price or 0.0, 2),
+            "category": self.category,
+            "note": self.note,
+            "is_active": bool(self.is_active),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
 

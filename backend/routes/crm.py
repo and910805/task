@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from decorators import role_required
 from extensions import db
-from models import Contact, Customer, Invoice, InvoiceItem, Quote, QuoteItem
+from models import Contact, Customer, Invoice, InvoiceItem, Quote, QuoteItem, ServiceCatalogItem
 from utils import get_current_user_id
 
 from reportlab.lib import colors
@@ -81,22 +81,24 @@ def _normalize_items(raw_items):
         description = (raw.get("description") or "").strip()
         if not description:
             return None, (jsonify({"msg": f"items[{idx}].description is required"}), 400)
+        unit = (raw.get("unit") or "").strip() or "式"
 
         qty, qty_err = _parse_float(raw.get("quantity", 1), f"items[{idx}].quantity", minimum=0)
         if qty_err:
             return None, qty_err
-        unit_price, price_err = _parse_float(raw.get("unit_price", 0), f"items[{idx}].unit_price", minimum=0)
+        unit_price_val, price_err = _parse_float(raw.get("unit_price", 0), f"items[{idx}].unit_price", minimum=0)
         if price_err:
             return None, price_err
 
         quantity = qty if qty is not None else 1.0
-        unit = unit_price if unit_price is not None else 0.0
-        amount = round(quantity * unit, 2)
+        unit_price = unit_price_val if unit_price_val is not None else 0.0
+        amount = round(quantity * unit_price, 2)
         normalized.append(
             {
                 "description": description,
+                "unit": unit,
                 "quantity": quantity,
-                "unit_price": unit,
+                "unit_price": unit_price,
                 "amount": amount,
                 "sort_order": idx,
             }
@@ -142,6 +144,28 @@ def _validate_customer_contact(customer_id, contact_id):
     return customer, contact, None
 
 
+def _serialize_customer_service_history(customer: Customer, *, quote_limit: int = 30, invoice_limit: int = 30):
+    quotes = (
+        Quote.query.options(selectinload(Quote.items))
+        .filter(Quote.customer_id == customer.id)
+        .order_by(Quote.created_at.desc())
+        .limit(quote_limit)
+        .all()
+    )
+    invoices = (
+        Invoice.query.options(selectinload(Invoice.items))
+        .filter(Invoice.customer_id == customer.id)
+        .order_by(Invoice.created_at.desc())
+        .limit(invoice_limit)
+        .all()
+    )
+    return {
+        "customer": customer.to_dict(),
+        "quotes": [row.to_dict() for row in quotes],
+        "invoices": [row.to_dict() for row in invoices],
+    }
+
+
 def _build_pdf_document(title: str, meta_rows: list[list[str]], item_rows: list[list[str]], totals_rows: list[list[str]]):
     _ensure_pdf_font()
     buffer = BytesIO()
@@ -159,7 +183,8 @@ def _build_pdf_document(title: str, meta_rows: list[list[str]], item_rows: list[
     styles["Heading1"].fontName = PDF_FONT_NAME
 
     story = [
-        Paragraph(title, styles["Heading1"]),
+        Paragraph("Lixiang Plumbing", styles["Heading1"]),
+        Paragraph(title, styles["Normal"]),
         Spacer(1, 8 * mm),
     ]
 
@@ -176,7 +201,12 @@ def _build_pdf_document(title: str, meta_rows: list[list[str]], item_rows: list[
     )
     story.extend([meta_table, Spacer(1, 6 * mm)])
 
-    items_table = Table(item_rows, hAlign="LEFT", colWidths=[80 * mm, 25 * mm, 30 * mm, 30 * mm])
+    item_col_count = len(item_rows[0]) if item_rows else 0
+    if item_col_count == 5:
+        col_widths = [72 * mm, 18 * mm, 20 * mm, 30 * mm, 30 * mm]
+    else:
+        col_widths = [80 * mm, 25 * mm, 30 * mm, 30 * mm]
+    items_table = Table(item_rows, hAlign="LEFT", colWidths=col_widths)
     items_table.setStyle(
         TableStyle(
             [
@@ -239,7 +269,7 @@ def _find_or_create_customer(name: str, phone: str, email: str, address: str, no
         customer.note = _append_note(customer.note, note_line)
         return customer
 
-    base_name = name or f"網站預約-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    base_name = name or f"WebBooking-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
     candidate = base_name
     suffix = 2
     while Customer.query.filter(Customer.name == candidate).first():
@@ -316,13 +346,13 @@ def create_public_booking():
         return jsonify({"msg": "service is required"}), 400
 
     booking_note_parts = [
-        "來源: 官網線上預約",
-        f"服務項目: {service}",
+        "Source: website booking",
+        f"Service: {service}",
     ]
     if message:
-        booking_note_parts.append(f"需求描述: {message}")
+        booking_note_parts.append(f"Message: {message}")
     if source_url:
-        booking_note_parts.append(f"來源頁面: {source_url}")
+        booking_note_parts.append(f"Source URL: {source_url}")
     if client_ip:
         booking_note_parts.append(f"IP: {client_ip}")
     if user_agent:
@@ -355,6 +385,128 @@ def create_public_booking():
         ),
         201,
     )
+
+
+@crm_bp.get("/catalog-items")
+@role_required(*READ_ROLES)
+def list_catalog_items():
+    q = (request.args.get("q") or "").strip()
+    include_inactive = request.args.get("include_inactive", "false").strip().lower() == "true"
+
+    query = ServiceCatalogItem.query.order_by(ServiceCatalogItem.updated_at.desc())
+    if not include_inactive:
+        query = query.filter(ServiceCatalogItem.is_active.is_(True))
+    if q:
+        pattern = f"%{q}%"
+        query = query.filter(
+            (ServiceCatalogItem.name.ilike(pattern))
+            | (ServiceCatalogItem.category.ilike(pattern))
+        )
+    rows = query.limit(500).all()
+    return jsonify([row.to_dict() for row in rows])
+
+
+@crm_bp.post("/catalog-items")
+@role_required(*WRITE_ROLES)
+def create_catalog_item():
+    data = request.get_json() or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"msg": "name is required"}), 400
+
+    unit = (data.get("unit") or "").strip() or "式"
+    unit_price, unit_price_err = _parse_float(data.get("unit_price", 0), "unit_price", minimum=0)
+    if unit_price_err:
+        return unit_price_err
+
+    exists = ServiceCatalogItem.query.filter(ServiceCatalogItem.name == name).first()
+    if exists:
+        return jsonify({"msg": "catalog item name already exists"}), 400
+
+    item = ServiceCatalogItem(
+        name=name,
+        unit=unit,
+        unit_price=unit_price or 0.0,
+        category=(data.get("category") or "").strip() or None,
+        note=(data.get("note") or "").strip() or None,
+        is_active=bool(data.get("is_active", True)),
+    )
+    db.session.add(item)
+    db.session.commit()
+    return jsonify(item.to_dict()), 201
+
+
+@crm_bp.put("/catalog-items/<int:item_id>")
+@role_required(*WRITE_ROLES)
+def update_catalog_item(item_id: int):
+    item = ServiceCatalogItem.query.get_or_404(item_id)
+    data = request.get_json() or {}
+
+    if "name" in data:
+        name = (data.get("name") or "").strip()
+        if not name:
+            return jsonify({"msg": "name is required"}), 400
+        duplicate = ServiceCatalogItem.query.filter(
+            ServiceCatalogItem.name == name,
+            ServiceCatalogItem.id != item.id,
+        ).first()
+        if duplicate:
+            return jsonify({"msg": "catalog item name already exists"}), 400
+        item.name = name
+
+    if "unit" in data:
+        item.unit = (data.get("unit") or "").strip() or "式"
+
+    if "unit_price" in data:
+        unit_price, unit_price_err = _parse_float(data.get("unit_price"), "unit_price", minimum=0)
+        if unit_price_err:
+            return unit_price_err
+        item.unit_price = unit_price or 0.0
+
+    if "category" in data:
+        item.category = (data.get("category") or "").strip() or None
+    if "note" in data:
+        item.note = (data.get("note") or "").strip() or None
+    if "is_active" in data:
+        item.is_active = bool(data.get("is_active"))
+
+    db.session.commit()
+    return jsonify(item.to_dict())
+
+
+@crm_bp.get("/customers/<int:customer_id>/service-history")
+@role_required(*READ_ROLES)
+def customer_service_history(customer_id: int):
+    customer = Customer.query.get_or_404(customer_id)
+    quote_limit = request.args.get("quote_limit", default=50, type=int) or 50
+    invoice_limit = request.args.get("invoice_limit", default=50, type=int) or 50
+    quote_limit = max(1, min(quote_limit, 200))
+    invoice_limit = max(1, min(invoice_limit, 200))
+    return jsonify(_serialize_customer_service_history(customer, quote_limit=quote_limit, invoice_limit=invoice_limit))
+
+
+@crm_bp.get("/service-history")
+@role_required(*READ_ROLES)
+def search_service_history():
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify({"msg": "q is required"}), 400
+
+    pattern = f"%{q}%"
+    customers = (
+        Customer.query.filter(
+            (Customer.name.ilike(pattern))
+            | (Customer.phone.ilike(pattern))
+            | (Customer.email.ilike(pattern))
+        )
+        .order_by(Customer.updated_at.desc())
+        .limit(20)
+        .all()
+    )
+    result = []
+    for customer in customers:
+        result.append(_serialize_customer_service_history(customer, quote_limit=10, invoice_limit=10))
+    return jsonify(result)
 
 
 @crm_bp.get("/customers")
@@ -660,6 +812,7 @@ def convert_quote_to_invoice(quote_id: int):
             InvoiceItem(
                 invoice_id=invoice.id,
                 description=item.description,
+                unit=item.unit,
                 quantity=item.quantity,
                 unit_price=item.unit_price,
                 amount=item.amount,
@@ -813,7 +966,7 @@ def quote_pdf(quote_id: int):
     contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
 
     meta_rows = [
-        ["Quote No", quote.quote_no],
+        ["No", quote.quote_no],
         ["Status", quote.status],
         ["Customer", customer.name if customer else ""],
         ["Contact", contact.name if contact else ""],
@@ -824,11 +977,12 @@ def quote_pdf(quote_id: int):
         ["Currency", quote.currency],
     ]
 
-    item_rows = [["Description", "Qty", "Unit Price", "Amount"]]
+    item_rows = [["Item", "Unit", "Qty", "Unit Price", "Amount"]]
     for item in quote.items:
         item_rows.append(
             [
                 item.description,
+                item.unit or "",
                 f"{item.quantity:.2f}",
                 f"{item.unit_price:.2f}",
                 f"{item.amount:.2f}",
@@ -840,6 +994,9 @@ def quote_pdf(quote_id: int):
         [f"Tax ({quote.tax_rate:.2f}%)", f"{quote.tax_amount:.2f}"],
         ["Total", f"{quote.total_amount:.2f}"],
     ]
+
+    if quote.note:
+        meta_rows.append(["Note", quote.note])
 
     buffer = _build_pdf_document("Quote", meta_rows, item_rows, totals_rows)
     filename = f"quote-{quote.quote_no}.pdf"
@@ -859,7 +1016,7 @@ def invoice_pdf(invoice_id: int):
     contact = Contact.query.get(invoice.contact_id) if invoice.contact_id else None
 
     meta_rows = [
-        ["Invoice No", invoice.invoice_no],
+        ["No", invoice.invoice_no],
         ["Status", invoice.status],
         ["Customer", customer.name if customer else ""],
         ["Contact", contact.name if contact else ""],
@@ -870,11 +1027,12 @@ def invoice_pdf(invoice_id: int):
         ["Currency", invoice.currency],
     ]
 
-    item_rows = [["Description", "Qty", "Unit Price", "Amount"]]
+    item_rows = [["Item", "Unit", "Qty", "Unit Price", "Amount"]]
     for item in invoice.items:
         item_rows.append(
             [
                 item.description,
+                item.unit or "",
                 f"{item.quantity:.2f}",
                 f"{item.unit_price:.2f}",
                 f"{item.amount:.2f}",
@@ -886,6 +1044,9 @@ def invoice_pdf(invoice_id: int):
         [f"Tax ({invoice.tax_rate:.2f}%)", f"{invoice.tax_amount:.2f}"],
         ["Total", f"{invoice.total_amount:.2f}"],
     ]
+
+    if invoice.note:
+        meta_rows.append(["Note", invoice.note])
 
     buffer = _build_pdf_document("Invoice", meta_rows, item_rows, totals_rows)
     filename = f"invoice-{invoice.invoice_no}.pdf"
@@ -904,6 +1065,12 @@ def crm_bootstrap():
     contacts = Contact.query.order_by(Contact.updated_at.desc()).limit(100).all()
     quotes = Quote.query.options(selectinload(Quote.items)).order_by(Quote.updated_at.desc()).limit(30).all()
     invoices = Invoice.query.options(selectinload(Invoice.items)).order_by(Invoice.updated_at.desc()).limit(30).all()
+    catalog_items = (
+        ServiceCatalogItem.query.filter(ServiceCatalogItem.is_active.is_(True))
+        .order_by(ServiceCatalogItem.updated_at.desc())
+        .limit(200)
+        .all()
+    )
 
     return jsonify(
         {
@@ -911,5 +1078,8 @@ def crm_bootstrap():
             "contacts": [row.to_dict() for row in contacts],
             "quotes": [row.to_dict() for row in quotes],
             "invoices": [row.to_dict() for row in invoices],
+            "catalog_items": [row.to_dict() for row in catalog_items],
         }
     )
+
+
