@@ -117,6 +117,7 @@ class DesktopQuoteTool:
         self.catalog_map: dict[str, dict[str, Any]] = {}
         self.quote_map: dict[str, dict[str, Any]] = {}
         self.item_row_map: dict[str, int] = {}
+        self.editing_item_index: int | None = None
 
         self.base_url_var = tk.StringVar(value="https://task.kuanlin.pro")
         self.username_var = tk.StringVar()
@@ -266,6 +267,8 @@ class DesktopQuoteTool:
         ttk.Entry(source, textvariable=self.item_qty_var, width=8).grid(row=1, column=3, padx=2, pady=4)
         ttk.Entry(source, textvariable=self.item_price_var, width=10).grid(row=1, column=4, padx=2, pady=4)
         ttk.Button(source, text="手動新增", command=self.add_manual_item).grid(row=1, column=5, padx=4, pady=4)
+        ttk.Button(source, text="載入選取", command=self.load_selected_item_for_edit).grid(row=1, column=6, padx=4, pady=4)
+        ttk.Button(source, text="更新選取", command=self.update_selected_item).grid(row=1, column=7, padx=4, pady=4)
         ttk.Label(source, text="品名").grid(row=2, column=1, sticky="w", padx=4)
         ttk.Label(source, text="單位").grid(row=2, column=2, sticky="w", padx=2)
         ttk.Label(source, text="數量").grid(row=2, column=3, sticky="w", padx=2)
@@ -288,12 +291,15 @@ class DesktopQuoteTool:
             self.item_tree.column(c, width=w, anchor=a)
         self.item_tree.grid(row=0, column=0, sticky="nsew")
         ttk.Scrollbar(table, orient="vertical", command=self.item_tree.yview).grid(row=0, column=1, sticky="ns")
+        self.item_tree.bind("<Double-1>", lambda _event: self.load_selected_item_for_edit())
 
         bottom = ttk.Frame(items)
         bottom.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         bottom.columnconfigure(6, weight=1)
-        ttk.Button(bottom, text="刪除選取", command=self.remove_selected_item).grid(row=0, column=0, padx=4)
-        ttk.Button(bottom, text="清空全部", command=self.clear_items).grid(row=0, column=1, padx=4)
+        ttk.Button(bottom, text="上移", command=lambda: self.move_selected_item(-1)).grid(row=0, column=0, padx=4)
+        ttk.Button(bottom, text="下移", command=lambda: self.move_selected_item(1)).grid(row=0, column=1, padx=4)
+        ttk.Button(bottom, text="刪除選取", command=self.remove_selected_item).grid(row=0, column=2, padx=4)
+        ttk.Button(bottom, text="清空全部", command=self.clear_items).grid(row=0, column=3, padx=4)
         ttk.Label(bottom, text="未稅合計").grid(row=0, column=4, padx=(18, 4))
         ttk.Label(bottom, textvariable=self.total_var).grid(row=0, column=5, padx=4)
         ttk.Button(bottom, text="建立估價單", command=self.create_quote).grid(row=0, column=7, padx=4)
@@ -571,25 +577,92 @@ class DesktopQuoteTool:
         self._refresh_items()
 
     def add_manual_item(self) -> None:
+        item = self._collect_item_from_input()
+        if item is None:
+            return
+        self.current_items.append(item)
+        self._reset_item_input()
+        self._refresh_items()
+
+    def _collect_item_from_input(self) -> dict[str, Any] | None:
         desc = self.item_desc_var.get().strip()
         if not desc:
             messagebox.showerror("資料不完整", "請輸入品名。")
-            return
+            return None
         try:
             qty = float((self.item_qty_var.get() or "0").strip())
             price = float((self.item_price_var.get() or "0").strip())
         except ValueError:
             messagebox.showerror("格式錯誤", "數量、單價需為數字。")
-            return
+            return None
         if qty < 0 or price < 0:
             messagebox.showerror("格式錯誤", "數量、單價不可小於 0。")
-            return
-        self.current_items.append({"description": desc, "unit": (self.item_unit_var.get() or "式").strip() or "式", "quantity": qty, "unit_price": price})
+            return None
+        return {
+            "description": desc,
+            "unit": (self.item_unit_var.get() or "式").strip() or "式",
+            "quantity": qty,
+            "unit_price": price,
+        }
+
+    def _reset_item_input(self) -> None:
         self.item_desc_var.set("")
         self.item_unit_var.set("式")
         self.item_qty_var.set("1")
         self.item_price_var.set("0")
+
+    def _selected_item_index(self, *, show_error: bool = True) -> int | None:
+        selected = self.item_tree.selection()
+        if not selected:
+            if show_error:
+                messagebox.showerror("未選取", "請先選擇品項。")
+            return None
+        row_id = selected[0]
+        if row_id not in self.item_row_map:
+            if show_error:
+                messagebox.showerror("資料錯誤", "找不到選取的品項索引。")
+            return None
+        return self.item_row_map[row_id]
+
+    def load_selected_item_for_edit(self) -> None:
+        idx = self._selected_item_index()
+        if idx is None or idx < 0 or idx >= len(self.current_items):
+            return
+        item = self.current_items[idx]
+        self.item_desc_var.set(str(item.get("description") or ""))
+        self.item_unit_var.set(str(item.get("unit") or "式"))
+        self.item_qty_var.set(str(item.get("quantity") or 0))
+        self.item_price_var.set(str(item.get("unit_price") or 0))
+        self.editing_item_index = idx
+        self.status_var.set(f"已載入第 {idx + 1} 筆，修改後按「更新選取」")
+
+    def update_selected_item(self) -> None:
+        idx = self.editing_item_index
+        if idx is None:
+            idx = self._selected_item_index()
+        if idx is None or idx < 0 or idx >= len(self.current_items):
+            return
+        item = self._collect_item_from_input()
+        if item is None:
+            return
+        self.current_items[idx] = item
+        self.editing_item_index = None
+        self._reset_item_input()
         self._refresh_items()
+        self.status_var.set(f"已更新第 {idx + 1} 筆品項")
+
+    def move_selected_item(self, direction: int) -> None:
+        if direction not in (-1, 1):
+            return
+        idx = self._selected_item_index()
+        if idx is None:
+            return
+        target = idx + direction
+        if target < 0 or target >= len(self.current_items):
+            return
+        self.current_items[idx], self.current_items[target] = self.current_items[target], self.current_items[idx]
+        self._refresh_items(select_index=target)
+        self.status_var.set(f"已調整品項順序：第 {idx + 1} 筆 -> 第 {target + 1} 筆")
 
     def remove_selected_item(self) -> None:
         sel = self.item_tree.selection()
@@ -600,17 +673,20 @@ class DesktopQuoteTool:
         for idx in idxs:
             if 0 <= idx < len(self.current_items):
                 self.current_items.pop(idx)
+        self.editing_item_index = None
         self._refresh_items()
 
     def clear_items(self) -> None:
         self.current_items.clear()
+        self.editing_item_index = None
         self._refresh_items()
 
-    def _refresh_items(self) -> None:
+    def _refresh_items(self, *, select_index: int | None = None) -> None:
         for rid in self.item_tree.get_children():
             self.item_tree.delete(rid)
         self.item_row_map.clear()
         total = 0.0
+        selected_row_id = None
         for idx, item in enumerate(self.current_items):
             qty = float(item["quantity"])
             price = float(item["unit_price"])
@@ -618,6 +694,11 @@ class DesktopQuoteTool:
             total += amount
             row = self.item_tree.insert("", "end", values=(item["description"], item["unit"], f"{qty:.2f}", f"{price:.2f}", f"{amount:.2f}"))
             self.item_row_map[row] = idx
+            if select_index is not None and idx == select_index:
+                selected_row_id = row
+        if selected_row_id is not None:
+            self.item_tree.selection_set(selected_row_id)
+            self.item_tree.focus(selected_row_id)
         self.total_var.set(f"{total:.2f}")
 
     def create_quote(self) -> None:
@@ -659,6 +740,8 @@ class DesktopQuoteTool:
             return
         messagebox.showinfo("建立成功", f"已建立：{created.get('quote_no', '(無單號)')}")
         self.current_items.clear()
+        self.editing_item_index = None
+        self._reset_item_input()
         self.note_var.set("")
         self._refresh_items()
         self.refresh_quotes()

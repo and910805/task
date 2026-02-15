@@ -42,6 +42,8 @@ PDF_FONT_CANDIDATES = (
 )
 PDF_CID_FALLBACKS = ("MSung-Light", "STSong-Light")
 PDF_CJK_PROBE = "估價單發票台照"
+PDF_FONT_SOURCE = "default"
+PDF_FONT_PATH_USED = ""
 
 
 def _font_supports_traditional_chinese(font_name: str) -> bool:
@@ -61,7 +63,7 @@ def _font_supports_traditional_chinese(font_name: str) -> bool:
 
 
 def _ensure_pdf_font():
-    global PDF_FONT_NAME
+    global PDF_FONT_NAME, PDF_FONT_SOURCE, PDF_FONT_PATH_USED
 
     font_path = os.environ.get(PDF_FONT_ENV, "").strip()
     if not font_path:
@@ -81,6 +83,8 @@ def _ensure_pdf_font():
                 pdfmetrics.registerFont(TTFont("CustomFont", font_path, subfontIndex=idx))
                 if _font_supports_traditional_chinese("CustomFont"):
                     PDF_FONT_NAME = "CustomFont"
+                    PDF_FONT_SOURCE = "filesystem"
+                    PDF_FONT_PATH_USED = font_path
                     return
             except Exception:
                 continue
@@ -91,9 +95,27 @@ def _ensure_pdf_font():
             pdfmetrics.registerFont(UnicodeCIDFont(cid_name))
             if _font_supports_traditional_chinese(cid_name):
                 PDF_FONT_NAME = cid_name
+                PDF_FONT_SOURCE = f"cid:{cid_name}"
+                PDF_FONT_PATH_USED = ""
                 return
         except Exception:
             continue
+
+    PDF_FONT_NAME = "Helvetica"
+    PDF_FONT_SOURCE = "default"
+    PDF_FONT_PATH_USED = ""
+
+
+def _pdf_font_health_payload() -> dict:
+    _ensure_pdf_font()
+    return {
+        "font_name": PDF_FONT_NAME,
+        "font_source": PDF_FONT_SOURCE,
+        "font_path": PDF_FONT_PATH_USED,
+        "supports_traditional_chinese": _font_supports_traditional_chinese(PDF_FONT_NAME),
+        "probe_text": PDF_CJK_PROBE,
+        "candidates": list(PDF_FONT_CANDIDATES),
+    }
 
 
 def _parse_date(raw, field_name: str):
@@ -174,8 +196,29 @@ def _apply_totals(entity, items: list[dict], tax_rate_raw):
     return None
 
 
-def _next_doc_no(prefix: str) -> str:
-    return f"{prefix}-{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')[:-3]}"
+def _next_quote_no() -> str:
+    ymd = datetime.utcnow().strftime("%Y%m%d")
+    prefix = f"QT-{ymd}-"
+
+    rows = Quote.query.with_entities(Quote.quote_no).filter(Quote.quote_no.like(f"{prefix}%")).all()
+    max_seq = 0
+    for (quote_no,) in rows:
+        if not isinstance(quote_no, str) or not quote_no.startswith(prefix):
+            continue
+        suffix = quote_no[len(prefix):]
+        if suffix.isdigit():
+            max_seq = max(max_seq, int(suffix))
+
+    next_seq = max_seq + 1
+    candidate = f"{prefix}{next_seq:03d}"
+    while Quote.query.filter(Quote.quote_no == candidate).first() is not None:
+        next_seq += 1
+        candidate = f"{prefix}{next_seq:03d}"
+    return candidate
+
+
+def _invoice_module_disabled():
+    return jsonify({"msg": "Invoice module is disabled in quote-only mode"}), 410
 
 
 def _quote_display_total_without_tax(quote: Quote) -> float:
@@ -286,17 +329,10 @@ def _serialize_customer_service_history(customer: Customer, *, quote_limit: int 
         .limit(quote_limit)
         .all()
     )
-    invoices = (
-        Invoice.query.options(selectinload(Invoice.items))
-        .filter(Invoice.customer_id == customer.id)
-        .order_by(Invoice.created_at.desc())
-        .limit(invoice_limit)
-        .all()
-    )
     return {
         "customer": customer.to_dict(),
         "quotes": [row.to_dict() for row in quotes],
-        "invoices": [row.to_dict() for row in invoices],
+        "invoices": [],
     }
 
 
@@ -862,10 +898,8 @@ def update_catalog_item(item_id: int):
 def customer_service_history(customer_id: int):
     customer = Customer.query.get_or_404(customer_id)
     quote_limit = request.args.get("quote_limit", default=50, type=int) or 50
-    invoice_limit = request.args.get("invoice_limit", default=50, type=int) or 50
     quote_limit = max(1, min(quote_limit, 200))
-    invoice_limit = max(1, min(invoice_limit, 200))
-    return jsonify(_serialize_customer_service_history(customer, quote_limit=quote_limit, invoice_limit=invoice_limit))
+    return jsonify(_serialize_customer_service_history(customer, quote_limit=quote_limit, invoice_limit=0))
 
 
 @crm_bp.get("/service-history")
@@ -888,7 +922,7 @@ def search_service_history():
     )
     result = []
     for customer in customers:
-        result.append(_serialize_customer_service_history(customer, quote_limit=10, invoice_limit=10))
+        result.append(_serialize_customer_service_history(customer, quote_limit=10, invoice_limit=0))
     return jsonify(result)
 
 
@@ -1078,7 +1112,7 @@ def create_quote():
         return expiry_err
 
     quote = Quote(
-        quote_no=(data.get("quote_no") or "").strip() or _next_doc_no("QT"),
+        quote_no=(data.get("quote_no") or "").strip() or _next_quote_no(),
         status=status,
         customer_id=customer_id,
         contact_id=contact_id,
@@ -1167,178 +1201,25 @@ def update_quote(quote_id: int):
 @crm_bp.post("/quotes/<int:quote_id>/convert-to-invoice")
 @role_required(*WRITE_ROLES)
 def convert_quote_to_invoice(quote_id: int):
-    quote = Quote.query.options(selectinload(Quote.items)).get_or_404(quote_id)
-    if not quote.items:
-        return jsonify({"msg": "Quote has no items"}), 400
-
-    invoice = Invoice(
-        invoice_no=_next_doc_no("INV"),
-        status="issued",
-        customer_id=quote.customer_id,
-        contact_id=quote.contact_id,
-        quote_id=quote.id,
-        issue_date=date.today(),
-        due_date=date.today(),
-        currency=quote.currency,
-        subtotal=quote.subtotal,
-        tax_rate=quote.tax_rate,
-        tax_amount=quote.tax_amount,
-        total_amount=quote.total_amount,
-        note=quote.note,
-        created_by_id=get_current_user_id(),
-    )
-    db.session.add(invoice)
-    db.session.flush()
-
-    for item in quote.items:
-        db.session.add(
-            InvoiceItem(
-                invoice_id=invoice.id,
-                description=item.description,
-                unit=item.unit,
-                quantity=item.quantity,
-                unit_price=item.unit_price,
-                amount=item.amount,
-                sort_order=item.sort_order,
-            )
-        )
-
-    db.session.commit()
-    invoice = Invoice.query.options(selectinload(Invoice.items)).get(invoice.id)
-    return jsonify(invoice.to_dict()), 201
+    return _invoice_module_disabled()
 
 
 @crm_bp.get("/invoices")
 @role_required(*READ_ROLES)
 def list_invoices():
-    query = Invoice.query.options(selectinload(Invoice.items)).order_by(Invoice.updated_at.desc())
-    customer_id = request.args.get("customer_id", type=int)
-    status = (request.args.get("status") or "").strip().lower()
-
-    if customer_id:
-        query = query.filter(Invoice.customer_id == customer_id)
-    if status:
-        query = query.filter(Invoice.status == status)
-
-    rows = query.limit(200).all()
-    return jsonify([row.to_dict() for row in rows])
+    return _invoice_module_disabled()
 
 
 @crm_bp.post("/invoices")
 @role_required(*WRITE_ROLES)
 def create_invoice():
-    data = request.get_json() or {}
-    customer_id = data.get("customer_id")
-    contact_id = data.get("contact_id")
-    status = (data.get("status") or "draft").strip().lower()
-
-    if status not in VALID_INVOICE_STATUS:
-        return jsonify({"msg": "Invalid invoice status"}), 400
-    if not customer_id:
-        return jsonify({"msg": "customer_id is required"}), 400
-
-    _, _, cc_err = _validate_customer_contact(customer_id, contact_id)
-    if cc_err:
-        return cc_err
-
-    items, items_err = _normalize_items(data.get("items"))
-    if items_err:
-        return items_err
-
-    issue_date, issue_err = _parse_date(data.get("issue_date"), "issue_date")
-    if issue_err:
-        return issue_err
-    due_date, due_err = _parse_date(data.get("due_date"), "due_date")
-    if due_err:
-        return due_err
-
-    invoice = Invoice(
-        invoice_no=(data.get("invoice_no") or "").strip() or _next_doc_no("INV"),
-        status=status,
-        customer_id=customer_id,
-        contact_id=contact_id,
-        quote_id=data.get("quote_id") or None,
-        issue_date=issue_date,
-        due_date=due_date,
-        currency=(data.get("currency") or "TWD").strip().upper() or "TWD",
-        note=(data.get("note") or "").strip() or None,
-        created_by_id=get_current_user_id(),
-    )
-
-    total_err = _apply_totals(invoice, items, data.get("tax_rate", 0))
-    if total_err:
-        return total_err
-
-    db.session.add(invoice)
-    db.session.flush()
-    for item in items:
-        db.session.add(InvoiceItem(invoice_id=invoice.id, **item))
-
-    db.session.commit()
-    invoice = Invoice.query.options(selectinload(Invoice.items)).get(invoice.id)
-    return jsonify(invoice.to_dict()), 201
+    return _invoice_module_disabled()
 
 
 @crm_bp.put("/invoices/<int:invoice_id>")
 @role_required(*WRITE_ROLES)
 def update_invoice(invoice_id: int):
-    invoice = Invoice.query.options(selectinload(Invoice.items)).get_or_404(invoice_id)
-    data = request.get_json() or {}
-
-    if "status" in data:
-        status = (data.get("status") or "").strip().lower()
-        if status not in VALID_INVOICE_STATUS:
-            return jsonify({"msg": "Invalid invoice status"}), 400
-        invoice.status = status
-        if status == "paid":
-            invoice.paid_at = datetime.utcnow()
-
-    next_customer_id = data.get("customer_id", invoice.customer_id)
-    next_contact_id = data.get("contact_id", invoice.contact_id)
-    _, _, cc_err = _validate_customer_contact(next_customer_id, next_contact_id)
-    if cc_err:
-        return cc_err
-    invoice.customer_id = next_customer_id
-    invoice.contact_id = next_contact_id
-
-    if "issue_date" in data:
-        parsed, err = _parse_date(data.get("issue_date"), "issue_date")
-        if err:
-            return err
-        invoice.issue_date = parsed
-
-    if "due_date" in data:
-        parsed, err = _parse_date(data.get("due_date"), "due_date")
-        if err:
-            return err
-        invoice.due_date = parsed
-
-    if "currency" in data:
-        invoice.currency = (data.get("currency") or "TWD").strip().upper() or "TWD"
-    if "note" in data:
-        invoice.note = (data.get("note") or "").strip() or None
-
-    if "items" in data:
-        items, items_err = _normalize_items(data.get("items"))
-        if items_err:
-            return items_err
-        invoice.items.clear()
-        db.session.flush()
-        for item in items:
-            db.session.add(InvoiceItem(invoice_id=invoice.id, **item))
-        total_err = _apply_totals(invoice, items, data.get("tax_rate", invoice.tax_rate))
-    elif "tax_rate" in data:
-        items = [item.to_dict() for item in invoice.items]
-        total_err = _apply_totals(invoice, items, data.get("tax_rate", invoice.tax_rate))
-    else:
-        total_err = None
-
-    if total_err:
-        return total_err
-
-    db.session.commit()
-    invoice = Invoice.query.options(selectinload(Invoice.items)).get(invoice.id)
-    return jsonify(invoice.to_dict())
+    return _invoice_module_disabled()
 
 
 @crm_bp.get("/quotes/<int:quote_id>/xlsx")
@@ -1406,22 +1287,16 @@ def quote_pdf(quote_id: int):
     )
 
 
+@crm_bp.get("/health/pdf-font")
+@role_required(*READ_ROLES)
+def crm_pdf_font_health():
+    return jsonify(_pdf_font_health_payload())
+
+
 @crm_bp.get("/invoices/<int:invoice_id>/pdf")
 @role_required(*READ_ROLES)
 def invoice_pdf(invoice_id: int):
-    invoice = Invoice.query.options(selectinload(Invoice.items)).get_or_404(invoice_id)
-    customer = Customer.query.get(invoice.customer_id)
-    contact = Contact.query.get(invoice.contact_id) if invoice.contact_id else None
-
-    # Keep invoice PDF output aligned with the quote template style and tax-exclusive totals.
-    buffer = _build_invoice_template_pdf(invoice, customer, contact)
-    filename = f"invoice-{invoice.invoice_no}.pdf"
-    return send_file(
-        buffer,
-        mimetype="application/pdf",
-        as_attachment=False,
-        download_name=filename,
-    )
+    return _invoice_module_disabled()
 
 
 @crm_bp.get("/boot")
@@ -1430,7 +1305,6 @@ def crm_bootstrap():
     customers = Customer.query.order_by(Customer.updated_at.desc()).limit(50).all()
     contacts = Contact.query.order_by(Contact.updated_at.desc()).limit(100).all()
     quotes = Quote.query.options(selectinload(Quote.items)).order_by(Quote.updated_at.desc()).limit(30).all()
-    invoices = Invoice.query.options(selectinload(Invoice.items)).order_by(Invoice.updated_at.desc()).limit(30).all()
     catalog_items = (
         ServiceCatalogItem.query.filter(ServiceCatalogItem.is_active.is_(True))
         .order_by(ServiceCatalogItem.updated_at.desc())
@@ -1443,7 +1317,7 @@ def crm_bootstrap():
             "customers": [row.to_dict() for row in customers],
             "contacts": [row.to_dict() for row in contacts],
             "quotes": [row.to_dict() for row in quotes],
-            "invoices": [row.to_dict() for row in invoices],
+            "invoices": [],
             "catalog_items": [row.to_dict() for row in catalog_items],
         }
     )
