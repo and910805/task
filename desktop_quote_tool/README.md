@@ -1,28 +1,33 @@
-# Desktop Quote Tool (Local PC)
+# 地端會計報價工具
 
-This folder provides a small desktop program for accounting staff to:
+這個資料夾提供一個可在 Windows 電腦執行的小程式，讓會計可直接：
 
-- Login to your existing TaskGo backend
-- View quote list from system
-- Open quote PDF/XLSX
-- Create new quote quickly
+- 登入 TaskGo 系統
+- 查詢報價單列表
+- 開啟報價單 PDF / XLSX
+- 建立新報價單
 
-## Why API instead of direct DB connection
+## 介面說明
 
-Use backend API as the integration layer. Do **not** connect accountant PCs directly to PostgreSQL.
+- 已改為中文介面
+- 分成「報價單查詢」與「建立報價單」兩個分頁
+- 版面有清楚區塊（系統連線 / 列表 / 明細 / 輸入表單）
 
-- Keeps DB credentials off staff PCs
-- Preserves permission checks and business rules
-- Avoids breaking changes when DB schema changes
-- Easier audit and future maintenance
+## 為什麼不用直接連資料庫
 
-## Quick Start (Windows)
+建議用 API，不要讓會計電腦直連 PostgreSQL。
 
-1. Open this folder.
-2. Double-click `run.bat`.
-3. The tool will create `.venv`, install requirements, and start.
+- 不會把資料庫帳密散佈到每台電腦
+- 可沿用你後端的權限與驗證
+- DB schema 調整時，地端工具不用大改
 
-## Manual Start
+## 快速啟動（Windows）
+
+1. 進入 `desktop_quote_tool`
+2. 雙擊 `run.bat`
+3. 會自動建立 `.venv`、安裝套件、啟動程式
+
+## 手動啟動
 
 ```powershell
 cd desktop_quote_tool
@@ -32,27 +37,27 @@ pip install -r requirements.txt
 python app.py
 ```
 
-## Login
+## 登入設定
 
-- `Base URL`: `https://task.kuanlin.pro`
-- Use existing TaskGo username/password (admin/hq_staff/site_supervisor)
+- 系統網址：`https://task.kuanlin.pro`
+- 使用既有帳號密碼（admin / hq_staff / site_supervisor）
 
-## Create Quote Item Format
+## 品項輸入格式
 
-In the `Items` box, one line = one item:
-
-```text
-Description,Unit,Quantity,UnitPrice
-```
-
-Example:
+在「建立報價單」頁面，每行一筆，格式：
 
 ```text
-Pipeline work,job,1,15000
-8P8C setup,job,1,5000
+品名,單位,數量,單價
 ```
 
-## Optional: Build EXE for accountant
+範例：
+
+```text
+管路施作,式,1,15000
+8P8C安裝,式,1,5000
+```
+
+## 打包成 EXE（可選）
 
 ```powershell
 cd desktop_quote_tool
@@ -61,4 +66,4 @@ pip install pyinstaller
 pyinstaller --onefile --windowed app.py
 ```
 
-Generated file: `desktop_quote_tool\dist\app.exe`
+輸出檔案：`desktop_quote_tool\dist\app.exe`
