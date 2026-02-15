@@ -20,6 +20,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
@@ -39,6 +40,7 @@ PDF_FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/noto/NotoSerifCJK-Regular.ttc",
     "/usr/share/fonts/opentype/source-han-sans/SourceHanSansTW-Regular.otf",
 )
+PDF_CID_FALLBACKS = ("MSung-Light", "STSong-Light")
 
 
 def _ensure_pdf_font():
@@ -50,17 +52,28 @@ def _ensure_pdf_font():
             if os.path.exists(candidate):
                 font_path = candidate
                 break
-    if not font_path or not os.path.exists(font_path):
+    if PDF_FONT_NAME in ("CustomFont", *PDF_CID_FALLBACKS):
         return
 
-    if PDF_FONT_NAME == "CustomFont":
-        return
+    if font_path and os.path.exists(font_path):
+        # Noto CJK on Debian is usually a .ttc. Try multiple subfont indexes.
+        ttc_indices = (0, 1, 2, 3) if font_path.lower().endswith(".ttc") else (0,)
+        for idx in ttc_indices:
+            try:
+                pdfmetrics.registerFont(TTFont("CustomFont", font_path, subfontIndex=idx))
+                PDF_FONT_NAME = "CustomFont"
+                return
+            except Exception:
+                continue
 
-    try:
-        pdfmetrics.registerFont(TTFont("CustomFont", font_path))
-    except Exception:
-        return
-    PDF_FONT_NAME = "CustomFont"
+    # Final fallback: use built-in CID fonts for Chinese text rendering.
+    for cid_name in PDF_CID_FALLBACKS:
+        try:
+            pdfmetrics.registerFont(UnicodeCIDFont(cid_name))
+            PDF_FONT_NAME = cid_name
+            return
+        except Exception:
+            continue
 
 
 def _parse_date(raw, field_name: str):
@@ -284,7 +297,7 @@ def _build_pdf_document(title: str, meta_rows: list[list[str]], item_rows: list[
     styles["Heading1"].fontName = PDF_FONT_NAME
 
     story = [
-        Paragraph("Lixiang Plumbing", styles["Heading1"]),
+        Paragraph("立翔水電行", styles["Heading1"]),
         Paragraph(title, styles["Normal"]),
         Spacer(1, 8 * mm),
     ]
@@ -482,7 +495,7 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
         ),
     )
 
-    rows = [["No", "Description", "Spec", "Unit", "Qty", "Unit Price", "Amount", "Remark"]]
+    rows = [["項次", "項目名稱", "規格內容", "單位", "數量", "單價", "金額", "備註"]]
     for idx in range(20):
         item = ordered_items[idx] if idx < len(ordered_items) else None
         if item is None:
@@ -504,9 +517,9 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
     total_amount = _invoice_display_total_without_tax(invoice)
     rows.append(
         [
-            "Total",
+            "合計",
             "",
-            "Amount",
+            "新台幣",
             f"{total_amount:.2f}",
             "",
             "NT$",
@@ -515,7 +528,7 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
         ]
     )
 
-    issue_date_text = invoice.issue_date.isoformat() if invoice.issue_date else date.today().isoformat()
+    issue_date_text = _to_roc_date_text(invoice.issue_date)
 
     buffer = BytesIO()
     doc = SimpleDocTemplate(
@@ -547,12 +560,12 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
     body_style.leading = 14
 
     story = [
-        Paragraph("Lixiang Plumbing", title_style),
-        Paragraph("Invoice", subtitle_style),
+        Paragraph("立翔水電行", title_style),
+        Paragraph("發票", subtitle_style),
         Spacer(1, 3 * mm),
-        Paragraph(f"To: {recipient}", body_style),
-        Paragraph(f"Date: {issue_date_text}", body_style),
-        Paragraph(f"No: {invoice.invoice_no}", body_style),
+        Paragraph(f"{recipient} 台照", body_style),
+        Paragraph(issue_date_text, body_style),
+        Paragraph(f"單號：{invoice.invoice_no}", body_style),
         Spacer(1, 4 * mm),
     ]
 
@@ -584,7 +597,7 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
     story.append(table)
 
     if invoice.note:
-        story.extend([Spacer(1, 4 * mm), Paragraph(f"Note: {invoice.note}", body_style)])
+        story.extend([Spacer(1, 4 * mm), Paragraph(f"備註：{invoice.note}", body_style)])
 
     doc.build(story)
     buffer.seek(0)
