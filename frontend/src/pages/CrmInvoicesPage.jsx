@@ -171,9 +171,22 @@ const CrmInvoicesPage = () => {
     }
   };
 
-  const openPdf = (invoiceId) => {
-    const base = (api.defaults.baseURL || '').replace(/\/$/, '');
-    window.open(`${base}/crm/invoices/${invoiceId}/pdf`, '_blank', 'noopener');
+  const openPdf = async (invoiceId) => {
+    try {
+      const { data } = await api.get(`crm/invoices/${invoiceId}/pdf`, { responseType: 'blob' });
+      const blobUrl = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }));
+      const popup = window.open(blobUrl, '_blank', 'noopener');
+      if (!popup) {
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.click();
+      }
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (err) {
+      setError(err?.networkMessage || err?.response?.data?.msg || '開啟 PDF 失敗');
+    }
   };
 
   const contactOptions = useMemo(
