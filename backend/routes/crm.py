@@ -19,6 +19,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
@@ -44,6 +45,8 @@ PDF_CID_FALLBACKS = ("MSung-Light", "STSong-Light")
 PDF_CJK_PROBE = "估價單發票台照"
 PDF_FONT_SOURCE = "default"
 PDF_FONT_PATH_USED = ""
+PDF_STAMP_ENV = "PDF_STAMP_IMAGE_PATH"
+PDF_STAMP_DEFAULT_FILENAME = "S__5505135-removebg-preview.png"
 
 
 def _font_supports_traditional_chinese(font_name: str) -> bool:
@@ -116,6 +119,50 @@ def _pdf_font_health_payload() -> dict:
         "probe_text": PDF_CJK_PROBE,
         "candidates": list(PDF_FONT_CANDIDATES),
     }
+
+
+def _resolve_pdf_stamp_path() -> str | None:
+    configured = (os.environ.get(PDF_STAMP_ENV) or "").strip()
+    if configured and os.path.exists(configured):
+        return configured
+
+    backend_dir = Path(__file__).resolve().parents[1]
+    default_path = backend_dir.parent / "data" / PDF_STAMP_DEFAULT_FILENAME
+    if default_path.exists() and default_path.is_file():
+        return str(default_path)
+    return None
+
+
+def _draw_pdf_stamp(canvas, doc):
+    stamp_path = _resolve_pdf_stamp_path()
+    if not stamp_path:
+        return
+    try:
+        image = ImageReader(stamp_path)
+        src_w, src_h = image.getSize()
+        if not src_w or not src_h:
+            return
+
+        stamp_w = 24 * mm
+        stamp_h = stamp_w * float(src_h) / float(src_w)
+
+        page_w, page_h = doc.pagesize
+        x = page_w - doc.rightMargin - stamp_w
+        y = page_h - doc.topMargin - stamp_h + 4 * mm
+
+        canvas.saveState()
+        canvas.drawImage(
+            image,
+            x,
+            y,
+            width=stamp_w,
+            height=stamp_h,
+            preserveAspectRatio=True,
+            mask="auto",
+        )
+        canvas.restoreState()
+    except Exception:
+        return
 
 
 def _parse_date(raw, field_name: str):
@@ -406,7 +453,7 @@ def _build_pdf_document(title: str, meta_rows: list[list[str]], item_rows: list[
     )
     story.append(totals_table)
 
-    doc.build(story)
+    doc.build(story, onFirstPage=_draw_pdf_stamp, onLaterPages=_draw_pdf_stamp)
     buffer.seek(0)
     return buffer
 
@@ -529,7 +576,7 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
     if quote.note:
         story.extend([Spacer(1, 4 * mm), Paragraph(f"備註：{quote.note}", body_style)])
 
-    doc.build(story)
+    doc.build(story, onFirstPage=_draw_pdf_stamp, onLaterPages=_draw_pdf_stamp)
     buffer.seek(0)
     return buffer
 
@@ -655,7 +702,7 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
     if invoice.note:
         story.extend([Spacer(1, 4 * mm), Paragraph(f"備註：{invoice.note}", body_style)])
 
-    doc.build(story)
+    doc.build(story, onFirstPage=_draw_pdf_stamp, onLaterPages=_draw_pdf_stamp)
     buffer.seek(0)
     return buffer
 

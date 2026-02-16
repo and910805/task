@@ -7,6 +7,7 @@ import tempfile
 import tkinter as tk
 import tkinter.font as tkfont
 from datetime import date
+from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any
 from urllib.parse import urljoin
@@ -16,10 +17,14 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+LOCAL_PDF_STAMP_ENV = "PDF_STAMP_IMAGE_PATH"
+LOCAL_PDF_STAMP_FILENAME = "S__5505135-removebg-preview.png"
 
 
 class APIError(Exception):
@@ -468,9 +473,21 @@ class DesktopQuoteTool:
             except Exception:
                 continue
 
+    @staticmethod
+    def _resolve_local_stamp_path() -> str | None:
+        configured = (os.environ.get(LOCAL_PDF_STAMP_ENV) or "").strip()
+        if configured and os.path.exists(configured):
+            return configured
+
+        default_path = Path(__file__).resolve().parents[1] / "data" / LOCAL_PDF_STAMP_FILENAME
+        if default_path.exists() and default_path.is_file():
+            return str(default_path)
+        return None
+
     def _build_local_pdf(self, q: dict[str, Any]) -> bytes:
         self._ensure_local_font()
         font = self.local_pdf_font
+        stamp_path = self._resolve_local_stamp_path()
         quote_no = str(q.get("quote_no") or "")
         customer = self._customer_name(q.get("customer_id"))
         issue = str(q.get("issue_date") or date.today().isoformat())
@@ -519,7 +536,35 @@ class DesktopQuoteTool:
             )
         )
         story.append(table)
-        doc.build(story)
+
+        def draw_stamp(canvas, doc_ref):
+            if not stamp_path:
+                return
+            try:
+                image = ImageReader(stamp_path)
+                src_w, src_h = image.getSize()
+                if not src_w or not src_h:
+                    return
+                stamp_w = 24 * mm
+                stamp_h = stamp_w * float(src_h) / float(src_w)
+                page_w, page_h = doc_ref.pagesize
+                x = page_w - doc_ref.rightMargin - stamp_w
+                y = page_h - doc_ref.topMargin - stamp_h + 4 * mm
+                canvas.saveState()
+                canvas.drawImage(
+                    image,
+                    x,
+                    y,
+                    width=stamp_w,
+                    height=stamp_h,
+                    preserveAspectRatio=True,
+                    mask="auto",
+                )
+                canvas.restoreState()
+            except Exception:
+                return
+
+        doc.build(story, onFirstPage=draw_stamp, onLaterPages=draw_stamp)
         with open(temp, "rb") as f:
             content = f.read()
         os.unlink(temp)
