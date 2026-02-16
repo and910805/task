@@ -25,6 +25,12 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 LOCAL_PDF_STAMP_ENV = "PDF_STAMP_IMAGE_PATH"
 LOCAL_PDF_STAMP_FILENAME = "S__5505135-removebg-preview.png"
+LOCAL_PDF_STAMP_ROTATE_ENV = "PDF_STAMP_ROTATE_DEG"
+LOCAL_PDF_STAMP_DEFAULT_ROTATE_DEG = 0.0
+LOCAL_PDF_STAMP_WIDTH_MM = 24.0
+FINANCIAL_DIGITS = ("零", "壹", "貳", "參", "肆", "伍", "陸", "柒", "捌", "玖")
+FINANCIAL_SMALL_UNITS = ("", "拾", "佰", "仟")
+FINANCIAL_BIG_UNITS = ("", "萬", "億", "兆")
 
 
 class APIError(Exception):
@@ -484,6 +490,131 @@ class DesktopQuoteTool:
             return str(default_path)
         return None
 
+    @staticmethod
+    def _resolve_local_stamp_rotate_deg() -> float:
+        raw = (os.environ.get(LOCAL_PDF_STAMP_ROTATE_ENV) or "").strip()
+        if not raw:
+            return LOCAL_PDF_STAMP_DEFAULT_ROTATE_DEG
+        try:
+            return float(raw)
+        except ValueError:
+            return LOCAL_PDF_STAMP_DEFAULT_ROTATE_DEG
+
+    @staticmethod
+    def _flowable_render_height(flowable, avail_width: float, avail_height: float) -> float:
+        width = max(avail_width, 1.0)
+        height = max(avail_height, 1.0)
+        _, wrapped_h = flowable.wrap(width, height)
+        before = float(flowable.getSpaceBefore()) if hasattr(flowable, "getSpaceBefore") else 0.0
+        after = float(flowable.getSpaceAfter()) if hasattr(flowable, "getSpaceAfter") else 0.0
+        return float(wrapped_h) + before + after
+
+    @classmethod
+    def _estimate_table_cell_center(
+        cls,
+        doc,
+        flowables_before,
+        table,
+        row_index: int,
+        col_index: int,
+        h_align: str = "LEFT",
+    ) -> tuple[float, float] | None:
+        try:
+            table.wrap(doc.width, doc.height)
+            row_heights = [float(v) for v in getattr(table, "_rowHeights", [])]
+            col_widths = [float(v) for v in getattr(table, "_colWidths", [])]
+            if not row_heights or not col_widths:
+                return None
+            if row_index < 0 or row_index >= len(row_heights):
+                return None
+            if col_index < 0 or col_index >= len(col_widths):
+                return None
+
+            used_height = 0.0
+            remaining_height = float(doc.height)
+            for flowable in flowables_before:
+                block_h = cls._flowable_render_height(flowable, float(doc.width), remaining_height)
+                used_height += block_h
+                remaining_height = max(1.0, remaining_height - block_h)
+
+            page_w, page_h = doc.pagesize
+            table_w = sum(col_widths)
+            align = (h_align or "LEFT").upper()
+            if align == "RIGHT":
+                table_left = float(doc.leftMargin) + float(doc.width) - table_w
+            elif align == "CENTER":
+                table_left = float(doc.leftMargin) + (float(doc.width) - table_w) / 2.0
+            else:
+                table_left = float(doc.leftMargin)
+
+            table_top = float(page_h) - float(doc.topMargin) - used_height
+            row_top = table_top - sum(row_heights[:row_index])
+            row_center_y = row_top - row_heights[row_index] / 2.0
+            col_left = table_left + sum(col_widths[:col_index])
+            col_center_x = col_left + col_widths[col_index] / 2.0
+            return col_center_x, row_center_y
+        except Exception:
+            return None
+
+    @staticmethod
+    def _format_amount_number(amount: float) -> str:
+        safe_amount = round(float(amount or 0), 2)
+        if safe_amount.is_integer():
+            return f"{safe_amount:,.0f}"
+        return f"{safe_amount:,.2f}"
+
+    @staticmethod
+    def _financial_group_to_text(group_value: int) -> str:
+        if group_value <= 0:
+            return ""
+        text = ""
+        zero_pending = False
+        for unit_idx in range(3, -1, -1):
+            base = 10**unit_idx
+            digit = (group_value // base) % 10
+            if digit == 0:
+                if text:
+                    zero_pending = True
+                continue
+            if zero_pending:
+                text += FINANCIAL_DIGITS[0]
+                zero_pending = False
+            text += FINANCIAL_DIGITS[digit] + FINANCIAL_SMALL_UNITS[unit_idx]
+        return text
+
+    @classmethod
+    def _financial_integer_to_text(cls, value: int) -> str:
+        if value <= 0:
+            return FINANCIAL_DIGITS[0]
+
+        groups: list[int] = []
+        while value > 0:
+            groups.append(value % 10000)
+            value //= 10000
+
+        result: list[str] = []
+        zero_between_groups = False
+        for idx in range(len(groups) - 1, -1, -1):
+            group_value = groups[idx]
+            if group_value == 0:
+                zero_between_groups = True
+                continue
+            if result and (zero_between_groups or group_value < 1000):
+                result.append(FINANCIAL_DIGITS[0])
+            zero_between_groups = False
+            result.append(cls._financial_group_to_text(group_value))
+            big_unit = FINANCIAL_BIG_UNITS[idx] if idx < len(FINANCIAL_BIG_UNITS) else ""
+            if big_unit:
+                result.append(big_unit)
+
+        return "".join(result) if result else FINANCIAL_DIGITS[0]
+
+    @classmethod
+    def _format_financial_amount_text(cls, amount: float) -> str:
+        rounded = round(float(amount or 0), 2)
+        integer_amount = int(round(rounded))
+        return f"{cls._financial_integer_to_text(integer_amount)}元整"
+
     def _build_local_pdf(self, q: dict[str, Any]) -> bytes:
         self._ensure_local_font()
         font = self.local_pdf_font
@@ -511,7 +642,9 @@ class DesktopQuoteTool:
                     ]
                 )
         total = float(q.get("subtotal") if q.get("subtotal") is not None else q.get("total_amount") or 0)
-        rows.append(["合計", "", "新台幣", f"{total:.2f}", "", "NT$", f"{total:.2f}", ""])
+        total_numeric = self._format_amount_number(total)
+        total_upper = self._format_financial_amount_text(total)
+        rows.append(["合計", "", "新台幣", total_upper, "", "NT$", total_numeric, ""])
 
         temp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="taskgo-local-quote-").name
         doc = SimpleDocTemplate(temp, pagesize=A4, leftMargin=10 * mm, rightMargin=10 * mm, topMargin=10 * mm, bottomMargin=10 * mm)
@@ -521,6 +654,11 @@ class DesktopQuoteTool:
         title.alignment = 1
         body = styles["Normal"].clone("b")
         body.fontName = font
+        signer = styles["Normal"].clone("signer")
+        signer.fontName = font
+        signer.alignment = 2
+        signer.fontSize = 12
+        signer.leading = 16
         story = [Paragraph("立翔水電行", title), Paragraph("估價單（地端繁中）", body), Spacer(1, 3 * mm), Paragraph(f"{customer} 台照", body), Paragraph(f"日期：{issue}", body), Paragraph(f"單號：{quote_no}", body), Spacer(1, 4 * mm)]
         table = Table(rows, colWidths=[12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm], repeatRows=1)
         table.setStyle(
@@ -532,10 +670,27 @@ class DesktopQuoteTool:
                     ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#9ca3af")),
                     ("ALIGN", (0, 0), (0, -1), "CENTER"),
                     ("ALIGN", (6, 0), (6, -1), "RIGHT"),
+                    ("BACKGROUND", (6, 1), (6, -1), colors.HexColor("#fff3a3")),
+                    ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#eef2ff")),
+                    ("LINEABOVE", (0, -1), (-1, -1), 1.0, colors.HexColor("#4b5563")),
+                    ("SPAN", (3, -1), (4, -1)),
+                    ("ALIGN", (3, -1), (4, -1), "LEFT"),
+                    ("FONTSIZE", (3, -1), (4, -1), 11),
+                    ("FONTSIZE", (6, -1), (6, -1), 11),
                 ]
             )
         )
+        totals_row_index = len(rows) - 1 if rows else 0
+        stamp_center = self._estimate_table_cell_center(
+            doc,
+            story,
+            table,
+            row_index=totals_row_index,
+            col_index=6,
+            h_align="LEFT",
+        )
         story.append(table)
+        story.extend([Spacer(1, 4 * mm), Paragraph("經手人：莊全立", signer)])
 
         def draw_stamp(canvas, doc_ref):
             if not stamp_path:
@@ -545,16 +700,22 @@ class DesktopQuoteTool:
                 src_w, src_h = image.getSize()
                 if not src_w or not src_h:
                     return
-                stamp_w = 24 * mm
+                stamp_w = LOCAL_PDF_STAMP_WIDTH_MM * mm
                 stamp_h = stamp_w * float(src_h) / float(src_w)
-                page_w, page_h = doc_ref.pagesize
-                x = page_w - doc_ref.rightMargin - stamp_w
-                y = page_h - doc_ref.topMargin - stamp_h + 4 * mm
+                rotate_deg = self._resolve_local_stamp_rotate_deg()
+                if stamp_center is not None:
+                    center_x, center_y = stamp_center
+                else:
+                    page_w, page_h = doc_ref.pagesize
+                    center_x = page_w - doc_ref.rightMargin - (stamp_w / 2.0)
+                    center_y = page_h - doc_ref.topMargin - (stamp_h / 2.0) + 4 * mm
                 canvas.saveState()
+                canvas.translate(center_x, center_y)
+                canvas.rotate(rotate_deg)
                 canvas.drawImage(
                     image,
-                    x,
-                    y,
+                    -stamp_w / 2.0,
+                    -stamp_h / 2.0,
                     width=stamp_w,
                     height=stamp_h,
                     preserveAspectRatio=True,

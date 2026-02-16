@@ -47,6 +47,12 @@ PDF_FONT_SOURCE = "default"
 PDF_FONT_PATH_USED = ""
 PDF_STAMP_ENV = "PDF_STAMP_IMAGE_PATH"
 PDF_STAMP_DEFAULT_FILENAME = "S__5505135-removebg-preview.png"
+PDF_STAMP_ROTATE_ENV = "PDF_STAMP_ROTATE_DEG"
+PDF_STAMP_DEFAULT_ROTATE_DEG = 0.0
+PDF_STAMP_WIDTH_MM = 24.0
+FINANCIAL_DIGITS = ("零", "壹", "貳", "參", "肆", "伍", "陸", "柒", "捌", "玖")
+FINANCIAL_SMALL_UNITS = ("", "拾", "佰", "仟")
+FINANCIAL_BIG_UNITS = ("", "萬", "億", "兆")
 
 
 def _font_supports_traditional_chinese(font_name: str) -> bool:
@@ -133,7 +139,65 @@ def _resolve_pdf_stamp_path() -> str | None:
     return None
 
 
-def _draw_pdf_stamp(canvas, doc):
+def _resolve_pdf_stamp_rotation_deg() -> float:
+    raw = (os.environ.get(PDF_STAMP_ROTATE_ENV) or "").strip()
+    if not raw:
+        return PDF_STAMP_DEFAULT_ROTATE_DEG
+    try:
+        return float(raw)
+    except ValueError:
+        return PDF_STAMP_DEFAULT_ROTATE_DEG
+
+
+def _flowable_render_height(flowable, avail_width: float, avail_height: float) -> float:
+    width = max(avail_width, 1.0)
+    height = max(avail_height, 1.0)
+    _, wrapped_h = flowable.wrap(width, height)
+    before = float(flowable.getSpaceBefore()) if hasattr(flowable, "getSpaceBefore") else 0.0
+    after = float(flowable.getSpaceAfter()) if hasattr(flowable, "getSpaceAfter") else 0.0
+    return float(wrapped_h) + before + after
+
+
+def _estimate_table_cell_center(doc, flowables_before, table, row_index: int, col_index: int, h_align: str):
+    try:
+        table.wrap(doc.width, doc.height)
+        row_heights = [float(v) for v in getattr(table, "_rowHeights", [])]
+        col_widths = [float(v) for v in getattr(table, "_colWidths", [])]
+        if not row_heights or not col_widths:
+            return None
+        if row_index < 0 or row_index >= len(row_heights):
+            return None
+        if col_index < 0 or col_index >= len(col_widths):
+            return None
+
+        used_height = 0.0
+        remaining_height = float(doc.height)
+        for flowable in flowables_before:
+            block_h = _flowable_render_height(flowable, float(doc.width), remaining_height)
+            used_height += block_h
+            remaining_height = max(1.0, remaining_height - block_h)
+
+        page_w, page_h = doc.pagesize
+        table_w = sum(col_widths)
+        align = (h_align or "LEFT").upper()
+        if align == "RIGHT":
+            table_left = float(doc.leftMargin) + float(doc.width) - table_w
+        elif align == "CENTER":
+            table_left = float(doc.leftMargin) + (float(doc.width) - table_w) / 2.0
+        else:
+            table_left = float(doc.leftMargin)
+
+        table_top = float(page_h) - float(doc.topMargin) - used_height
+        row_top = table_top - sum(row_heights[:row_index])
+        row_center_y = row_top - row_heights[row_index] / 2.0
+        col_left = table_left + sum(col_widths[:col_index])
+        col_center_x = col_left + col_widths[col_index] / 2.0
+        return col_center_x, row_center_y
+    except Exception:
+        return None
+
+
+def _draw_pdf_stamp(canvas, doc, center: tuple[float, float] | None = None):
     stamp_path = _resolve_pdf_stamp_path()
     if not stamp_path:
         return
@@ -143,18 +207,24 @@ def _draw_pdf_stamp(canvas, doc):
         if not src_w or not src_h:
             return
 
-        stamp_w = 24 * mm
+        stamp_w = PDF_STAMP_WIDTH_MM * mm
         stamp_h = stamp_w * float(src_h) / float(src_w)
+        rotate_deg = _resolve_pdf_stamp_rotation_deg()
 
-        page_w, page_h = doc.pagesize
-        x = page_w - doc.rightMargin - stamp_w
-        y = page_h - doc.topMargin - stamp_h + 4 * mm
+        if center is not None:
+            center_x, center_y = center
+        else:
+            page_w, page_h = doc.pagesize
+            center_x = page_w - doc.rightMargin - (stamp_w / 2.0)
+            center_y = page_h - doc.topMargin - (stamp_h / 2.0) + 4 * mm
 
         canvas.saveState()
+        canvas.translate(center_x, center_y)
+        canvas.rotate(rotate_deg)
         canvas.drawImage(
             image,
-            x,
-            y,
+            -stamp_w / 2.0,
+            -stamp_h / 2.0,
             width=stamp_w,
             height=stamp_h,
             preserveAspectRatio=True,
@@ -286,6 +356,65 @@ def _to_roc_date_text(value: date | None) -> str:
     value = value or date.today()
     roc_year = value.year - 1911
     return f"中華民國  {roc_year} 年 {value.month} 月 {value.day} 日"
+
+
+def _format_amount_number(amount: float) -> str:
+    safe_amount = round(float(amount or 0), 2)
+    if safe_amount.is_integer():
+        return f"{safe_amount:,.0f}"
+    return f"{safe_amount:,.2f}"
+
+
+def _financial_group_to_text(group_value: int) -> str:
+    if group_value <= 0:
+        return ""
+    text = ""
+    zero_pending = False
+    for unit_idx in range(3, -1, -1):
+        base = 10**unit_idx
+        digit = (group_value // base) % 10
+        if digit == 0:
+            if text:
+                zero_pending = True
+            continue
+        if zero_pending:
+            text += FINANCIAL_DIGITS[0]
+            zero_pending = False
+        text += FINANCIAL_DIGITS[digit] + FINANCIAL_SMALL_UNITS[unit_idx]
+    return text
+
+
+def _financial_integer_to_text(value: int) -> str:
+    if value <= 0:
+        return FINANCIAL_DIGITS[0]
+
+    groups: list[int] = []
+    while value > 0:
+        groups.append(value % 10000)
+        value //= 10000
+
+    result: list[str] = []
+    zero_between_groups = False
+    for idx in range(len(groups) - 1, -1, -1):
+        group_value = groups[idx]
+        if group_value == 0:
+            zero_between_groups = True
+            continue
+        if result and (zero_between_groups or group_value < 1000):
+            result.append(FINANCIAL_DIGITS[0])
+        zero_between_groups = False
+        result.append(_financial_group_to_text(group_value))
+        big_unit = FINANCIAL_BIG_UNITS[idx] if idx < len(FINANCIAL_BIG_UNITS) else ""
+        if big_unit:
+            result.append(big_unit)
+
+    return "".join(result) if result else FINANCIAL_DIGITS[0]
+
+
+def _format_financial_amount_text(amount: float) -> str:
+    rounded = round(float(amount or 0), 2)
+    integer_amount = int(round(rounded))
+    return f"{_financial_integer_to_text(integer_amount)}元整"
 
 
 def _find_quote_template_path() -> Path | None:
@@ -451,9 +580,19 @@ def _build_pdf_document(title: str, meta_rows: list[list[str]], item_rows: list[
             ]
         )
     )
+    totals_row_index = len(totals_rows) - 1 if totals_rows else 0
+    stamp_center = _estimate_table_cell_center(
+        doc,
+        story,
+        totals_table,
+        row_index=totals_row_index,
+        col_index=1,
+        h_align="RIGHT",
+    )
     story.append(totals_table)
 
-    doc.build(story, onFirstPage=_draw_pdf_stamp, onLaterPages=_draw_pdf_stamp)
+    stamp_drawer = lambda canvas, page_doc, center=stamp_center: _draw_pdf_stamp(canvas, page_doc, center)
+    doc.build(story, onFirstPage=stamp_drawer, onLaterPages=stamp_drawer)
     buffer.seek(0)
     return buffer
 
@@ -495,15 +634,17 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
         )
 
     total_amount = _quote_display_total_without_tax(quote)
+    total_amount_numeric = _format_amount_number(total_amount)
+    total_amount_upper = _format_financial_amount_text(total_amount)
     rows.append(
         [
             "合計",
             "",
             "新台幣",
-            f"{total_amount:.2f}",
+            total_amount_upper,
             "",
             "NT$",
-            f"{total_amount:.2f}",
+            total_amount_numeric,
             "",
         ]
     )
@@ -536,6 +677,11 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
     body_style.fontName = PDF_FONT_NAME
     body_style.fontSize = 10
     body_style.leading = 14
+    signer_style = styles["Normal"].clone("QuoteTemplateSigner")
+    signer_style.fontName = PDF_FONT_NAME
+    signer_style.alignment = 2
+    signer_style.fontSize = 12
+    signer_style.leading = 16
 
     story = [
         Paragraph("立翔水電行", title_style),
@@ -565,18 +711,34 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#9ca3af")),
                 ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#fafafa")]),
+                ("BACKGROUND", (6, 1), (6, -1), colors.HexColor("#fff3a3")),
                 ("FONTNAME", (0, -1), (-1, -1), PDF_FONT_NAME),
                 ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#eef2ff")),
                 ("LINEABOVE", (0, -1), (-1, -1), 1.0, colors.HexColor("#4b5563")),
+                ("SPAN", (3, -1), (4, -1)),
+                ("ALIGN", (3, -1), (4, -1), "LEFT"),
+                ("FONTSIZE", (3, -1), (4, -1), 11),
+                ("FONTSIZE", (6, -1), (6, -1), 11),
             ]
         )
+    )
+    totals_row_index = len(rows) - 1 if rows else 0
+    stamp_center = _estimate_table_cell_center(
+        doc,
+        story,
+        table,
+        row_index=totals_row_index,
+        col_index=6,
+        h_align="LEFT",
     )
     story.append(table)
 
     if quote.note:
         story.extend([Spacer(1, 4 * mm), Paragraph(f"備註：{quote.note}", body_style)])
+    story.extend([Spacer(1, 4 * mm), Paragraph("經手人：莊全立", signer_style)])
 
-    doc.build(story, onFirstPage=_draw_pdf_stamp, onLaterPages=_draw_pdf_stamp)
+    stamp_drawer = lambda canvas, page_doc, center=stamp_center: _draw_pdf_stamp(canvas, page_doc, center)
+    doc.build(story, onFirstPage=stamp_drawer, onLaterPages=stamp_drawer)
     buffer.seek(0)
     return buffer
 
@@ -697,12 +859,22 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
             ]
         )
     )
+    totals_row_index = len(rows) - 1 if rows else 0
+    stamp_center = _estimate_table_cell_center(
+        doc,
+        story,
+        table,
+        row_index=totals_row_index,
+        col_index=6,
+        h_align="LEFT",
+    )
     story.append(table)
 
     if invoice.note:
         story.extend([Spacer(1, 4 * mm), Paragraph(f"備註：{invoice.note}", body_style)])
 
-    doc.build(story, onFirstPage=_draw_pdf_stamp, onLaterPages=_draw_pdf_stamp)
+    stamp_drawer = lambda canvas, page_doc, center=stamp_center: _draw_pdf_stamp(canvas, page_doc, center)
+    doc.build(story, onFirstPage=stamp_drawer, onLaterPages=stamp_drawer)
     buffer.seek(0)
     return buffer
 
