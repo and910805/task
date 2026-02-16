@@ -50,6 +50,8 @@ PDF_STAMP_DEFAULT_FILENAME = "S__5505135-removebg-preview.png"
 PDF_STAMP_ROTATE_ENV = "PDF_STAMP_ROTATE_DEG"
 PDF_STAMP_DEFAULT_ROTATE_DEG = 0.0
 PDF_STAMP_WIDTH_MM = 24.0
+PDF_STAMP_Y_OFFSET_ENV = "PDF_STAMP_Y_OFFSET_MM"
+PDF_STAMP_DEFAULT_Y_OFFSET_MM = 8.0
 FINANCIAL_DIGITS = ("零", "壹", "貳", "參", "肆", "伍", "陸", "柒", "捌", "玖")
 FINANCIAL_SMALL_UNITS = ("", "拾", "佰", "仟")
 FINANCIAL_BIG_UNITS = ("", "萬", "億", "兆")
@@ -149,6 +151,16 @@ def _resolve_pdf_stamp_rotation_deg() -> float:
         return PDF_STAMP_DEFAULT_ROTATE_DEG
 
 
+def _resolve_pdf_stamp_y_offset_mm() -> float:
+    raw = (os.environ.get(PDF_STAMP_Y_OFFSET_ENV) or "").strip()
+    if not raw:
+        return PDF_STAMP_DEFAULT_Y_OFFSET_MM
+    try:
+        return float(raw)
+    except ValueError:
+        return PDF_STAMP_DEFAULT_Y_OFFSET_MM
+
+
 def _flowable_render_height(flowable, avail_width: float, avail_height: float) -> float:
     width = max(avail_width, 1.0)
     height = max(avail_height, 1.0)
@@ -210,6 +222,7 @@ def _draw_pdf_stamp(canvas, doc, center: tuple[float, float] | None = None):
         stamp_w = PDF_STAMP_WIDTH_MM * mm
         stamp_h = stamp_w * float(src_h) / float(src_w)
         rotate_deg = _resolve_pdf_stamp_rotation_deg()
+        y_offset = _resolve_pdf_stamp_y_offset_mm() * mm
 
         if center is not None:
             center_x, center_y = center
@@ -217,6 +230,7 @@ def _draw_pdf_stamp(canvas, doc, center: tuple[float, float] | None = None):
             page_w, page_h = doc.pagesize
             center_x = page_w - doc.rightMargin - (stamp_w / 2.0)
             center_y = page_h - doc.topMargin - (stamp_h / 2.0) + 4 * mm
+        center_y += y_offset
 
         canvas.saveState()
         canvas.translate(center_x, center_y)

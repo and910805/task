@@ -28,6 +28,8 @@ LOCAL_PDF_STAMP_FILENAME = "S__5505135-removebg-preview.png"
 LOCAL_PDF_STAMP_ROTATE_ENV = "PDF_STAMP_ROTATE_DEG"
 LOCAL_PDF_STAMP_DEFAULT_ROTATE_DEG = 0.0
 LOCAL_PDF_STAMP_WIDTH_MM = 24.0
+LOCAL_PDF_STAMP_Y_OFFSET_ENV = "PDF_STAMP_Y_OFFSET_MM"
+LOCAL_PDF_STAMP_DEFAULT_Y_OFFSET_MM = 8.0
 FINANCIAL_DIGITS = ("零", "壹", "貳", "參", "肆", "伍", "陸", "柒", "捌", "玖")
 FINANCIAL_SMALL_UNITS = ("", "拾", "佰", "仟")
 FINANCIAL_BIG_UNITS = ("", "萬", "億", "兆")
@@ -501,6 +503,16 @@ class DesktopQuoteTool:
             return LOCAL_PDF_STAMP_DEFAULT_ROTATE_DEG
 
     @staticmethod
+    def _resolve_local_stamp_y_offset_mm() -> float:
+        raw = (os.environ.get(LOCAL_PDF_STAMP_Y_OFFSET_ENV) or "").strip()
+        if not raw:
+            return LOCAL_PDF_STAMP_DEFAULT_Y_OFFSET_MM
+        try:
+            return float(raw)
+        except ValueError:
+            return LOCAL_PDF_STAMP_DEFAULT_Y_OFFSET_MM
+
+    @staticmethod
     def _flowable_render_height(flowable, avail_width: float, avail_height: float) -> float:
         width = max(avail_width, 1.0)
         height = max(avail_height, 1.0)
@@ -703,12 +715,14 @@ class DesktopQuoteTool:
                 stamp_w = LOCAL_PDF_STAMP_WIDTH_MM * mm
                 stamp_h = stamp_w * float(src_h) / float(src_w)
                 rotate_deg = self._resolve_local_stamp_rotate_deg()
+                y_offset = self._resolve_local_stamp_y_offset_mm() * mm
                 if stamp_center is not None:
                     center_x, center_y = stamp_center
                 else:
                     page_w, page_h = doc_ref.pagesize
                     center_x = page_w - doc_ref.rightMargin - (stamp_w / 2.0)
                     center_y = page_h - doc_ref.topMargin - (stamp_h / 2.0) + 4 * mm
+                center_y += y_offset
                 canvas.saveState()
                 canvas.translate(center_x, center_y)
                 canvas.rotate(rotate_deg)
