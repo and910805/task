@@ -1,6 +1,7 @@
 import os
 import sys
 from datetime import timedelta
+from urllib.parse import quote
 
 import click
 from sqlalchemy import text
@@ -37,6 +38,7 @@ def _normalize_database_url(db_url: str | None) -> str | None:
 
 def create_app() -> Flask:
     base_dir = os.path.dirname(os.path.abspath(__file__))
+    marketing_photo_dir = os.path.abspath(os.path.join(base_dir, "..", "data", "photo"))
 
     uploads_path = os.path.join(base_dir, "uploads")
     os.makedirs(uploads_path, exist_ok=True)
@@ -121,12 +123,31 @@ def create_app() -> Flask:
             return None
         path = request.path or "/"
         public_paths = {"/", "/login", "/favicon.ico", "/index.html", "/api/auth/login", "/api/auth/register", "/api/health"}
-        if path in public_paths or path.startswith(("/static/", "/assets/", "/api/", "/salesite/")):
+        if path in public_paths or path.startswith(("/static/", "/assets/", "/api/", "/salesite/", "/photo/")):
             return None
         try:
             verify_jwt_in_request()
         except Exception:
             return redirect("/", code=302)
+
+    @app.route("/api/public/photos")
+    def public_photo_list():
+        if not os.path.isdir(marketing_photo_dir):
+            return jsonify([]), 200
+        allowed_ext = (".png", ".jpg", ".jpeg", ".webp", ".gif")
+        photos = []
+        for filename in sorted(os.listdir(marketing_photo_dir)):
+            full_path = os.path.join(marketing_photo_dir, filename)
+            if not os.path.isfile(full_path):
+                continue
+            if not filename.lower().endswith(allowed_ext):
+                continue
+            photos.append({"name": filename, "url": f"/photo/{quote(filename)}"})
+        return jsonify(photos), 200
+
+    @app.route("/photo/<path:filename>")
+    def public_photo_file(filename: str):
+        return send_from_directory(marketing_photo_dir, filename)
 
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
@@ -137,8 +158,8 @@ def create_app() -> Flask:
         sale_dir = os.path.join(dist_dir, "salesite")
         sale_entry = os.path.join(sale_dir, "sale.html")
 
-        # Serve marketing page directly at "/" and "/sale" to avoid SPA/iframe recursion.
-        if path in ("", "sale"):
+        # Keep static sale page available at "/sale".
+        if path == "sale":
             if os.path.exists(sale_entry):
                 return send_from_directory(sale_dir, "sale.html")
 
