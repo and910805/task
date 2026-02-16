@@ -23,6 +23,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 crm_bp = Blueprint("crm", __name__)
@@ -255,6 +256,15 @@ def _draw_pdf_stamp(canvas, doc, center: tuple[float, float] | None = None):
         canvas.restoreState()
     except Exception:
         return
+
+
+def _make_pdf_stamp_canvasmaker(doc, center: tuple[float, float] | None = None):
+    class _StampCanvas(pdf_canvas.Canvas):
+        def showPage(self):
+            _draw_pdf_stamp(self, doc, center)
+            super().showPage()
+
+    return _StampCanvas
 
 
 def _parse_date(raw, field_name: str):
@@ -613,8 +623,7 @@ def _build_pdf_document(title: str, meta_rows: list[list[str]], item_rows: list[
     )
     story.append(totals_table)
 
-    stamp_drawer = lambda canvas, page_doc, center=stamp_center: _draw_pdf_stamp(canvas, page_doc, center)
-    doc.build(story, onFirstPage=stamp_drawer, onLaterPages=stamp_drawer)
+    doc.build(story, canvasmaker=_make_pdf_stamp_canvasmaker(doc, stamp_center))
     buffer.seek(0)
     return buffer
 
@@ -759,8 +768,7 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
         story.extend([Spacer(1, 4 * mm), Paragraph(f"備註：{quote.note}", body_style)])
     story.extend([Spacer(1, 4 * mm), Paragraph("經手人：莊全立", signer_style)])
 
-    stamp_drawer = lambda canvas, page_doc, center=stamp_center: _draw_pdf_stamp(canvas, page_doc, center)
-    doc.build(story, onFirstPage=stamp_drawer, onLaterPages=stamp_drawer)
+    doc.build(story, canvasmaker=_make_pdf_stamp_canvasmaker(doc, stamp_center))
     buffer.seek(0)
     return buffer
 
@@ -895,8 +903,7 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
     if invoice.note:
         story.extend([Spacer(1, 4 * mm), Paragraph(f"備註：{invoice.note}", body_style)])
 
-    stamp_drawer = lambda canvas, page_doc, center=stamp_center: _draw_pdf_stamp(canvas, page_doc, center)
-    doc.build(story, onFirstPage=stamp_drawer, onLaterPages=stamp_drawer)
+    doc.build(story, canvasmaker=_make_pdf_stamp_canvasmaker(doc, stamp_center))
     buffer.seek(0)
     return buffer
 

@@ -21,6 +21,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 LOCAL_PDF_STAMP_ENV = "PDF_STAMP_IMAGE_PATH"
@@ -705,7 +706,7 @@ class DesktopQuoteTool:
         story.append(table)
         story.extend([Spacer(1, 4 * mm), Paragraph("經手人：莊全立", signer)])
 
-        def draw_stamp(canvas, doc_ref):
+        def draw_stamp(target_canvas, doc_ref):
             if not stamp_path:
                 return
             try:
@@ -731,10 +732,10 @@ class DesktopQuoteTool:
                 max_y = float(page_h) - float(doc_ref.topMargin) - (stamp_h / 2.0)
                 center_x = max(min_x, min(max_x, float(center_x)))
                 center_y = max(min_y, min(max_y, float(center_y)))
-                canvas.saveState()
-                canvas.translate(center_x, center_y)
-                canvas.rotate(rotate_deg)
-                canvas.drawImage(
+                target_canvas.saveState()
+                target_canvas.translate(center_x, center_y)
+                target_canvas.rotate(rotate_deg)
+                target_canvas.drawImage(
                     image,
                     -stamp_w / 2.0,
                     -stamp_h / 2.0,
@@ -743,11 +744,16 @@ class DesktopQuoteTool:
                     preserveAspectRatio=True,
                     mask="auto",
                 )
-                canvas.restoreState()
+                target_canvas.restoreState()
             except Exception:
                 return
 
-        doc.build(story, onFirstPage=draw_stamp, onLaterPages=draw_stamp)
+        class StampCanvas(pdf_canvas.Canvas):
+            def showPage(self):
+                draw_stamp(self, doc)
+                super().showPage()
+
+        doc.build(story, canvasmaker=StampCanvas)
         with open(temp, "rb") as f:
             content = f.read()
         os.unlink(temp)
