@@ -5,6 +5,20 @@ import AppHeader from '../components/AppHeader.jsx';
 
 const blankItem = () => ({ description: '', unit: '式', quantity: 1, unit_price: 0 });
 const quoteDisplayAmount = (quote) => Number(quote?.subtotal ?? quote?.total_amount ?? 0).toFixed(2);
+const toDateInputValue = (value) => value.toISOString().slice(0, 10);
+const addDaysToDateInput = (dateInput, days) => {
+  if (!dateInput) return '';
+  const dateValue = new Date(`${dateInput}T00:00:00`);
+  if (Number.isNaN(dateValue.getTime())) return '';
+  dateValue.setDate(dateValue.getDate() + days);
+  return toDateInputValue(dateValue);
+};
+const defaultQuoteDateFields = () => {
+  const today = new Date();
+  const issue_date = toDateInputValue(today);
+  const expiry_date = addDaysToDateInput(issue_date, 10);
+  return { issue_date, expiry_date };
+};
 
 const CrmQuotesPage = () => {
   const [customers, setCustomers] = useState([]);
@@ -17,15 +31,14 @@ const CrmQuotesPage = () => {
   const [error, setError] = useState('');
   const [catalogPick, setCatalogPick] = useState('');
 
-  const [form, setForm] = useState({
+  const [form, setForm] = useState(() => ({
     customer_id: '',
     contact_id: '',
-    issue_date: '',
-    expiry_date: '',
+    ...defaultQuoteDateFields(),
     currency: 'TWD',
     tax_rate: 0,
     note: '',
-  });
+  }));
   const [items, setItems] = useState([blankItem()]);
 
   const loadBase = async () => {
@@ -87,6 +100,19 @@ const CrmQuotesPage = () => {
     const { name, value } = event.target;
     if (name === 'customer_id') {
       setForm((prev) => ({ ...prev, customer_id: value, contact_id: '' }));
+      return;
+    }
+    if (name === 'issue_date') {
+      setForm((prev) => {
+        const previousAutoExpiry = addDaysToDateInput(prev.issue_date, 10);
+        const nextAutoExpiry = addDaysToDateInput(value, 10);
+        const shouldSyncExpiry = !prev.expiry_date || prev.expiry_date === previousAutoExpiry;
+        return {
+          ...prev,
+          issue_date: value,
+          expiry_date: shouldSyncExpiry ? nextAutoExpiry : prev.expiry_date,
+        };
+      });
       return;
     }
     setForm((prev) => ({ ...prev, [name]: value }));
@@ -153,8 +179,7 @@ const CrmQuotesPage = () => {
       setForm({
         customer_id: '',
         contact_id: '',
-        issue_date: '',
-        expiry_date: '',
+        ...defaultQuoteDateFields(),
         currency: 'TWD',
         tax_rate: 0,
         note: '',

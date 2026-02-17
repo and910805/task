@@ -6,7 +6,7 @@ import sys
 import tempfile
 import tkinter as tk
 import tkinter.font as tkfont
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any
@@ -27,7 +27,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 LOCAL_PDF_STAMP_ENV = "PDF_STAMP_IMAGE_PATH"
 LOCAL_PDF_STAMP_FILENAME = "S__5505135-removebg-preview.png"
 LOCAL_PDF_STAMP_ROTATE_ENV = "PDF_STAMP_ROTATE_DEG"
-LOCAL_PDF_STAMP_DEFAULT_ROTATE_DEG = 0.0
+LOCAL_PDF_STAMP_DEFAULT_ROTATE_DEG = -90.0
 LOCAL_PDF_STAMP_WIDTH_MM = 24.0
 LOCAL_PDF_STAMP_Y_OFFSET_ENV = "PDF_STAMP_Y_OFFSET_MM"
 LOCAL_PDF_STAMP_DEFAULT_Y_OFFSET_MM = 4.0
@@ -141,7 +141,7 @@ class DesktopQuoteTool:
         self.customer_var = tk.StringVar()
         self.contact_var = tk.StringVar()
         self.issue_date_var = tk.StringVar(value=date.today().isoformat())
-        self.expiry_date_var = tk.StringVar()
+        self.expiry_date_var = tk.StringVar(value=(date.today() + timedelta(days=10)).isoformat())
         self.currency_var = tk.StringVar(value="TWD")
         self.note_var = tk.StringVar()
 
@@ -977,6 +977,8 @@ class DesktopQuoteTool:
         self.editing_item_index = None
         self._reset_item_input()
         self.note_var.set("")
+        self.issue_date_var.set(date.today().isoformat())
+        self.expiry_date_var.set((date.today() + timedelta(days=10)).isoformat())
         self._refresh_items()
         self.refresh_quotes()
 

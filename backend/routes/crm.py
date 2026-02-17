@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from io import BytesIO
 import os
 from pathlib import Path
@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from decorators import role_required
 from extensions import db
-from models import Contact, Customer, Invoice, InvoiceItem, Quote, QuoteItem, ServiceCatalogItem
+from models import Contact, Customer, Invoice, InvoiceItem, Quote, QuoteItem, ServiceCatalogItem, Task
 from utils import get_current_user_id
 
 from reportlab.lib import colors
@@ -49,7 +49,7 @@ PDF_FONT_PATH_USED = ""
 PDF_STAMP_ENV = "PDF_STAMP_IMAGE_PATH"
 PDF_STAMP_DEFAULT_FILENAME = "S__5505135-removebg-preview.png"
 PDF_STAMP_ROTATE_ENV = "PDF_STAMP_ROTATE_DEG"
-PDF_STAMP_DEFAULT_ROTATE_DEG = 0.0
+PDF_STAMP_DEFAULT_ROTATE_DEG = -90.0
 PDF_STAMP_WIDTH_MM = 24.0
 PDF_STAMP_Y_OFFSET_ENV = "PDF_STAMP_Y_OFFSET_MM"
 PDF_STAMP_DEFAULT_Y_OFFSET_MM = 4.0
@@ -447,6 +447,61 @@ def _format_financial_amount_text(amount: float) -> str:
     rounded = round(float(amount or 0), 2)
     integer_amount = int(round(rounded))
     return f"{_financial_integer_to_text(integer_amount)}元整"
+
+
+def _default_quote_dates(issue_date: date | None, expiry_date: date | None) -> tuple[date, date]:
+    safe_issue = issue_date or date.today()
+    safe_expiry = expiry_date or (safe_issue + timedelta(days=10))
+    return safe_issue, safe_expiry
+
+
+def _quote_task_description(quote: Quote, customer: Customer | None, contact: Contact | None) -> str:
+    ordered_items = sorted(
+        quote.items,
+        key=lambda item: (
+            item.sort_order if item.sort_order is not None else 10**9,
+            item.id if item.id is not None else 10**9,
+        ),
+    )
+    lines = [
+        f"由報價單自動建立任務：{quote.quote_no}",
+        f"客戶：{(customer.name if customer else '') or '-'}",
+        f"聯絡人：{(contact.name if contact else '') or '-'}",
+        f"報價日期：{quote.issue_date.isoformat() if quote.issue_date else '-'}",
+        f"有效日期：{quote.expiry_date.isoformat() if quote.expiry_date else '-'}",
+        f"金額：{_format_amount_number(_quote_display_total_without_tax(quote))} {quote.currency or 'TWD'}",
+        "",
+        "品項摘要：",
+    ]
+    for idx, item in enumerate(ordered_items[:6], start=1):
+        lines.append(
+            f"{idx}. {item.description or '-'} | {float(item.quantity or 0):.2f}{item.unit or ''} | {float(item.amount or 0):.2f}"
+        )
+    if quote.note:
+        lines.extend(["", f"備註：{quote.note}"])
+    return "\n".join(lines)
+
+
+def _create_task_for_quote(quote: Quote, customer: Customer | None, contact: Contact | None) -> Task:
+    issue_value = quote.issue_date or date.today()
+    expiry_value = quote.expiry_date or (issue_value + timedelta(days=10))
+    title_name = (customer.name if customer else "") or "未命名客戶"
+    title = f"報價單 {quote.quote_no} - {title_name}"[:150]
+    location = ((customer.address if customer else "") or "待確認地址").strip()[:255] or "待確認地址"
+    expected_time = datetime.combine(issue_value, time(hour=9, minute=0))
+    due_date = datetime.combine(expiry_value, time(hour=18, minute=0))
+
+    return Task(
+        title=title,
+        description=_quote_task_description(quote, customer, contact),
+        status="尚未接單",
+        location=location,
+        location_url=None,
+        expected_time=expected_time,
+        assigned_to_id=None,
+        assigned_by_id=quote.created_by_id,
+        due_date=due_date,
+    )
 
 
 def _find_quote_template_path() -> Path | None:
@@ -1344,7 +1399,7 @@ def create_quote():
 
     if not customer_id:
         return jsonify({"msg": "customer_id is required"}), 400
-    _, _, cc_err = _validate_customer_contact(customer_id, contact_id)
+    customer, contact, cc_err = _validate_customer_contact(customer_id, contact_id)
     if cc_err:
         return cc_err
 
@@ -1358,6 +1413,7 @@ def create_quote():
     expiry_date, expiry_err = _parse_date(data.get("expiry_date"), "expiry_date")
     if expiry_err:
         return expiry_err
+    issue_date, expiry_date = _default_quote_dates(issue_date, expiry_date)
 
     quote = Quote(
         quote_no=(data.get("quote_no") or "").strip() or _next_quote_no(),
@@ -1381,9 +1437,14 @@ def create_quote():
     for item in items:
         db.session.add(QuoteItem(quote_id=quote.id, **item))
 
+    db.session.flush()
+    quote = Quote.query.options(selectinload(Quote.items)).get(quote.id)
+    if quote:
+        db.session.add(_create_task_for_quote(quote, customer, contact))
+
     db.session.commit()
     quote = Quote.query.options(selectinload(Quote.items)).get(quote.id)
-    return jsonify(quote.to_dict()), 201
+    return jsonify(quote.to_dict() if quote else {}), 201
 
 
 @crm_bp.put("/quotes/<int:quote_id>")
