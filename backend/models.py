@@ -390,6 +390,7 @@ class Quote(db.Model):
     status = db.Column(db.String(32), nullable=False, default="draft")
     customer_id = db.Column(db.Integer, db.ForeignKey("customer.id"), nullable=False)
     contact_id = db.Column(db.Integer, db.ForeignKey("contact.id"), nullable=True)
+    recipient_name = db.Column(db.String(255))
     issue_date = db.Column(db.Date)
     expiry_date = db.Column(db.Date)
     currency = db.Column(db.String(8), nullable=False, default="TWD")
@@ -414,6 +415,9 @@ class Quote(db.Model):
             "status": self.status,
             "customer_id": self.customer_id,
             "contact_id": self.contact_id,
+            "customer_name": self.customer.name if self.customer else None,
+            "contact_name": self.contact.name if self.contact else None,
+            "recipient_name": self.recipient_name,
             "issue_date": self.issue_date.isoformat() if self.issue_date else None,
             "expiry_date": self.expiry_date.isoformat() if self.expiry_date else None,
             "currency": self.currency,

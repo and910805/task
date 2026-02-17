@@ -173,6 +173,7 @@ def create_app() -> Flask:
         db.create_all()
         _ensure_user_reminder_frequency_column()
         _ensure_task_location_url_column()
+        _ensure_quote_recipient_name_column()
         _ensure_quote_item_unit_column()
         _ensure_invoice_item_unit_column()
 
@@ -232,6 +233,19 @@ def _ensure_quote_item_unit_column() -> None:
     if db.engine.dialect.name != "sqlite":
         return
     db.session.execute(text("ALTER TABLE quote_item ADD COLUMN unit VARCHAR(32)"))
+    db.session.commit()
+
+
+def _ensure_quote_recipient_name_column() -> None:
+    inspector = inspect(db.engine)
+    if "quote" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("quote")}
+    if "recipient_name" in columns:
+        return
+    if db.engine.dialect.name not in {"sqlite", "postgresql"}:
+        return
+    db.session.execute(text("ALTER TABLE quote ADD COLUMN recipient_name VARCHAR(255)"))
     db.session.commit()
 
 

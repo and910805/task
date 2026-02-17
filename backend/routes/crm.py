@@ -4,6 +4,7 @@ from datetime import date, datetime, time, timedelta
 from io import BytesIO
 import os
 from pathlib import Path
+import re
 
 from flask import Blueprint, jsonify, request, send_file
 from flask_jwt_extended import jwt_required
@@ -455,6 +456,24 @@ def _default_quote_dates(issue_date: date | None, expiry_date: date | None) -> t
     return safe_issue, safe_expiry
 
 
+def _resolve_quote_recipient_display(quote: Quote, customer: Customer | None, contact: Contact | None) -> str:
+    if quote.recipient_name and quote.recipient_name.strip():
+        return quote.recipient_name.strip()
+    customer_name = (customer.name if customer else "") or ""
+    contact_name = (contact.name if contact else "") or ""
+    recipient = contact_name or customer_name
+    if customer_name and contact_name and customer_name != contact_name:
+        recipient = f"{customer_name} {contact_name}"
+    return recipient.strip()
+
+
+def _safe_download_filename_part(raw: str | None, fallback: str = "估價單") -> str:
+    source = (raw or "").strip() or fallback
+    safe = re.sub(r'[\\/:*?"<>|]+', "_", source)
+    safe = re.sub(r"\s+", "_", safe).strip("._")
+    return safe[:80] or fallback
+
+
 def _quote_task_description(quote: Quote, customer: Customer | None, contact: Contact | None) -> str:
     ordered_items = sorted(
         quote.items,
@@ -521,12 +540,7 @@ def _find_quote_template_path() -> Path | None:
 
 
 def _apply_quote_to_template_sheet(ws, quote: Quote, customer: Customer | None, contact: Contact | None) -> None:
-    customer_name = (customer.name if customer else "") or ""
-    contact_name = (contact.name if contact else "") or ""
-    if customer_name and contact_name and customer_name != contact_name:
-        recipient = f"{customer_name} {contact_name}"
-    else:
-        recipient = contact_name or customer_name or ""
+    recipient = _resolve_quote_recipient_display(quote, customer, contact)
 
     ws["D2"] = "立翔水電行"
     ws["D3"] = "估價單"
@@ -685,12 +699,7 @@ def _build_pdf_document(title: str, meta_rows: list[list[str]], item_rows: list[
 
 def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: Contact | None):
     _ensure_pdf_font()
-
-    customer_name = (customer.name if customer else "") or ""
-    contact_name = (contact.name if contact else "") or ""
-    recipient = contact_name or customer_name
-    if customer_name and contact_name and customer_name != contact_name:
-        recipient = f"{customer_name} {contact_name}"
+    recipient = _resolve_quote_recipient_display(quote, customer, contact)
 
     ordered_items = sorted(
         quote.items,
@@ -739,10 +748,10 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
-        leftMargin=10 * mm,
-        rightMargin=10 * mm,
-        topMargin=10 * mm,
-        bottomMargin=10 * mm,
+        leftMargin=12 * mm,
+        rightMargin=12 * mm,
+        topMargin=12 * mm,
+        bottomMargin=12 * mm,
         title=f"quote-{quote.quote_no}",
     )
 
@@ -750,14 +759,14 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
     title_style = styles["Heading1"].clone("QuoteTemplateTitle")
     title_style.fontName = PDF_FONT_NAME
     title_style.alignment = 1
-    title_style.fontSize = 18
-    title_style.leading = 22
+    title_style.fontSize = 22
+    title_style.leading = 28
 
     subtitle_style = styles["Normal"].clone("QuoteTemplateSubtitle")
     subtitle_style.fontName = PDF_FONT_NAME
     subtitle_style.alignment = 1
-    subtitle_style.fontSize = 12
-    subtitle_style.leading = 16
+    subtitle_style.fontSize = 13
+    subtitle_style.leading = 18
 
     body_style = styles["Normal"].clone("QuoteTemplateBody")
     body_style.fontName = PDF_FONT_NAME
@@ -782,7 +791,7 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
         rows,
         colWidths=[12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm],
         repeatRows=1,
-        hAlign="LEFT",
+        hAlign="CENTER",
     )
     table.setStyle(
         TableStyle(
@@ -1420,6 +1429,7 @@ def create_quote():
         status=status,
         customer_id=customer_id,
         contact_id=contact_id,
+        recipient_name=(data.get("recipient_name") or "").strip() or None,
         issue_date=issue_date,
         expiry_date=expiry_date,
         currency=(data.get("currency") or "TWD").strip().upper() or "TWD",
@@ -1481,6 +1491,8 @@ def update_quote(quote_id: int):
 
     if "currency" in data:
         quote.currency = (data.get("currency") or "TWD").strip().upper() or "TWD"
+    if "recipient_name" in data:
+        quote.recipient_name = (data.get("recipient_name") or "").strip() or None
     if "note" in data:
         quote.note = (data.get("note") or "").strip() or None
 
@@ -1570,7 +1582,9 @@ def quote_xlsx(quote_id: int):
     workbook.save(output)
     output.seek(0)
 
-    filename = f"quote-{quote.quote_no}.xlsx"
+    customer_part = _safe_download_filename_part(customer.name if customer else None, fallback="客戶")
+    quote_part = _safe_download_filename_part(quote.quote_no, fallback="估價單")
+    filename = f"{customer_part}-{quote_part}.xlsx"
     return send_file(
         output,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1587,7 +1601,9 @@ def quote_pdf(quote_id: int):
     contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
 
     buffer = _build_quote_template_pdf(quote, customer, contact)
-    filename = f"quote-{quote.quote_no}.pdf"
+    customer_part = _safe_download_filename_part(customer.name if customer else None, fallback="客戶")
+    quote_part = _safe_download_filename_part(quote.quote_no, fallback="估價單")
+    filename = f"{customer_part}-{quote_part}.pdf"
     return send_file(
         buffer,
         mimetype="application/pdf",

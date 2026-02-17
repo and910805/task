@@ -635,6 +635,7 @@ class DesktopQuoteTool:
         stamp_path = self._resolve_local_stamp_path()
         quote_no = str(q.get("quote_no") or "")
         customer = self._customer_name(q.get("customer_id"))
+        recipient = str(q.get("recipient_name") or customer or "")
         issue = str(q.get("issue_date") or date.today().isoformat())
         rows = [["項次", "項目名稱", "規格內容", "單位", "數量", "單價", "金額", "備註"]]
         items = q.get("items") or []
@@ -661,11 +662,13 @@ class DesktopQuoteTool:
         rows.append(["合計", "", "新台幣", total_upper, "", "NT$", total_numeric, ""])
 
         temp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="taskgo-local-quote-").name
-        doc = SimpleDocTemplate(temp, pagesize=A4, leftMargin=10 * mm, rightMargin=10 * mm, topMargin=10 * mm, bottomMargin=10 * mm)
+        doc = SimpleDocTemplate(temp, pagesize=A4, leftMargin=12 * mm, rightMargin=12 * mm, topMargin=12 * mm, bottomMargin=12 * mm)
         styles = getSampleStyleSheet()
         title = styles["Heading1"].clone("t")
         title.fontName = font
         title.alignment = 1
+        title.fontSize = 22
+        title.leading = 28
         body = styles["Normal"].clone("b")
         body.fontName = font
         signer = styles["Normal"].clone("signer")
@@ -673,8 +676,8 @@ class DesktopQuoteTool:
         signer.alignment = 2
         signer.fontSize = 12
         signer.leading = 16
-        story = [Paragraph("立翔水電行", title), Paragraph("估價單（地端繁中）", body), Spacer(1, 3 * mm), Paragraph(f"{customer} 台照", body), Paragraph(f"日期：{issue}", body), Paragraph(f"單號：{quote_no}", body), Spacer(1, 4 * mm)]
-        table = Table(rows, colWidths=[12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm], repeatRows=1)
+        story = [Paragraph("立翔水電行", title), Paragraph("估價單", body), Spacer(1, 3 * mm), Paragraph(f"{recipient} 台照", body), Paragraph(f"日期：{issue}", body), Paragraph(f"單號：{quote_no}", body), Spacer(1, 4 * mm)]
+        table = Table(rows, colWidths=[12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm], repeatRows=1, hAlign="CENTER")
         table.setStyle(
             TableStyle(
                 [
@@ -957,6 +960,7 @@ class DesktopQuoteTool:
         payload = {
             "customer_id": customer_id,
             "contact_id": self.contact_map.get(self.contact_var.get()) or None,
+            "recipient_name": (self.contact_var.get().strip() or self.customer_var.get().strip() or None),
             "issue_date": issue or None,
             "expiry_date": expiry or None,
             "currency": (self.currency_var.get() or "TWD").strip().upper(),

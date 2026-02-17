@@ -19,6 +19,19 @@ const defaultQuoteDateFields = () => {
   const expiry_date = addDaysToDateInput(issue_date, 10);
   return { issue_date, expiry_date };
 };
+const getFilenameFromDisposition = (contentDisposition) => {
+  if (!contentDisposition) return '';
+  const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(contentDisposition);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch (err) {
+      return utf8Match[1];
+    }
+  }
+  const basicMatch = /filename=\"?([^\";]+)\"?/i.exec(contentDisposition);
+  return basicMatch?.[1] || '';
+};
 
 const CrmQuotesPage = () => {
   const [customers, setCustomers] = useState([]);
@@ -34,6 +47,7 @@ const CrmQuotesPage = () => {
   const [form, setForm] = useState(() => ({
     customer_id: '',
     contact_id: '',
+    recipient_name: '',
     ...defaultQuoteDateFields(),
     currency: 'TWD',
     tax_rate: 0,
@@ -99,7 +113,22 @@ const CrmQuotesPage = () => {
   const handleChange = (event) => {
     const { name, value } = event.target;
     if (name === 'customer_id') {
-      setForm((prev) => ({ ...prev, customer_id: value, contact_id: '' }));
+      const selectedCustomer = customers.find((customer) => String(customer.id) === String(value));
+      setForm((prev) => ({
+        ...prev,
+        customer_id: value,
+        contact_id: '',
+        recipient_name: selectedCustomer?.name || prev.recipient_name || '',
+      }));
+      return;
+    }
+    if (name === 'contact_id') {
+      const selectedContact = contacts.find((contact) => String(contact.id) === String(value));
+      setForm((prev) => ({
+        ...prev,
+        contact_id: value,
+        recipient_name: selectedContact?.name || prev.recipient_name,
+      }));
       return;
     }
     if (name === 'issue_date') {
@@ -167,6 +196,7 @@ const CrmQuotesPage = () => {
         ...form,
         customer_id: Number(form.customer_id),
         contact_id: form.contact_id ? Number(form.contact_id) : null,
+        recipient_name: (form.recipient_name || '').trim() || null,
         tax_rate: Number(form.tax_rate || 0),
         items: validItems.map((item) => ({
           description: item.description.trim(),
@@ -179,6 +209,7 @@ const CrmQuotesPage = () => {
       setForm({
         customer_id: '',
         contact_id: '',
+        recipient_name: '',
         ...defaultQuoteDateFields(),
         currency: 'TWD',
         tax_rate: 0,
@@ -212,15 +243,19 @@ const CrmQuotesPage = () => {
     }
   };
 
-  const downloadXlsx = async (quoteId) => {
+  const downloadXlsx = async (quote) => {
+    const quoteId = Number(quote?.id || 0);
+    if (!quoteId) return;
     try {
-      const { data } = await api.get(`crm/quotes/${quoteId}/xlsx`, { responseType: 'blob' });
+      const response = await api.get(`crm/quotes/${quoteId}/xlsx`, { responseType: 'blob' });
+      const data = response.data;
+      const filenameFromHeader = getFilenameFromDisposition(response.headers?.['content-disposition']);
       const blobUrl = URL.createObjectURL(
         new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
       );
       const link = document.createElement('a');
       link.href = blobUrl;
-      link.download = `quote-${quoteId}.xlsx`;
+      link.download = filenameFromHeader || `${quote?.customer_name || 'customer'}-${quote?.quote_no || quoteId}.xlsx`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -261,6 +296,24 @@ const CrmQuotesPage = () => {
                   </option>
                 ))}
               </select>
+            </label>
+            <label>
+              台照顯示名稱
+              <input
+                name="recipient_name"
+                value={form.recipient_name}
+                onChange={handleChange}
+                list="crm-recipient-options"
+                placeholder="可選客戶或聯絡人"
+              />
+              <datalist id="crm-recipient-options">
+                {customers.map((customer) => (
+                  <option key={`recipient-c-${customer.id}`} value={customer.name} />
+                ))}
+                {contactOptions.map((contact) => (
+                  <option key={`recipient-p-${contact.id}`} value={contact.name} />
+                ))}
+              </datalist>
             </label>
             <label>
               報價日期
@@ -406,7 +459,7 @@ const CrmQuotesPage = () => {
                     <button type="button" className="secondary-btn" onClick={() => openPdf(quote.id)}>
                       PDF
                     </button>
-                    <button type="button" className="secondary-btn" onClick={() => downloadXlsx(quote.id)}>
+                    <button type="button" className="secondary-btn" onClick={() => downloadXlsx(quote)}>
                       XLSX
                     </button>
                   </td>
