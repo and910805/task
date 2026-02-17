@@ -1061,6 +1061,16 @@ button:disabled {
   align-items: center;
 }
 
+.report-sortable-th {
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+}
+
+.report-sortable-th:hover {
+  color: var(--accent-hover);
+}
+
 .attendance-filter-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
