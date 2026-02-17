@@ -488,13 +488,12 @@ def _quote_task_description(quote: Quote, customer: Customer | None, contact: Co
         f"聯絡人：{(contact.name if contact else '') or '-'}",
         f"報價日期：{quote.issue_date.isoformat() if quote.issue_date else '-'}",
         f"有效日期：{quote.expiry_date.isoformat() if quote.expiry_date else '-'}",
-        f"金額：{_format_amount_number(_quote_display_total_without_tax(quote))} {quote.currency or 'TWD'}",
         "",
         "品項摘要：",
     ]
     for idx, item in enumerate(ordered_items[:6], start=1):
         lines.append(
-            f"{idx}. {item.description or '-'} | {float(item.quantity or 0):.2f}{item.unit or ''} | {float(item.amount or 0):.2f}"
+            f"{idx}. {item.description or '-'} | {float(item.quantity or 0):.2f}{item.unit or ''}"
         )
     if quote.note:
         lines.extend(["", f"備註：{quote.note}"])
