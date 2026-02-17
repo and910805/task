@@ -27,7 +27,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 LOCAL_PDF_STAMP_ENV = "PDF_STAMP_IMAGE_PATH"
 LOCAL_PDF_STAMP_FILENAME = "S__5505135-removebg-preview.png"
 LOCAL_PDF_STAMP_ROTATE_ENV = "PDF_STAMP_ROTATE_DEG"
-LOCAL_PDF_STAMP_DEFAULT_ROTATE_DEG = -90.0
+LOCAL_PDF_STAMP_DEFAULT_ROTATE_DEG = 90.0
 LOCAL_PDF_STAMP_WIDTH_MM = 24.0
 LOCAL_PDF_STAMP_Y_OFFSET_ENV = "PDF_STAMP_Y_OFFSET_MM"
 LOCAL_PDF_STAMP_DEFAULT_Y_OFFSET_MM = 4.0
@@ -669,14 +669,16 @@ class DesktopQuoteTool:
         title.alignment = 1
         title.fontSize = 22
         title.leading = 28
+        title.textColor = colors.HexColor("#111827")
         body = styles["Normal"].clone("b")
         body.fontName = font
+        body.textColor = colors.HexColor("#1f2937")
         signer = styles["Normal"].clone("signer")
         signer.fontName = font
         signer.alignment = 2
         signer.fontSize = 12
         signer.leading = 16
-        story = [Paragraph("立翔水電行", title), Paragraph("估價單", body), Spacer(1, 3 * mm), Paragraph(f"{recipient} 台照", body), Paragraph(f"日期：{issue}", body), Paragraph(f"單號：{quote_no}", body), Spacer(1, 4 * mm)]
+        story = [Paragraph("立翔水電工程行", title), Paragraph("估價單", body), Spacer(1, 3 * mm), Paragraph(f"{recipient} 台照", body), Paragraph(f"日期：{issue}", body), Paragraph(f"單號：{quote_no}", body), Spacer(1, 4 * mm)]
         table = Table(rows, colWidths=[12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm], repeatRows=1, hAlign="CENTER")
         table.setStyle(
             TableStyle(

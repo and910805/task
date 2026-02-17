@@ -50,7 +50,7 @@ PDF_FONT_PATH_USED = ""
 PDF_STAMP_ENV = "PDF_STAMP_IMAGE_PATH"
 PDF_STAMP_DEFAULT_FILENAME = "S__5505135-removebg-preview.png"
 PDF_STAMP_ROTATE_ENV = "PDF_STAMP_ROTATE_DEG"
-PDF_STAMP_DEFAULT_ROTATE_DEG = -90.0
+PDF_STAMP_DEFAULT_ROTATE_DEG = 90.0
 PDF_STAMP_WIDTH_MM = 24.0
 PDF_STAMP_Y_OFFSET_ENV = "PDF_STAMP_Y_OFFSET_MM"
 PDF_STAMP_DEFAULT_Y_OFFSET_MM = 4.0
@@ -542,7 +542,7 @@ def _find_quote_template_path() -> Path | None:
 def _apply_quote_to_template_sheet(ws, quote: Quote, customer: Customer | None, contact: Contact | None) -> None:
     recipient = _resolve_quote_recipient_display(quote, customer, contact)
 
-    ws["D2"] = "立翔水電行"
+    ws["D2"] = "立翔水電工程行"
     ws["D3"] = "估價單"
     ws["D4"] = recipient
     ws["E4"] = "台照"
@@ -759,19 +759,22 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
     title_style = styles["Heading1"].clone("QuoteTemplateTitle")
     title_style.fontName = PDF_FONT_NAME
     title_style.alignment = 1
-    title_style.fontSize = 22
-    title_style.leading = 28
+    title_style.fontSize = 24
+    title_style.leading = 30
+    title_style.textColor = colors.HexColor("#111827")
 
     subtitle_style = styles["Normal"].clone("QuoteTemplateSubtitle")
     subtitle_style.fontName = PDF_FONT_NAME
     subtitle_style.alignment = 1
     subtitle_style.fontSize = 13
     subtitle_style.leading = 18
+    subtitle_style.textColor = colors.HexColor("#334155")
 
     body_style = styles["Normal"].clone("QuoteTemplateBody")
     body_style.fontName = PDF_FONT_NAME
     body_style.fontSize = 10
     body_style.leading = 14
+    body_style.textColor = colors.HexColor("#1f2937")
     signer_style = styles["Normal"].clone("QuoteTemplateSigner")
     signer_style.fontName = PDF_FONT_NAME
     signer_style.alignment = 2
@@ -779,7 +782,7 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
     signer_style.leading = 16
 
     story = [
-        Paragraph("立翔水電行", title_style),
+        Paragraph("立翔水電工程行", title_style),
         Paragraph("估價單", subtitle_style),
         Spacer(1, 3 * mm),
         Paragraph(f"{recipient} 台照", body_style),
