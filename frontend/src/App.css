@@ -1079,6 +1079,61 @@ button:disabled {
   min-width: 170px;
 }
 
+.crm-catalog-picker {
+  position: relative;
+  min-width: 320px;
+}
+
+.crm-catalog-picker input {
+  min-width: 320px;
+}
+
+.crm-catalog-results {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: var(--panel-bg);
+  box-shadow: var(--shadow-sm);
+  max-height: 260px;
+  overflow: auto;
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+}
+
+.crm-catalog-option {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.08);
+  color: inherit;
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+  display: grid;
+  gap: 2px;
+  cursor: pointer;
+}
+
+.crm-catalog-option small {
+  color: var(--muted-color);
+}
+
+.crm-catalog-option:hover,
+.crm-catalog-option.is-active {
+  border-color: var(--accent-color);
+  background: rgba(217, 119, 6, 0.12);
+}
+
+.crm-catalog-empty {
+  padding: 0.6rem 0.7rem;
+  color: var(--muted-color);
+  font-size: 0.9rem;
+}
+
 .refresh-btn {
   display: inline-flex;
   align-items: center;
@@ -2000,7 +2055,9 @@ button:disabled {
 
   .crm-search input,
   .crm-search select,
-  .crm-line-tools select {
+  .crm-line-tools select,
+  .crm-catalog-picker,
+  .crm-catalog-picker input {
     min-width: 0;
     width: 100%;
   }

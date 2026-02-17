@@ -43,6 +43,8 @@ const CrmQuotesPage = () => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [catalogPick, setCatalogPick] = useState('');
+  const [catalogQuery, setCatalogQuery] = useState('');
+  const [catalogOpen, setCatalogOpen] = useState(false);
 
   const [form, setForm] = useState(() => ({
     customer_id: '',
@@ -109,6 +111,18 @@ const CrmQuotesPage = () => {
     () => contacts.filter((contact) => String(contact.customer_id) === String(form.customer_id)),
     [contacts, form.customer_id],
   );
+  const filteredCatalogItems = useMemo(() => {
+    const normalizedQuery = (catalogQuery || '').trim().toLowerCase();
+    if (!normalizedQuery) {
+      return catalogItems.slice(0, 30);
+    }
+    return catalogItems
+      .filter((item) => {
+        const haystack = `${item.name || ''} ${item.unit || ''} ${item.note || ''}`.toLowerCase();
+        return haystack.includes(normalizedQuery);
+      })
+      .slice(0, 30);
+  }, [catalogItems, catalogQuery]);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -174,6 +188,13 @@ const CrmQuotesPage = () => {
       },
     ]);
     setCatalogPick('');
+    setCatalogQuery('');
+    setCatalogOpen(false);
+  };
+  const chooseCatalogItem = (item) => {
+    setCatalogPick(String(item.id));
+    setCatalogQuery(item.name || '');
+    setCatalogOpen(true);
   };
 
   const submitQuote = async (event) => {
@@ -341,14 +362,50 @@ const CrmQuotesPage = () => {
             <div className="panel-header">
               <h3>品項</h3>
               <div className="crm-line-tools">
-                <select value={catalogPick} onChange={(event) => setCatalogPick(event.target.value)}>
-                  <option value="">從價目資料庫加入</option>
-                  {catalogItems.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}（{item.unit} / {Number(item.unit_price || 0).toFixed(0)}）
-                    </option>
-                  ))}
-                </select>
+                <div className="crm-catalog-picker">
+                  <input
+                    value={catalogQuery}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setCatalogQuery(next);
+                      setCatalogOpen(true);
+                      if (!next.trim()) {
+                        setCatalogPick('');
+                      }
+                    }}
+                    onFocus={() => setCatalogOpen(true)}
+                    onBlur={() => window.setTimeout(() => setCatalogOpen(false), 120)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        if (filteredCatalogItems[0]) {
+                          chooseCatalogItem(filteredCatalogItems[0]);
+                        }
+                      }
+                    }}
+                    placeholder="搜尋價目資料庫（例：網）"
+                  />
+                  {catalogOpen ? (
+                    <div className="crm-catalog-results">
+                      {filteredCatalogItems.length > 0 ? (
+                        filteredCatalogItems.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            className={`crm-catalog-option ${String(item.id) === String(catalogPick) ? 'is-active' : ''}`}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => chooseCatalogItem(item)}
+                          >
+                            <span>{item.name}</span>
+                            <small>{item.unit || '式'} / {Number(item.unit_price || 0).toFixed(0)}</small>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="crm-catalog-empty">找不到符合的品項</div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
                 <button type="button" className="secondary-btn" onClick={addFromCatalog} disabled={!catalogPick}>
                   帶入品項
                 </button>
