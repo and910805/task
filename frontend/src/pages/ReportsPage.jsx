@@ -173,7 +173,7 @@ const ReportsPage = () => {
       total,
       latest,
     };
-  }, [focusCustomerRows, focusCustomerId]);
+  }, [focusedCustomerRows, focusCustomerId]);
 
   const onSort = (key) => {
     setSortBy((prev) => {

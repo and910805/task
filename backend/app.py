@@ -7,9 +7,8 @@ import click
 from sqlalchemy import text
 from sqlalchemy import inspect
 
-from flask import Flask, jsonify, redirect, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
-from flask_jwt_extended import verify_jwt_in_request
 from werkzeug.middleware.proxy_fix import ProxyFix
 # Ensure local imports work when gunicorn --chdir backend
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -122,13 +121,11 @@ def create_app() -> Flask:
         if request.method == "OPTIONS":
             return None
         path = request.path or "/"
-        public_paths = {"/", "/login", "/favicon.ico", "/index.html", "/api/auth/login", "/api/auth/register", "/api/health"}
-        if path in public_paths or path.startswith(("/static/", "/assets/", "/api/", "/salesite/", "/photo/")):
+        if path.startswith(("/static/", "/assets/", "/api/", "/salesite/", "/photo/")):
             return None
-        try:
-            verify_jwt_in_request()
-        except Exception:
-            return redirect("/", code=302)
+        # Let SPA routes (e.g. /reports) be served directly, then rely on
+        # frontend PrivateRoute + API jwt_required checks for auth.
+        return None
 
     @app.route("/api/public/photos")
     def public_photo_list():

@@ -635,7 +635,7 @@ class DesktopQuoteTool:
         stamp_path = self._resolve_local_stamp_path()
         quote_no = str(q.get("quote_no") or "")
         customer = self._customer_name(q.get("customer_id"))
-        recipient = str(q.get("recipient_name") or customer or "")
+        recipient = str(customer or q.get("recipient_name") or "")
         issue = str(q.get("issue_date") or date.today().isoformat())
         rows = [["項次", "項目名稱", "規格內容", "單位", "數量", "單價", "金額", "備註"]]
         items = q.get("items") or []

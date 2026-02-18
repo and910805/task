@@ -457,14 +457,13 @@ def _default_quote_dates(issue_date: date | None, expiry_date: date | None) -> t
 
 
 def _resolve_quote_recipient_display(quote: Quote, customer: Customer | None, contact: Contact | None) -> str:
+    customer_name = (customer.name if customer else "") or ""
+    if customer_name.strip():
+        return customer_name.strip()
     if quote.recipient_name and quote.recipient_name.strip():
         return quote.recipient_name.strip()
-    customer_name = (customer.name if customer else "") or ""
     contact_name = (contact.name if contact else "") or ""
-    recipient = contact_name or customer_name
-    if customer_name and contact_name and customer_name != contact_name:
-        recipient = f"{customer_name} {contact_name}"
-    return recipient.strip()
+    return contact_name.strip()
 
 
 def _safe_download_filename_part(raw: str | None, fallback: str = "估價單") -> str:
