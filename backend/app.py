@@ -2,7 +2,7 @@ import os
 import sys
 import time
 from datetime import timedelta
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 import click
 from sqlalchemy import text
@@ -37,6 +37,40 @@ def _normalize_database_url(db_url: str | None) -> str | None:
     return db_url
 
 
+def _db_url_query_value(db_url: str | None, key: str) -> str | None:
+    if not db_url:
+        return None
+    parsed = urlsplit(db_url)
+    values = parse_qs(parsed.query).get(key) or []
+    return values[0] if values else None
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = (os.environ.get(name) or "").strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _should_init_db_on_startup(database_url: str | None) -> bool:
+    # PostgreSQL in managed environments should avoid import/startup-time DDL by default.
+    if database_url and database_url.startswith("postgresql+"):
+        return _env_bool("INIT_DB_ON_STARTUP", default=False)
+    return _env_bool("INIT_DB_ON_STARTUP", default=True)
+
+
 def create_app() -> Flask:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     marketing_photo_dir = os.path.abspath(os.path.join(base_dir, "..", "data", "photo"))
@@ -66,11 +100,13 @@ def create_app() -> Flask:
     cors_origins = _parse_cors_origins(os.environ.get("CORS_ORIGINS"))
     engine_options: dict[str, object] = {"pool_pre_ping": True, "pool_recycle": 1800}
     if database_url and database_url.startswith("postgresql+"):
+        engine_options["pool_size"] = _env_int("DB_POOL_SIZE", 5)
+        engine_options["max_overflow"] = _env_int("DB_MAX_OVERFLOW", 10)
         connect_args: dict[str, object] = {}
-        sslmode = os.environ.get("PGSSLMODE")
+        sslmode = os.environ.get("PGSSLMODE") or _db_url_query_value(database_url, "sslmode") or "require"
         if sslmode:
             connect_args["sslmode"] = sslmode
-        connect_timeout = os.environ.get("DB_CONNECT_TIMEOUT")
+        connect_timeout = os.environ.get("DB_CONNECT_TIMEOUT", "10")
         if connect_timeout:
             try:
                 connect_args["connect_timeout"] = int(connect_timeout)
@@ -131,7 +167,13 @@ def create_app() -> Flask:
 
     @app.route("/api/health")
     def health_check():
-        return jsonify({"status": "ok"}), 200
+        try:
+            db.session.execute(text("SELECT 1"))
+            db.session.remove()
+            return jsonify({"status": "ok", "database": "ok"}), 200
+        except SQLAlchemyError as exc:
+            db.session.remove()
+            return jsonify({"status": "degraded", "database": "error", "error": str(exc)}), 503
 
     @app.before_request
     def _check_auth_and_redirect():
@@ -184,13 +226,16 @@ def create_app() -> Flask:
 
     with app.app_context():
         from models import Attachment, RoleLabel, ServiceCatalogItem, SiteLocation, SiteSetting, Task, TaskUpdate, User
-        _wait_for_database_ready(app)
-        db.create_all()
-        _ensure_user_reminder_frequency_column()
-        _ensure_task_location_url_column()
-        _ensure_quote_recipient_name_column()
-        _ensure_quote_item_unit_column()
-        _ensure_invoice_item_unit_column()
+        if _should_init_db_on_startup(database_url):
+            _wait_for_database_ready(app)
+            db.create_all()
+            _ensure_user_reminder_frequency_column()
+            _ensure_task_location_url_column()
+            _ensure_quote_recipient_name_column()
+            _ensure_quote_item_unit_column()
+            _ensure_invoice_item_unit_column()
+        else:
+            app.logger.info("Skip startup DB schema init (INIT_DB_ON_STARTUP is disabled).")
 
 
     @app.cli.command("send-due-reminders")
@@ -200,6 +245,18 @@ def create_app() -> Flask:
 
         count = run_due_task_reminders()
         click.echo(f"Sent {count} reminder notifications.")
+
+    @app.cli.command("init-db")
+    def init_db_command() -> None:
+        """Initialize or update database schema manually."""
+        _wait_for_database_ready(app)
+        db.create_all()
+        _ensure_user_reminder_frequency_column()
+        _ensure_task_location_url_column()
+        _ensure_quote_recipient_name_column()
+        _ensure_quote_item_unit_column()
+        _ensure_invoice_item_unit_column()
+        click.echo("Database schema initialized.")
 
     return app
 
