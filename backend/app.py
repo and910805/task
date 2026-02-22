@@ -1,11 +1,13 @@
 import os
 import sys
+import time
 from datetime import timedelta
 from urllib.parse import quote
 
 import click
 from sqlalchemy import text
 from sqlalchemy import inspect
+from sqlalchemy.exc import SQLAlchemyError
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -62,12 +64,27 @@ def create_app() -> Flask:
     jwt_secret = os.environ.get("JWT_SECRET_KEY", secret_key)
     database_url = _normalize_database_url(os.environ.get("DATABASE_URL"))
     cors_origins = _parse_cors_origins(os.environ.get("CORS_ORIGINS"))
+    engine_options: dict[str, object] = {"pool_pre_ping": True, "pool_recycle": 1800}
+    if database_url and database_url.startswith("postgresql+"):
+        connect_args: dict[str, object] = {}
+        sslmode = os.environ.get("PGSSLMODE")
+        if sslmode:
+            connect_args["sslmode"] = sslmode
+        connect_timeout = os.environ.get("DB_CONNECT_TIMEOUT")
+        if connect_timeout:
+            try:
+                connect_args["connect_timeout"] = int(connect_timeout)
+            except ValueError:
+                pass
+        if connect_args:
+            engine_options["connect_args"] = connect_args
 
     app.config.update(
         SECRET_KEY=secret_key,
         JWT_SECRET_KEY=jwt_secret,
         SQLALCHEMY_DATABASE_URI=database_url or f"sqlite:///{database_path}",
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        SQLALCHEMY_ENGINE_OPTIONS=engine_options,
         JWT_ACCESS_TOKEN_EXPIRES=timedelta(hours=1),
         JWT_TOKEN_LOCATION=["headers"],
         UPLOAD_FOLDER=uploads_path,
@@ -167,6 +184,7 @@ def create_app() -> Flask:
 
     with app.app_context():
         from models import Attachment, RoleLabel, ServiceCatalogItem, SiteLocation, SiteSetting, Task, TaskUpdate, User
+        _wait_for_database_ready(app)
         db.create_all()
         _ensure_user_reminder_frequency_column()
         _ensure_task_location_url_column()
@@ -184,6 +202,26 @@ def create_app() -> Flask:
         click.echo(f"Sent {count} reminder notifications.")
 
     return app
+
+
+def _wait_for_database_ready(app: Flask, *, max_attempts: int = 12, interval_seconds: int = 5) -> None:
+    for attempt in range(1, max_attempts + 1):
+        try:
+            db.session.execute(text("SELECT 1"))
+            db.session.remove()
+            return
+        except SQLAlchemyError as exc:
+            db.session.remove()
+            if attempt == max_attempts:
+                raise
+            app.logger.warning(
+                "Database not ready (attempt %s/%s): %s. Retrying in %ss",
+                attempt,
+                max_attempts,
+                exc,
+                interval_seconds,
+            )
+            time.sleep(interval_seconds)
 
 
 def _ensure_user_reminder_frequency_column() -> None:
