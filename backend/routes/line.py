@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from typing import Optional
+from urllib.parse import parse_qs
 
 from flask import Blueprint, current_app, jsonify, request
 from werkzeug.datastructures import FileStorage
@@ -13,6 +14,7 @@ from extensions import db
 from models import SiteSetting, User, Task, TaskUpdate
 from services.attachments import create_file_attachment
 from services.line_messaging import (
+    reply_messages,
     reply_text,
     verify_signature,
     get_message_content_bytes,
@@ -41,6 +43,205 @@ def _parse_dt(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value.rstrip("Z"))
     except Exception:
         return None
+
+
+def _week_range_dates(now: datetime | None = None) -> tuple[datetime, datetime]:
+    base = now or datetime.utcnow()
+    start = datetime(base.year, base.month, base.day) - timedelta(days=base.weekday())
+    end_exclusive = start + timedelta(days=7)
+    return start, end_exclusive
+
+
+def _fmt_line_dt_short(value: datetime | None) -> str:
+    if not value:
+        return "--:--"
+    try:
+        return value.strftime("%m/%d %H:%M")
+    except Exception:
+        return str(value)
+
+
+def _build_week_schedule_flex(tasks: list[Task], week_start: datetime) -> dict:
+    day_keys = [week_start + timedelta(days=i) for i in range(7)]
+    grouped: dict[str, list[Task]] = {d.strftime("%Y-%m-%d"): [] for d in day_keys}
+
+    for task in tasks:
+        dt = getattr(task, "expected_time", None) or getattr(task, "due_date", None)
+        if not dt:
+            continue
+        key = dt.strftime("%Y-%m-%d")
+        if key in grouped:
+            grouped[key].append(task)
+
+    day_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    day_boxes: list[dict] = []
+    for idx, day_dt in enumerate(day_keys):
+        day_key = day_dt.strftime("%Y-%m-%d")
+        entries = sorted(
+            grouped.get(day_key, []),
+            key=lambda t: (
+                getattr(t, "expected_time", None) or getattr(t, "due_date", None) or datetime.max,
+                getattr(t, "id", 0),
+            ),
+        )
+
+        contents: list[dict] = [
+            {
+                "type": "box",
+                "layout": "baseline",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": day_labels[idx],
+                        "size": "sm",
+                        "weight": "bold",
+                        "color": "#111827",
+                        "flex": 2,
+                    },
+                    {
+                        "type": "text",
+                        "text": day_dt.strftime("%m/%d"),
+                        "size": "xs",
+                        "color": "#6B7280",
+                        "align": "end",
+                        "flex": 3,
+                    },
+                ],
+            }
+        ]
+
+        if not entries:
+            contents.append(
+                {
+                    "type": "text",
+                    "text": "No tasks",
+                    "size": "xs",
+                    "color": "#9CA3AF",
+                    "wrap": True,
+                    "margin": "xs",
+                }
+            )
+        else:
+            for task in entries[:2]:
+                when = _fmt_line_dt_short(getattr(task, "expected_time", None) or getattr(task, "due_date", None))
+                status = str(getattr(task, "status", "") or "")
+                title = str(getattr(task, "title", "") or "").strip() or "(untitled)"
+                line = f"{when} [{status}] {title}"
+                if len(line) > 42:
+                    line = line[:41] + "…"
+                contents.append(
+                    {
+                        "type": "text",
+                        "text": line,
+                        "size": "xs",
+                        "color": "#1F2937",
+                        "wrap": True,
+                        "margin": "xs",
+                    }
+                )
+            if len(entries) > 2:
+                contents.append(
+                    {
+                        "type": "text",
+                        "text": f"+{len(entries) - 2} more",
+                        "size": "xs",
+                        "color": "#10B981",
+                        "margin": "xs",
+                    }
+                )
+
+        day_boxes.append(
+            {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "xs",
+                "paddingAll": "8px",
+                "backgroundColor": "#F9FAFB",
+                "cornerRadius": "8px",
+                "margin": "sm",
+                "contents": contents,
+            }
+        )
+
+    range_text = f"{week_start.strftime('%m/%d')} - {(week_start + timedelta(days=6)).strftime('%m/%d')}"
+    footer_contents: list[dict] = []
+    base = (_cfg("APP_BASE_URL") or "").strip().rstrip("/")
+    if base:
+        footer_contents.append(
+            {
+                "type": "button",
+                "style": "link",
+                "height": "sm",
+                "action": {"type": "uri", "label": "Open Web", "uri": f"{base}/tasks"},
+            }
+        )
+
+    return {
+        "type": "flex",
+        "altText": f"This week schedule {range_text}",
+        "contents": {
+            "type": "bubble",
+            "size": "giga",
+            "header": {
+                "type": "box",
+                "layout": "vertical",
+                "paddingAll": "12px",
+                "backgroundColor": "#EEF2FF",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": "This Week Schedule",
+                        "weight": "bold",
+                        "size": "md",
+                        "color": "#111827",
+                    },
+                    {
+                        "type": "text",
+                        "text": range_text,
+                        "size": "xs",
+                        "color": "#4B5563",
+                        "margin": "xs",
+                    },
+                ],
+            },
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "none",
+                "contents": day_boxes,
+            },
+            **({"footer": {"type": "box", "layout": "vertical", "contents": footer_contents}} if footer_contents else {}),
+        },
+    }
+
+
+def _handle_week_schedule(line_user_id: str, reply_token: str) -> None:
+    user = _get_bound_user(line_user_id)
+    if user is None:
+        reply_text(reply_token, "Please bind your account first. Use: bind <code>")
+        return
+
+    week_start, week_end_exclusive = _week_range_dates()
+    tasks = (
+        Task.query.filter(
+            ((Task.assigned_to_id == user.id) | Task.assignees.any(user_id=user.id))
+            & (Task.expected_time.isnot(None))
+            & (Task.expected_time >= week_start)
+            & (Task.expected_time < week_end_exclusive)
+        )
+        .order_by(Task.expected_time.asc(), Task.id.asc())
+        .all()
+    )
+
+    if not tasks:
+        reply_text(
+            reply_token,
+            f"This week ({week_start.strftime('%m/%d')}-{(week_start + timedelta(days=6)).strftime('%m/%d')}) has no scheduled tasks.",
+        )
+        return
+
+    if not reply_messages(reply_token, [_build_week_schedule_flex(tasks, week_start)]):
+        reply_text(reply_token, "Unable to render weekly schedule card. Try again later.")
 
 
 def _help_text() -> str:
@@ -118,6 +319,172 @@ def _worker_can_access_task(task: Task, user_id: int) -> bool:
     return False
 
 
+def _parse_postback_data(raw: str | None) -> dict[str, str]:
+    if not raw:
+        return {}
+    try:
+        parsed = parse_qs(str(raw), keep_blank_values=False)
+    except Exception:
+        return {}
+    data: dict[str, str] = {}
+    for key, values in parsed.items():
+        if not values:
+            continue
+        data[str(key)] = str(values[0])
+    return data
+
+
+def _line_time_start(task: Task, user: User) -> tuple[bool, str]:
+    if not _worker_can_access_task(task, user.id):
+        return False, "You do not have access to this task."
+
+    active_entry = (
+        TaskUpdate.query.filter_by(task_id=task.id, user_id=user.id)
+        .filter(TaskUpdate.start_time.isnot(None), TaskUpdate.end_time.is_(None))
+        .order_by(TaskUpdate.created_at.desc())
+        .first()
+    )
+    if active_entry:
+        return False, f"Task #{task.id}: timer is already running."
+
+    now = datetime.utcnow()
+    entry = TaskUpdate(
+        task_id=task.id,
+        user_id=user.id,
+        start_time=now,
+        status="進行中",
+    )
+    task.updated_at = now
+    db.session.add(entry)
+    db.session.commit()
+    return True, f"Task #{task.id}: timer started."
+
+
+def _line_time_stop(task: Task, user: User) -> tuple[bool, str]:
+    if not _worker_can_access_task(task, user.id):
+        return False, "You do not have access to this task."
+
+    active_entry = (
+        TaskUpdate.query.filter_by(task_id=task.id, user_id=user.id)
+        .filter(TaskUpdate.start_time.isnot(None), TaskUpdate.end_time.is_(None))
+        .order_by(TaskUpdate.created_at.desc())
+        .first()
+    )
+    if not active_entry:
+        return False, f"Task #{task.id}: no running timer found."
+
+    now = datetime.utcnow()
+    active_entry.end_time = now
+    if active_entry.start_time:
+        delta = now - active_entry.start_time
+        active_entry.work_hours = round(delta.total_seconds() / 3600, 2)
+    else:
+        active_entry.work_hours = 0.0
+    task.updated_at = now
+    db.session.commit()
+    hours = active_entry.work_hours if active_entry.work_hours is not None else 0.0
+    return True, f"Task #{task.id}: timer stopped ({hours:.2f}h)."
+
+
+def _line_accept_task(task: Task, user: User) -> tuple[bool, str]:
+    if not _worker_can_access_task(task, user.id):
+        return False, "你沒有此任務的權限。"
+
+    now = datetime.utcnow()
+    db.session.add(
+        TaskUpdate(
+            task_id=task.id,
+            user_id=user.id,
+            status=None,
+            note="LINE 已接受任務",
+        )
+    )
+    task.updated_at = now
+    db.session.commit()
+    return True, f"已接受任務 #{task.id}。"
+
+
+def _line_reject_task(task: Task, user: User, reason: str) -> tuple[bool, str]:
+    if not _worker_can_access_task(task, user.id):
+        return False, "你沒有此任務的權限。"
+
+    clean_reason = (reason or "").strip()
+    if not clean_reason:
+        return False, "請輸入無法接單原因。"
+
+    now = datetime.utcnow()
+    db.session.add(
+        TaskUpdate(
+            task_id=task.id,
+            user_id=user.id,
+            status=None,
+            note=f"LINE 無法接單：{clean_reason}",
+        )
+    )
+    task.updated_at = now
+    db.session.commit()
+    return True, f"已回報無法接單（任務 #{task.id}）。"
+
+
+def _handle_postback(line_user_id: str, reply_token: str, raw_data: str | None) -> None:
+    user = _get_bound_user(line_user_id)
+    if user is None:
+        reply_text(reply_token, "Please bind your account first. Use: bind <code>")
+        return
+
+    data = _parse_postback_data(raw_data)
+    action = (data.get("a") or "").strip().lower()
+    task_id_raw = (data.get("t") or "").strip()
+
+    if action in {"accept", "task_accept", "reject_prompt", "task_start", "time_start", "time_stop"}:
+        if not task_id_raw.isdigit():
+            reply_text(reply_token, "Invalid task id.")
+            return
+        task_id = int(task_id_raw)
+        task = Task.query.get(task_id)
+        if task is None:
+            reply_text(reply_token, "Task not found.")
+            return
+
+        if action == "accept":
+            _handle_text_command(line_user_id, reply_token, f"accept {task_id}")
+            return
+        if action == "task_accept":
+            _ok, msg = _line_accept_task(task, user)
+            reply_text(reply_token, msg)
+            return
+        if action == "reject_prompt":
+            if not _worker_can_access_task(task, user.id):
+                reply_text(reply_token, "你沒有此任務的權限。")
+                return
+            _set_pending(
+                line_user_id,
+                {
+                    "type": "reject_reason",
+                    "task_id": task_id,
+                    "created_at": datetime.utcnow().isoformat(),
+                },
+            )
+            reply_text(
+                reply_token,
+                f"請輸入無法接單原因（任務 #{task_id}）。\n例如：臨時有案場 / 距離太遠 / 時間衝突\n輸入 取消 可取消。",
+            )
+            return
+        if action == "task_start":
+            _handle_text_command(line_user_id, reply_token, f"start {task_id}")
+            return
+        if action == "time_start":
+            _ok, msg = _line_time_start(task, user)
+            reply_text(reply_token, msg)
+            return
+        if action == "time_stop":
+            _ok, msg = _line_time_stop(task, user)
+            reply_text(reply_token, msg)
+            return
+
+    reply_text(reply_token, _help_text())
+
+
 def _handle_bind(line_user_id: str, reply_token: str, code: str) -> None:
     key = f"line_bind:{code}"
     record = SiteSetting.get_record(key)
@@ -171,6 +538,41 @@ def _handle_text_command(line_user_id: str, reply_token: str, text: str) -> None
         return
 
     t = (text or "").strip()
+    lower_t = t.lower()
+
+    pending = _get_pending(line_user_id)
+    if pending and pending.get("type") == "reject_reason":
+        if lower_t in {"cancel", "取消"}:
+            _clear_pending(line_user_id)
+            reply_text(reply_token, "已取消無法接單回報。")
+            return
+
+        task_id = pending.get("task_id")
+        if not isinstance(task_id, int):
+            try:
+                task_id = int(task_id)
+            except Exception:
+                task_id = None
+        if not task_id:
+            _clear_pending(line_user_id)
+            reply_text(reply_token, "任務資訊已失效，請重新操作。")
+            return
+
+        task = Task.query.get(task_id)
+        if task is None:
+            _clear_pending(line_user_id)
+            reply_text(reply_token, f"任務 #{task_id} 不存在。")
+            return
+
+        ok, msg = _line_reject_task(task, user, t)
+        if ok:
+            _clear_pending(line_user_id)
+        reply_text(reply_token, msg)
+        return
+
+    if lower_t in {"week", "calendar", "thisweek", "this-week"} or t in {"本週", "行事曆", "本周"}:
+        _handle_week_schedule(line_user_id, reply_token)
+        return
 
     if t == "tasks":
         tasks = (
@@ -378,6 +780,11 @@ def webhook():
             etype = event.get("type")
             if etype == "follow":
                 reply_text(reply_token, _help_text())
+                continue
+
+            if etype == "postback":
+                postback = event.get("postback") or {}
+                _handle_postback(line_user_id, reply_token, postback.get("data"))
                 continue
 
             if etype != "message":

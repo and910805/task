@@ -9,13 +9,15 @@ import smtplib
 import ssl
 import time
 from concurrent.futures import ThreadPoolExecutor
+from email.utils import formatdate, make_msgid, parseaddr
+from html import escape as html_escape
 from email.message import EmailMessage
 from typing import Callable, Iterable, Sequence
 
 import requests
 from flask import current_app
 
-from services.line_messaging import has_line_bot_config, push_text
+from services.line_messaging import has_line_bot_config, push_task_action_flex, push_text
 
 LINE_NOTIFY_ENDPOINT = "https://notify-api.line.me/api/notify"
 
@@ -305,6 +307,7 @@ def _get_email_config() -> dict[str, str | int | None]:
       - EMAIL_SMTP_HOST
       - EMAIL_SENDER
     Optional:
+      - EMAIL_ENVELOPE_SENDER (MAIL FROM / bounce address)
       - EMAIL_SMTP_PORT (default 587)
       - EMAIL_SMTP_USERNAME / EMAIL_SMTP_PASSWORD
       - EMAIL_SMTP_USE_TLS (STARTTLS, default true)
@@ -325,6 +328,8 @@ def _get_email_config() -> dict[str, str | int | None]:
         "username": env("EMAIL_SMTP_USERNAME") or cfg_get("EMAIL_SMTP_USERNAME"),
         "password": env("EMAIL_SMTP_PASSWORD") or cfg_get("EMAIL_SMTP_PASSWORD"),
         "sender": env("EMAIL_SENDER") or cfg_get("EMAIL_SENDER"),
+        "envelope_sender": env("EMAIL_ENVELOPE_SENDER")
+        or cfg_get("EMAIL_ENVELOPE_SENDER"),
         "reply_to": env("EMAIL_REPLY_TO") or cfg_get("EMAIL_REPLY_TO"),
         "use_tls": env("EMAIL_SMTP_USE_TLS") or cfg_get("EMAIL_SMTP_USE_TLS", "true"),
         "use_ssl": env("EMAIL_SMTP_USE_SSL") or cfg_get("EMAIL_SMTP_USE_SSL", "false"),
@@ -353,6 +358,16 @@ def _int(v: object, default: int) -> int:
         return default
 
 
+def _looks_like_email_address(value: str | None) -> bool:
+    if not value:
+        return False
+    addr = parseaddr(str(value).strip())[1]
+    if not addr or "@" not in addr:
+        return False
+    domain = addr.rsplit("@", 1)[-1]
+    return "." in domain
+
+
 def _get_email_pool() -> ThreadPoolExecutor:
     global _EMAIL_POOL
     if _EMAIL_POOL is None:
@@ -362,8 +377,64 @@ def _get_email_pool() -> ThreadPoolExecutor:
     return _EMAIL_POOL
 
 
+def _normalize_recipients(recipient: str | Sequence[str] | None) -> list[str]:
+    """Accept a string, comma/semicolon separated string, or sequence."""
+    if recipient is None:
+        return []
+
+    if isinstance(recipient, str):
+        raw_items = (
+            recipient.replace(";", ",").split(",")
+            if ("," in recipient or ";" in recipient)
+            else [recipient]
+        )
+    else:
+        raw_items = list(recipient)
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        addr = str(item or "").strip()
+        if not addr:
+            continue
+        key = addr.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(addr)
+    return normalized
+
+
+def _default_email_html(subject: str, message: str) -> str:
+    """Generate a simple HTML body when caller does not provide one."""
+    safe_subject = html_escape(subject or "Notification")
+    safe_message = html_escape((message or "").strip()).replace("\n", "<br>\n")
+    return f"""
+<html>
+  <body style="margin:0;padding:0;background:#f6f8fb;font-family:Segoe UI,Microsoft JhengHei UI,Arial,sans-serif;color:#111827;">
+    <div style="max-width:720px;margin:24px auto;padding:0 16px;">
+      <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:20px 22px;">
+        <div style="font-size:18px;font-weight:700;margin-bottom:12px;">{safe_subject}</div>
+        <div style="font-size:14px;line-height:1.75;white-space:normal;">{safe_message}</div>
+        <hr style="border:none;border-top:1px solid #e5e7eb;margin:18px 0;">
+        <div style="font-size:12px;color:#6b7280;">
+          This is an automated notification email from TaskGo / 立翔水電行.
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
+""".strip()
+
+
+def _default_email_text(message: str) -> str:
+    base = (message or "").strip()
+    footer = "This is an automated notification email from TaskGo / 立翔水電行."
+    return f"{base}\n\n---\n{footer}" if base else footer
+
+
 def send_email(
-    recipient: str,
+    recipient: str | Sequence[str],
     subject: str,
     message: str,
     *,
@@ -384,52 +455,93 @@ def send_email(
     password = cfg.get("password")
     timeout = _int(cfg.get("timeout"), 10)
     retries = _int(cfg.get("retries"), 2)
+    recipients = _normalize_recipients(recipient)
+
+    if not recipients:
+        current_app.logger.info("Email notification skipped because recipient is empty")
+        return
 
     use_ssl = _bool(cfg.get("use_ssl"), False)
     use_tls = _bool(cfg.get("use_tls"), True) and not use_ssl  # don't STARTTLS on SMTPS
 
-    email = EmailMessage()
-    email["From"] = sender
-    email["To"] = recipient
-    email["Subject"] = subject
-    if cfg.get("reply_to"):
-        email["Reply-To"] = str(cfg.get("reply_to"))
-
-    # Provide both plain-text and HTML
-    email.set_content(message)
-    if html:
-        email.add_alternative(html, subtype="html")
-
     ctx = ssl.create_default_context()
     last_exc: Exception | None = None
+    plain_body = _default_email_text(message)
+    html_body = html or _default_email_html(subject, message)
+    raw_envelope_sender = str(cfg.get("envelope_sender") or "").strip()
+    if raw_envelope_sender:
+        envelope_sender = raw_envelope_sender
+    else:
+        # Prefer the visible From address to avoid SPF/DMARC alignment problems.
+        # SMTP usernames are often login IDs or API keys, not real mailbox addresses.
+        envelope_sender = str(sender).strip()
+    sent_count = 0
+    failed_count = 0
 
-    for attempt in range(retries + 1):
-        try:
-            if use_ssl:
-                with smtplib.SMTP_SSL(host, port, timeout=timeout, context=ctx) as smtp:
-                    if username and password:
-                        smtp.login(username, password)
-                    smtp.send_message(email)
-            else:
-                with smtplib.SMTP(host, port, timeout=timeout) as smtp:
-                    smtp.ehlo()
-                    if use_tls:
-                        smtp.starttls(context=ctx)
+    for rcpt in recipients:
+        delivered = False
+        for attempt in range(retries + 1):
+            try:
+                email = EmailMessage()
+                email["From"] = str(sender)
+                email["To"] = rcpt
+                email["Subject"] = subject
+                email["Date"] = formatdate(localtime=True)
+                email["Message-ID"] = make_msgid()
+                if cfg.get("reply_to"):
+                    email["Reply-To"] = str(cfg.get("reply_to"))
+                # Only emit Sender when the SMTP username is a real mailbox address.
+                # A non-email Sender value can reduce deliverability (especially to Gmail).
+                if (
+                    username
+                    and _looks_like_email_address(str(username))
+                    and str(username).strip().lower() != str(sender).strip().lower()
+                ):
+                    email["Sender"] = str(username).strip()
+
+                # Provide both plain-text and HTML.
+                email.set_content(plain_body)
+                email.add_alternative(html_body, subtype="html")
+
+                if use_ssl:
+                    with smtplib.SMTP_SSL(host, port, timeout=timeout, context=ctx) as smtp:
+                        if username and password:
+                            smtp.login(username, password)
+                        smtp.send_message(email, from_addr=envelope_sender, to_addrs=[rcpt])
+                else:
+                    with smtplib.SMTP(host, port, timeout=timeout) as smtp:
                         smtp.ehlo()
-                    if username and password:
-                        smtp.login(username, password)
-                    smtp.send_message(email)
-            return
-        except Exception as exc:  # pragma: no cover - defensive
-            last_exc = exc
-            # small backoff: 0.5s, 1s, 2s...
-            time.sleep(0.5 * (2**attempt))
+                        if use_tls:
+                            smtp.starttls(context=ctx)
+                            smtp.ehlo()
+                        if username and password:
+                            smtp.login(username, password)
+                        smtp.send_message(email, from_addr=envelope_sender, to_addrs=[rcpt])
 
-    current_app.logger.warning("Unable to send email notification: %s", last_exc)
+                delivered = True
+                sent_count += 1
+                break
+            except Exception as exc:  # pragma: no cover - defensive
+                last_exc = exc
+                if attempt < retries:
+                    time.sleep(0.5 * (2**attempt))
+
+        if not delivered:
+            failed_count += 1
+            current_app.logger.warning(
+                "Unable to send email notification to %s: %s", rcpt, last_exc
+            )
+
+    if sent_count and len(recipients) > 1:
+        current_app.logger.info(
+            "Email notifications sent individually: %s success / %s failed",
+            sent_count,
+            failed_count,
+        )
 
 
 def send_email_async(
-    recipient: str,
+    recipient: str | Sequence[str],
     subject: str,
     message: str,
     *,
@@ -545,7 +657,18 @@ def _dispatch_notifications(
                 resolved_line_message = (
                     _append_task_link_line(message, task) if task is not None else message
                 )
-                _send_line_bot(str(user.notification_value), resolved_line_message)
+                sent = False
+                if (
+                    task is not None
+                    and email_kind == "assignment"
+                    and getattr(user, "role", None) == "worker"
+                ):
+                    try:
+                        sent = push_task_action_flex(str(user.notification_value), task)
+                    except Exception:
+                        sent = False
+                if not sent:
+                    _send_line_bot(str(user.notification_value), resolved_line_message)
             else:
                 _send_line_notify(user.notification_value, resolved_message)
         elif user.notification_type == "email" and user.notification_value:

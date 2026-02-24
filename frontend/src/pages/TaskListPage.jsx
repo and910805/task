@@ -36,6 +36,36 @@ const sortOptions = [
   { value: 'created_desc', label: '最新建立' },
 ];
 
+const calendarWeekLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+const toDateOnlyKey = (value) => {
+  if (!value) return '';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getTaskCalendarDate = (task) => task?.expected_time || task?.due_date || null;
+
+const getTaskCalendarTimestamp = (task) => {
+  const raw = getTaskCalendarDate(task);
+  if (!raw) return Number.POSITIVE_INFINITY;
+  const ts = new Date(raw).getTime();
+  return Number.isNaN(ts) ? Number.POSITIVE_INFINITY : ts;
+};
+
+const getMonthAnchor = (value = new Date()) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  }
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+};
+
 const TaskListPage = () => {
   const { user } = useAuth();
   const { labels } = useRoleLabels();
@@ -59,6 +89,9 @@ const TaskListPage = () => {
   const [acceptingTaskId, setAcceptingTaskId] = useState(null);
   const hasNotificationPreference = user?.notification_type && user?.notification_type !== 'none';
   const [showOverdue, setShowOverdue] = useState(Boolean(hasNotificationPreference));
+  const [viewMode, setViewMode] = useState('list');
+  const [calendarMonth, setCalendarMonth] = useState(() => getMonthAnchor());
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState(() => toDateOnlyKey(new Date()));
 
   const isManager = managerRoles.has(user?.role);
   const isWorker = user?.role === 'worker';
@@ -131,7 +164,7 @@ const TaskListPage = () => {
   };
 
   const loadUsers = async () => {
-    if (!isManager) return;
+    if (!isManager && !isWorker) return;
     try {
       const { data } = await api.get('auth/assignable-users');
       setUsers(data);
@@ -166,7 +199,7 @@ const TaskListPage = () => {
 
   useEffect(() => {
     loadUsers();
-  }, [isManager]);
+  }, [isManager, isWorker]);
 
   useEffect(() => {
     loadSiteLocations();
@@ -231,14 +264,20 @@ const TaskListPage = () => {
     }
   };
 
-  const handleAssigneesChange = async (taskId, values) => {
+  const handleAssigneesChange = async (task, values) => {
     setError('');
-    setAssigningTaskId(taskId);
+    setAssigningTaskId(task.id);
     try {
-      await api.patch(`tasks/update/${taskId}`, { assignee_ids: values });
+      if (isManager) {
+        await api.patch(`tasks/update/${task.id}`, { assignee_ids: values });
+      } else if (isWorker && (task.assignee_ids || []).includes(user?.id)) {
+        await api.post(`tasks/${task.id}/assignees/add`, { assignee_ids: values });
+      } else {
+        throw new Error('No permission to add assignees');
+      }
       await loadTasks({ showLoading: false });
     } catch (err) {
-      const message = getErrorMessage(err, '更新指派對象失敗。');
+      const message = err?.message || getErrorMessage(err, 'Unable to update assignees.');
       setError(message);
     } finally {
       setAssigningTaskId(null);
@@ -338,8 +377,106 @@ const TaskListPage = () => {
     tasks,
   ]);
 
+  const tasksByCalendarDate = useMemo(() => {
+    const map = new Map();
+    filteredTasks.forEach((task) => {
+      const raw = getTaskCalendarDate(task);
+      const key = toDateOnlyKey(raw);
+      if (!key) return;
+      if (!map.has(key)) {
+        map.set(key, []);
+      }
+      map.get(key).push(task);
+    });
+    for (const [key, list] of map.entries()) {
+      map.set(
+        key,
+        [...list].sort((a, b) => getTaskCalendarTimestamp(a) - getTaskCalendarTimestamp(b)),
+      );
+    }
+    return map;
+  }, [filteredTasks]);
+
+  const calendarGridDates = useMemo(() => {
+    const monthStart = getMonthAnchor(calendarMonth);
+    const gridStart = new Date(monthStart);
+    gridStart.setDate(monthStart.getDate() - monthStart.getDay());
+
+    return Array.from({ length: 42 }, (_, index) => {
+      const date = new Date(gridStart);
+      date.setDate(gridStart.getDate() + index);
+      const key = toDateOnlyKey(date);
+      const inCurrentMonth = date.getMonth() === monthStart.getMonth();
+      const isToday = key === toDateOnlyKey(new Date());
+      const isSelected = key === selectedCalendarDate;
+      const dayTasks = tasksByCalendarDate.get(key) || [];
+      return {
+        date,
+        key,
+        inCurrentMonth,
+        isToday,
+        isSelected,
+        dayTasks,
+      };
+    });
+  }, [calendarMonth, selectedCalendarDate, tasksByCalendarDate]);
+
+  const selectedDateTasks = useMemo(
+    () => tasksByCalendarDate.get(selectedCalendarDate) || [],
+    [selectedCalendarDate, tasksByCalendarDate],
+  );
+
+  const selectedDateLabel = useMemo(() => {
+    if (!selectedCalendarDate) return '';
+    const parsed = new Date(`${selectedCalendarDate}T00:00:00`);
+    if (Number.isNaN(parsed.getTime())) return selectedCalendarDate;
+    return parsed.toLocaleDateString();
+  }, [selectedCalendarDate]);
+
+  const calendarMonthLabel = useMemo(() => {
+    const monthStart = getMonthAnchor(calendarMonth);
+    return monthStart.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'long',
+    });
+  }, [calendarMonth]);
+
+  const moveCalendarMonth = (deltaMonths) => {
+    const anchor = getMonthAnchor(calendarMonth);
+    const nextMonth = new Date(anchor.getFullYear(), anchor.getMonth() + deltaMonths, 1);
+    setCalendarMonth(nextMonth);
+    setSelectedCalendarDate((prev) => {
+      if (!prev) return toDateOnlyKey(nextMonth);
+      const parsed = new Date(`${prev}T00:00:00`);
+      if (Number.isNaN(parsed.getTime())) return toDateOnlyKey(nextMonth);
+      if (
+        parsed.getFullYear() === nextMonth.getFullYear() &&
+        parsed.getMonth() === nextMonth.getMonth()
+      ) {
+        return prev;
+      }
+      return toDateOnlyKey(nextMonth);
+    });
+  };
+
+  const goToCurrentMonth = () => {
+    const now = new Date();
+    setCalendarMonth(getMonthAnchor(now));
+    setSelectedCalendarDate(toDateOnlyKey(now));
+  };
+
   const toolbarFilters = (
     <>
+      <label>
+        檢視模式
+        <select
+          value={viewMode}
+          onChange={(event) => setViewMode(event.target.value)}
+        >
+          <option value="list">列表</option>
+          <option value="calendar">月曆</option>
+        </select>
+      </label>
       <label>
         地點搜尋
         <input
@@ -441,6 +578,243 @@ const TaskListPage = () => {
       : statusFilter === 'all'
       ? '目前沒有任務。'
       : '此狀態沒有符合的任務。';
+
+  const calendarView = (
+    <div style={{ display: 'grid', gap: '16px' }}>
+      <div
+        className="task-toolbar"
+        style={{ justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}
+      >
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => moveCalendarMonth(-1)}
+          >
+            上個月
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={goToCurrentMonth}
+          >
+            本月
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => moveCalendarMonth(1)}
+          >
+            下個月
+          </button>
+          <strong>{calendarMonthLabel}</strong>
+        </div>
+        <div className="hint-text">點日期查看當日任務（共 {filteredTasks.length} 筆）</div>
+      </div>
+
+      <div style={{ overflowX: 'auto' }}>
+        <div style={{ minWidth: '820px' }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+              gap: '8px',
+              marginBottom: '8px',
+            }}
+          >
+            {calendarWeekLabels.map((label) => (
+              <div
+                key={label}
+                style={{
+                  textAlign: 'center',
+                  fontSize: '0.85rem',
+                  fontWeight: 700,
+                  color: '#475569',
+                  padding: '6px 4px',
+                }}
+              >
+                {label}
+              </div>
+            ))}
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+              gap: '8px',
+            }}
+          >
+            {calendarGridDates.map((cell) => {
+              const taskCount = cell.dayTasks.length;
+              const summaryTasks = cell.dayTasks.slice(0, 2);
+              return (
+                <button
+                  key={cell.key}
+                  type="button"
+                  onClick={() => setSelectedCalendarDate(cell.key)}
+                  style={{
+                    textAlign: 'left',
+                    borderRadius: '12px',
+                    border: cell.isSelected ? '2px solid #0ea5e9' : '1px solid #e2e8f0',
+                    background: cell.isSelected
+                      ? '#f0f9ff'
+                      : cell.inCurrentMonth
+                      ? '#ffffff'
+                      : '#f8fafc',
+                    color: '#0f172a',
+                    minHeight: '120px',
+                    padding: '10px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px',
+                    boxShadow: cell.isSelected ? '0 0 0 1px rgba(14,165,233,0.2)' : 'none',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                    <span
+                      style={{
+                        fontWeight: 700,
+                        color: cell.inCurrentMonth ? '#0f172a' : '#94a3b8',
+                      }}
+                    >
+                      {cell.date.getDate()}
+                    </span>
+                    {cell.isToday ? (
+                      <span
+                        style={{
+                          fontSize: '0.72rem',
+                          color: '#0284c7',
+                          background: '#e0f2fe',
+                          borderRadius: '999px',
+                          padding: '1px 6px',
+                        }}
+                      >
+                        Today
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {taskCount > 0 ? (
+                    <>
+                      <div style={{ fontSize: '0.78rem', color: '#475569', fontWeight: 600 }}>
+                        {taskCount} 筆任務
+                      </div>
+                      <div style={{ display: 'grid', gap: '4px' }}>
+                        {summaryTasks.map((task) => {
+                          const when = getTaskCalendarDate(task);
+                          const timeText = when
+                            ? new Date(when).toLocaleTimeString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })
+                            : '--:--';
+                          return (
+                            <div
+                              key={`calendar-summary-${cell.key}-${task.id}`}
+                              style={{
+                                fontSize: '0.75rem',
+                                color: '#1f2937',
+                                background: '#f8fafc',
+                                borderRadius: '8px',
+                                padding: '4px 6px',
+                                border: '1px solid #e2e8f0',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                              title={`${timeText} ${task.title}`}
+                            >
+                              {timeText} {task.title}
+                            </div>
+                          );
+                        })}
+                        {taskCount > summaryTasks.length ? (
+                          <div style={{ fontSize: '0.72rem', color: '#0ea5e9', fontWeight: 600 }}>
+                            +{taskCount - summaryTasks.length} more
+                          </div>
+                        ) : null}
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ marginTop: 'auto', fontSize: '0.78rem', color: '#94a3b8' }}>
+                      無任務
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div
+        style={{
+          border: '1px solid #e2e8f0',
+          borderRadius: '14px',
+          padding: '14px',
+          background: '#ffffff',
+          display: 'grid',
+          gap: '10px',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+          <h3 style={{ margin: 0 }}>當日任務</h3>
+          <div className="hint-text">{selectedDateLabel || selectedCalendarDate}</div>
+        </div>
+        {selectedDateTasks.length === 0 ? (
+          <p style={{ margin: 0, color: '#64748b' }}>此日期沒有任務。</p>
+        ) : (
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: '10px' }}>
+            {selectedDateTasks.map((task) => {
+              const when = getTaskCalendarDate(task);
+              const whenText = when ? new Date(when).toLocaleString() : '未設定時間';
+              const assignedUsers = task.assignees || [];
+              return (
+                <li
+                  key={`selected-day-task-${task.id}`}
+                  style={{
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '12px',
+                    padding: '12px',
+                    background: '#f8fafc',
+                    display: 'grid',
+                    gap: '6px',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: '10px',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <strong>
+                      <Link to={`/tasks/${task.id}`}>{task.title}</Link>
+                    </strong>
+                    <span className={statusBadgeClass[task.status] || 'status-badge'}>
+                      {task.status}
+                    </span>
+                  </div>
+                  <div className="task-secondary">{task.location || '未設定地點'}</div>
+                  <div className="task-secondary">時間：{whenText}</div>
+                  <div className="task-secondary">
+                    指派：
+                    {assignedUsers.length > 0
+                      ? ` ${assignedUsers.map((x) => x.username).join(', ')}`
+                      : ' 未指派'}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <div className="page">
@@ -587,10 +961,14 @@ const TaskListPage = () => {
           <p>載入中...</p>
         ) : filteredTasks.length === 0 ? (
           <p>{emptyStateMessage}</p>
+        ) : viewMode === 'calendar' ? (
+          calendarView
         ) : (
           <ul className="task-list">
             {filteredTasks.map((task) => {
-              const taskAssigneeIds = task.assignee_ids || [];
+              const taskAssigneeIds = Array.from(
+                new Set([...(task.assignee_ids || []), ...(task.assigned_to_id ? [task.assigned_to_id] : [])]),
+              );
               const assignedUsers = task.assignees || [];
               const selectValue = assigneeOptions.filter((option) =>
                 taskAssigneeIds.includes(option.value),
@@ -607,6 +985,7 @@ const TaskListPage = () => {
                 isManager &&
                 taskAssigneeIds.length > 0 &&
                 selectValue.length !== taskAssigneeIds.length;
+              const canAssistAssign = isWorker && taskAssigneeIds.includes(user?.id);
               const dueDateLabel = task.due_date || task.expected_time;
               const dueDateText = dueDateLabel
                 ? new Date(dueDateLabel).toLocaleString()
@@ -736,7 +1115,7 @@ const TaskListPage = () => {
                         <p className="error-text">部分指派對象已被移除</p>
                       ) : null}
                     </div>
-                    {isManager && (
+                    {(isManager || canAssistAssign) && (
                       <div className="task-actions">
                         <div className="task-toolbar">
                           <div style={{ minWidth: '220px' }}>
@@ -748,7 +1127,7 @@ const TaskListPage = () => {
                               value={selectValue}
                               onChange={(selected) =>
                                 handleAssigneesChange(
-                                  task.id,
+                                  task,
                                   (selected || []).map((option) => option.value),
                                 )
                               }
@@ -757,6 +1136,7 @@ const TaskListPage = () => {
                               closeMenuOnSelect={false}
                             />
                           </div>
+                          {isManager && (
                           <button
                             type="button"
                             className="danger-button"
@@ -765,7 +1145,11 @@ const TaskListPage = () => {
                           >
                             {deletingTaskId === task.id ? '刪除中…' : '刪除任務'}
                           </button>
+                          )}
                         </div>
+                        {canAssistAssign && !isManager && (
+                          <p className="hint-text">Field worker add-only assignment (existing assignees will be kept).</p>
+                        )}
                       </div>
                     )}
                   </div>

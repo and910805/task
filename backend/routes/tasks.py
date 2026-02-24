@@ -54,6 +54,101 @@ def _ensure_task_permission(task: Task, role: str | None, user_id: int | None, *
     return None
 
 
+def _is_manager_role(role: str | None) -> bool:
+    return role in {"admin", "site_supervisor", "hq_staff"}
+
+
+def _ensure_task_assignee_add_permission(task: Task, role: str | None, user_id: int | None):
+    if user_id is None:
+        return jsonify({"msg": "Invalid authentication token"}), 401
+    if _is_manager_role(role):
+        return None
+    if role == "worker" and user_id in _task_assigned_user_ids(task):
+        return None
+    return jsonify({"msg": "You do not have permission to add assignees"}), 403
+
+
+def _ensure_time_manage_permission(task: Task, role: str | None, user_id: int | None):
+    if user_id is None:
+        return jsonify({"msg": "Invalid authentication token"}), 401
+    if _is_manager_role(role):
+        return None
+    if role == "worker" and user_id in _task_assigned_user_ids(task):
+        return None
+    return jsonify({"msg": "You do not have permission to manage time entries"}), 403
+
+
+def _parse_user_ids_payload(raw_ids, *, field_name: str = "user_ids") -> tuple[list[int], tuple | None]:
+    candidate_ids: list[int] = []
+    if isinstance(raw_ids, (list, tuple, set)):
+        candidate_ids.extend(_normalize_user_id(item) for item in raw_ids)
+    elif raw_ids not in (None, ""):
+        candidate_ids.append(_normalize_user_id(raw_ids))
+    user_ids = _dedupe_ids(candidate_ids)
+    if not user_ids:
+        return [], (jsonify({"msg": f"{field_name} is required"}), 400)
+    return user_ids, None
+
+
+def _parse_time_hours(value):
+    if value in (None, ""):
+        return None, None
+    try:
+        hours = round(float(value), 2)
+    except (TypeError, ValueError):
+        return None, (jsonify({"msg": "work_hours must be a number"}), 400)
+    if hours < 0:
+        return None, (jsonify({"msg": "work_hours must be greater than or equal to 0"}), 400)
+    return hours, None
+
+
+def _build_assignee_change_summary(task: Task, target_assignee_ids: list[int]):
+    summary = {
+        "status_changed": False,
+        "new_status": None,
+        "assignee_added": [],
+        "assignee_removed": [],
+        "assignee_map": {},
+        "assignee_changed": False,
+        "assignee_before_ids": [],
+        "assignee_after_ids": [],
+        "assignee_before_names": [],
+        "assignee_after_names": [],
+        "became_overdue": False,
+    }
+
+    previous_assignees = [
+        {"id": assignment.user_id, "username": assignment.user.username}
+        for assignment in task.assignees
+        if assignment.user_id and assignment.user
+    ]
+    previous_assignees.sort(key=lambda item: item["username"].lower())
+
+    assignee_map, error = _load_assignee_users(target_assignee_ids)
+    if error:
+        return error, summary
+
+    added_ids, removed_ids = _sync_task_assignees(task, target_assignee_ids)
+    summary["assignee_added"] = added_ids
+    summary["assignee_removed"] = removed_ids
+    summary["assignee_map"] = assignee_map
+
+    if added_ids or removed_ids:
+        next_assignees = [
+            {"id": user_id, "username": assignee_map[user_id].username}
+            for user_id in target_assignee_ids
+            if user_id in assignee_map
+        ]
+        next_assignees.sort(key=lambda item: item["username"].lower())
+        summary["assignee_changed"] = True
+        summary["assignee_before_ids"] = [item["id"] for item in previous_assignees]
+        summary["assignee_after_ids"] = [item["id"] for item in next_assignees]
+        summary["assignee_before_names"] = [item["username"] for item in previous_assignees]
+        summary["assignee_after_names"] = [item["username"] for item in next_assignees]
+
+    return None, summary
+
+
 def _parse_datetime(value, field_name: str, *, required: bool = False):
     if value is None:
         if required:
@@ -648,6 +743,57 @@ def get_task(task_id: int):
     return jsonify(_serialize_task_for_viewer(task, role, user_id, workload_summary))
 
 
+@tasks_bp.post("/<int:task_id>/assignees/add")
+@jwt_required()
+def add_task_assignees(task_id: int):
+    actor_id = get_current_user_id()
+    role = (get_jwt() or {}).get("role")
+    task = (
+        Task.query.options(
+            selectinload(Task.assignees).selectinload(TaskAssignee.user),
+            selectinload(Task.assignee),
+        )
+        .get_or_404(task_id)
+    )
+
+    permission_error = _ensure_task_assignee_add_permission(task, role, actor_id)
+    if permission_error:
+        return permission_error
+
+    data = request.get_json(silent=True) or {}
+    requested_ids, payload_error = _parse_user_ids_payload(
+        data.get("assignee_ids") if "assignee_ids" in data else data.get("user_ids"),
+        field_name="assignee_ids",
+    )
+    if payload_error:
+        return payload_error
+
+    current_ids = _dedupe_ids(list(_task_assigned_user_ids(task)))
+    target_ids = _dedupe_ids(current_ids + requested_ids)
+
+    # Workers may only add worker accounts (not supervisors/HQ staff).
+    if role == "worker":
+        worker_map, error = _load_assignee_users(target_ids)
+        if error:
+            return error
+        non_worker = [u.username for u in worker_map.values() if u.role != "worker"]
+        if non_worker:
+            return jsonify({"msg": "Workers can only add worker assignees"}), 403
+
+    error, summary = _build_assignee_change_summary(task, target_ids)
+    if error:
+        return error
+
+    if not summary.get("assignee_changed"):
+        return jsonify(task.to_dict())
+
+    _append_assignee_update(task, actor_id, summary)
+    task.updated_at = datetime.utcnow()
+    db.session.commit()
+    _notify_task_changes(task, summary, actor_id)
+    return jsonify(task.to_dict())
+
+
 @tasks_bp.post("/<int:task_id>/accept")
 @jwt_required()
 def accept_task(task_id: int):
@@ -1040,6 +1186,158 @@ def stop_time_tracking(task_id: int):
     task.updated_at = now
     db.session.commit()
     return jsonify(active_entry.to_time_dict())
+
+
+@tasks_bp.post("/<int:task_id>/time/manual")
+@jwt_required()
+def create_manual_time_entries(task_id: int):
+    task = (
+        Task.query.options(
+            selectinload(Task.assignees).selectinload(TaskAssignee.user),
+            selectinload(Task.assignee),
+        )
+        .get_or_404(task_id)
+    )
+    role = (get_jwt() or {}).get("role")
+    actor_id = get_current_user_id()
+
+    permission_error = _ensure_time_manage_permission(task, role, actor_id)
+    if permission_error:
+        return permission_error
+
+    data = request.get_json(silent=True) or {}
+    user_ids, payload_error = _parse_user_ids_payload(data.get("user_ids"))
+    if payload_error:
+        return payload_error
+
+    assignee_ids = _task_assigned_user_ids(task)
+    missing_ids = [user_id for user_id in user_ids if user_id not in assignee_ids]
+    if missing_ids:
+        return jsonify({"msg": "All target users must already be assigned to the task"}), 400
+
+    user_map, error = _load_assignee_users(user_ids)
+    if error:
+        return error
+    if role == "worker" and any(user.role != "worker" for user in user_map.values()):
+        return jsonify({"msg": "Workers can only create time entries for worker assignees"}), 403
+
+    start_time_raw = data.get("start_time")
+    end_time_raw = data.get("end_time")
+    note = data.get("note")
+    note_value = note.strip() if isinstance(note, str) else note
+
+    start_time = None
+    end_time = None
+    if start_time_raw not in (None, ""):
+        start_time, error_response, status_code = _parse_datetime(start_time_raw, "start_time")
+        if error_response:
+            return error_response, status_code
+    if end_time_raw not in (None, ""):
+        end_time, error_response, status_code = _parse_datetime(end_time_raw, "end_time")
+        if error_response:
+            return error_response, status_code
+
+    manual_hours, hours_error = _parse_time_hours(data.get("work_hours"))
+    if hours_error:
+        return hours_error
+
+    if start_time and end_time and end_time < start_time:
+        return jsonify({"msg": "end_time must be after start_time"}), 400
+
+    computed_hours = manual_hours
+    if start_time and end_time and computed_hours is None:
+        computed_hours = round((end_time - start_time).total_seconds() / 3600, 2)
+
+    if start_time is None and end_time is None and computed_hours is None:
+        return jsonify({"msg": "Provide start_time/end_time or work_hours"}), 400
+
+    now = datetime.utcnow()
+    created_entries: list[TaskUpdate] = []
+    for target_user_id in user_ids:
+        entry = TaskUpdate(
+            task_id=task.id,
+            user_id=target_user_id,
+            start_time=start_time,
+            end_time=end_time,
+            work_hours=computed_hours,
+            note=note_value or None,
+        )
+        created_entries.append(entry)
+        db.session.add(entry)
+
+    task.updated_at = now
+    db.session.commit()
+    return jsonify({"entries": [entry.to_time_dict() for entry in created_entries]}), 201
+
+
+@tasks_bp.patch("/<int:task_id>/time/<int:entry_id>")
+@role_required("admin")
+def update_time_entry(task_id: int, entry_id: int):
+    task = Task.query.get_or_404(task_id)
+    entry = TaskUpdate.query.filter_by(id=entry_id, task_id=task_id).first()
+    if entry is None:
+        return jsonify({"msg": "Time entry not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+
+    if "start_time" in data:
+        raw = data.get("start_time")
+        if raw in (None, ""):
+            entry.start_time = None
+        else:
+            parsed, error_response, status_code = _parse_datetime(raw, "start_time")
+            if error_response:
+                return error_response, status_code
+            entry.start_time = parsed
+
+    if "end_time" in data:
+        raw = data.get("end_time")
+        if raw in (None, ""):
+            entry.end_time = None
+        else:
+            parsed, error_response, status_code = _parse_datetime(raw, "end_time")
+            if error_response:
+                return error_response, status_code
+            entry.end_time = parsed
+
+    if entry.start_time and entry.end_time and entry.end_time < entry.start_time:
+        return jsonify({"msg": "end_time must be after start_time"}), 400
+
+    if "note" in data:
+        note = data.get("note")
+        if isinstance(note, str):
+            note = note.strip()
+        entry.note = note or None
+
+    explicit_work_hours = False
+    if "work_hours" in data:
+        explicit_work_hours = True
+        hours, hours_error = _parse_time_hours(data.get("work_hours"))
+        if hours_error:
+            return hours_error
+        entry.work_hours = hours
+
+    if "user_id" in data:
+        new_user_id = _normalize_user_id(data.get("user_id"))
+        if new_user_id is None:
+            entry.user_id = None
+        else:
+            user = User.query.get(new_user_id)
+            if user is None:
+                return jsonify({"msg": "User not found"}), 404
+            if user.role == "admin":
+                return jsonify({"msg": "Cannot assign work hours to admin users"}), 400
+            entry.user_id = user.id
+
+    if not explicit_work_hours:
+        if entry.start_time and entry.end_time:
+            entry.work_hours = round((entry.end_time - entry.start_time).total_seconds() / 3600, 2)
+        elif "end_time" in data and entry.end_time is None:
+            entry.work_hours = None
+
+    task.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(entry.to_dict())
 
 
 @tasks_bp.post("/<int:task_id>/attachments")

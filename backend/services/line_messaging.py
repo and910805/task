@@ -4,7 +4,7 @@ import base64
 import hashlib
 import hmac
 import os
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Sequence, Tuple
 
 import requests
 
@@ -92,6 +92,28 @@ def reply_text(reply_token: str, text: str, app=None) -> bool:
         return False
 
 
+def reply_messages(reply_token: str, messages: Sequence[dict[str, Any]], app=None) -> bool:
+    """Reply with arbitrary LINE message payloads. Return True if 2xx."""
+    if not has_line_bot_config(app=app) or not reply_token or not messages:
+        return False
+
+    url = f"{LINE_API_BASE}/reply"
+    payload: dict[str, Any] = {
+        "replyToken": reply_token,
+        "messages": list(messages)[:5],
+    }
+
+    try:
+        r = requests.post(url, headers=_headers(app=app), json=payload, timeout=10)
+        if r.status_code >= 400 and current_app is not None:
+            current_app.logger.warning("LINE reply failed: %s %s", r.status_code, r.text)
+        return r.status_code // 100 == 2
+    except Exception as exc:  # pragma: no cover
+        if current_app is not None:
+            current_app.logger.warning("LINE reply exception: %s", exc)
+        return False
+
+
 def push_text(to_user_id: str, text: str, app=None) -> bool:
     """Push a text message to a LINE userId (starts with 'U'). Return True if 2xx."""
     if not has_line_bot_config(app=app) or not to_user_id:
@@ -112,6 +134,277 @@ def push_text(to_user_id: str, text: str, app=None) -> bool:
         if current_app is not None:
             current_app.logger.warning("LINE push exception: %s", exc)
         return False
+
+
+def push_messages(to_user_id: str, messages: Sequence[dict[str, Any]], app=None) -> bool:
+    """Push arbitrary LINE messages to a LINE userId (starts with 'U')."""
+    if not has_line_bot_config(app=app) or not to_user_id or not messages:
+        return False
+
+    url = f"{LINE_API_BASE}/push"
+    payload: dict[str, Any] = {
+        "to": to_user_id,
+        "messages": list(messages)[:5],
+    }
+
+    try:
+        r = requests.post(url, headers=_headers(app=app), json=payload, timeout=10)
+        if r.status_code >= 400 and current_app is not None:
+            current_app.logger.warning("LINE push failed: %s %s", r.status_code, r.text)
+        return r.status_code // 100 == 2
+    except Exception as exc:  # pragma: no cover
+        if current_app is not None:
+            current_app.logger.warning("LINE push exception: %s", exc)
+        return False
+
+
+def _safe_text(value: Any, *, max_len: int = 80) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "-"
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
+
+
+def _fmt_task_dt(value: Any) -> str:
+    if value is None:
+        return "-"
+    try:
+        # datetime-like object
+        if hasattr(value, "strftime"):
+            return value.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        pass
+    return _safe_text(value, max_len=24)
+
+
+def _task_action_uri(task_id: Any, app=None) -> str | None:
+    base = (_cfg("APP_BASE_URL", app=app) or "").strip().rstrip("/")
+    if not base:
+        return None
+    return f"{base}/tasks/{task_id}"
+
+
+def build_task_action_flex(task: Any, *, app=None) -> dict[str, Any]:
+    """Build a LINE Flex card with quick actions for a task (Traditional Chinese UI)."""
+    task_id = getattr(task, "id", None)
+    title = _safe_text(getattr(task, "title", None), max_len=56)
+    status = _safe_text(getattr(task, "status", None), max_len=20)
+    location = _safe_text(getattr(task, "location", None), max_len=72)
+    expected = _fmt_task_dt(getattr(task, "expected_time", None))
+    due = _fmt_task_dt(getattr(task, "due_date", None))
+    open_uri = _task_action_uri(task_id, app=app)
+    location_uri = str(getattr(task, "location_url", "") or "").strip() or None
+
+    def row(label: str, value: str, *, value_color: str = "#111827") -> dict[str, Any]:
+        return {
+            "type": "box",
+            "layout": "baseline",
+            "spacing": "sm",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": label,
+                    "size": "sm",
+                    "color": "#6B7280",
+                    "flex": 3,
+                },
+                {
+                    "type": "text",
+                    "text": value,
+                    "size": "sm",
+                    "color": value_color,
+                    "wrap": True,
+                    "align": "end",
+                    "flex": 5,
+                    "weight": "bold" if label in {"任務編號", "任務狀態"} else "regular",
+                },
+            ],
+        }
+
+    body_contents: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": "新任務",
+            "size": "sm",
+            "weight": "bold",
+            "color": "#10B981",
+        },
+        {
+            "type": "text",
+            "text": title,
+            "size": "xl",
+            "weight": "bold",
+            "wrap": True,
+            "color": "#1F2937",
+            "margin": "sm",
+        },
+        {
+            "type": "text",
+            "text": location,
+            "size": "sm",
+            "color": "#6B7280",
+            "wrap": True,
+            "margin": "xs",
+        },
+    ]
+
+    if location_uri:
+        body_contents.append(
+            {
+                "type": "text",
+                "text": "查看地圖",
+                "size": "xs",
+                "color": "#16A34A",
+                "align": "end",
+                "margin": "xs",
+                "action": {"type": "uri", "label": "查看地圖", "uri": location_uri},
+            }
+        )
+
+    body_contents.extend(
+        [
+            {"type": "separator", "margin": "md"},
+            {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "sm",
+                "margin": "md",
+                "contents": [
+                    row("預計開始", expected),
+                    row("完成截止日", due),
+                    row("任務編號", str(task_id or "-")),
+                    row("任務狀態", status, value_color="#111827"),
+                ],
+            },
+        ]
+    )
+
+    footer_contents: list[dict[str, Any]] = [
+        {
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "sm",
+            "contents": [
+                {
+                    "type": "button",
+                    "style": "secondary",
+                    "height": "sm",
+                    "color": "#D1D5DB",
+                    "action": {
+                        "type": "postback",
+                        "label": "拒絕",
+                        "data": f"a=reject_prompt&t={task_id}",
+                        "displayText": f"無法接單 #{task_id}",
+                    },
+                },
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "height": "sm",
+                    "color": "#22C55E",
+                    "action": {
+                        "type": "postback",
+                        "label": "接受",
+                        "data": f"a=task_accept&t={task_id}",
+                        "displayText": f"接受任務 #{task_id}",
+                    },
+                },
+            ],
+        },
+        {
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "sm",
+            "contents": [
+                {
+                    "type": "button",
+                    "style": "secondary",
+                    "height": "sm",
+                    "action": {
+                        "type": "postback",
+                        "label": "開始工時",
+                        "data": f"a=time_start&t={task_id}",
+                        "displayText": f"開始工時 #{task_id}",
+                    },
+                },
+                {
+                    "type": "button",
+                    "style": "secondary",
+                    "height": "sm",
+                    "action": {
+                        "type": "postback",
+                        "label": "結束工時",
+                        "data": f"a=time_stop&t={task_id}",
+                        "displayText": f"結束工時 #{task_id}",
+                    },
+                },
+            ],
+        },
+        {
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "sm",
+            "contents": [
+                {
+                    "type": "button",
+                    "style": "link",
+                    "height": "sm",
+                    "action": {
+                        "type": "postback",
+                        "label": "開始施工",
+                        "data": f"a=task_start&t={task_id}",
+                        "displayText": f"start {task_id}",
+                    },
+                },
+                {
+                    "type": "button",
+                    "style": "link",
+                    "height": "sm",
+                    "action": {"type": "message", "label": "本週工作", "text": "本週"},
+                },
+            ],
+        },
+    ]
+
+    if open_uri:
+        footer_contents.append(
+            {
+                "type": "button",
+                "style": "link",
+                "height": "sm",
+                "action": {"type": "uri", "label": "開啟任務", "uri": open_uri},
+            }
+        )
+
+    return {
+        "type": "flex",
+        "altText": _safe_text(f"新任務 #{task_id} {title}", max_len=100),
+        "contents": {
+            "type": "bubble",
+            "size": "mega",
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "sm",
+                "paddingAll": "16px",
+                "contents": body_contents,
+            },
+            "footer": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "sm",
+                "paddingAll": "12px",
+                "contents": footer_contents,
+            },
+        },
+    }
+
+
+def push_task_action_flex(to_user_id: str, task: Any, app=None) -> bool:
+    """Push a task action card to LINE."""
+    return push_messages(to_user_id, [build_task_action_flex(task, app=app)], app=app)
 
 
 def get_message_content_bytes(message_id: str, app=None) -> Tuple[bytes, str]:

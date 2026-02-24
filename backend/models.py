@@ -264,6 +264,8 @@ class TaskUpdate(db.Model):
             "end_time": self.end_time.isoformat() if self.end_time else None,
             "work_hours": self.work_hours,
             "author": self.author.username if self.author else None,
+            "note": self.note,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
 

@@ -52,6 +52,13 @@ const toInputDatetimeValue = (value) => {
   return local.toISOString().slice(0, 16);
 };
 
+const toApiDatetimeValue = (value) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+};
+
 const formatDateTime = (value) => {
   if (!value) return '未設定';
   try {
@@ -117,6 +124,23 @@ const TaskDetailPage = () => {
   const [timeMessage, setTimeMessage] = useState('');
   const [timeError, setTimeError] = useState('');
   const [timeLoading, setTimeLoading] = useState(false);
+  const [bulkTimeForm, setBulkTimeForm] = useState({
+    user_ids: [],
+    start_time: '',
+    end_time: '',
+    work_hours: '',
+    note: '',
+  });
+  const [bulkTimeLoading, setBulkTimeLoading] = useState(false);
+  const [editingTimeEntryId, setEditingTimeEntryId] = useState(null);
+  const [editingTimeForm, setEditingTimeForm] = useState({
+    user_id: '',
+    start_time: '',
+    end_time: '',
+    work_hours: '',
+    note: '',
+  });
+  const [editingTimeLoading, setEditingTimeLoading] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [photoProcessing, setPhotoProcessing] = useState(false);
   const [uploadingAudio, setUploadingAudio] = useState(false);
@@ -166,7 +190,7 @@ const TaskDetailPage = () => {
   };
 
   const loadAssignableUsers = async () => {
-    if (!isManager) return;
+    if (!isManager && !isWorker) return;
     try {
       const { data } = await api.get('auth/assignable-users');
       setAssignableUsers(data);
@@ -184,10 +208,10 @@ const TaskDetailPage = () => {
   }, [loadNoteTemplates]);
 
   useEffect(() => {
-    if (isManager) {
+    if (isManager || isWorker) {
       loadAssignableUsers();
     }
-  }, [isManager]);
+  }, [isManager, isWorker]);
 
   useEffect(() => {
     setShowOverdue(Boolean(hasNotificationPreference));
@@ -269,6 +293,30 @@ const TaskDetailPage = () => {
     [resolvedAttachments],
   );
   const timeEntries = useMemo(() => task?.time_entries ?? [], [task]);
+  const taskAssigneeIds = useMemo(
+    () => {
+      const ids = Array.isArray(task?.assignee_ids) ? task.assignee_ids.map(Number) : [];
+      if (task?.assigned_to_id) {
+        ids.push(Number(task.assigned_to_id));
+      }
+      return Array.from(new Set(ids));
+    },
+    [task?.assignee_ids, task?.assigned_to_id],
+  );
+  const isTaskAssignee = useMemo(
+    () => (user?.id ? taskAssigneeIds.includes(Number(user.id)) : false),
+    [taskAssigneeIds, user?.id],
+  );
+  const canAssistAssignment = useMemo(
+    () => isWorker && isTaskAssignee,
+    [isWorker, isTaskAssignee],
+  );
+  const canManageAssignmentPanel = isManager || canAssistAssignment;
+  const canManageMultiTime = isManager || canAssistAssignment;
+  const timeTargetOptions = useMemo(
+    () => assigneeOptions.filter((option) => taskAssigneeIds.includes(Number(option.value))),
+    [assigneeOptions, taskAssigneeIds],
+  );
   const activeEntry = useMemo(
     () => timeEntries.find((entry) => entry.user_id === user?.id && !entry.end_time) || null,
     [timeEntries, user?.id],
@@ -351,23 +399,154 @@ const TaskDetailPage = () => {
     }
   };
 
-
   const handleAssignmentSubmit = async (event) => {
     event.preventDefault();
     setAssignmentError('');
     setAssignmentSuccess('');
     try {
-      const payload = {
-        assignee_ids: assignmentForm.assignee_ids.map(Number),
-        due_date: assignmentForm.due_date || null,
-        location_url: assignmentForm.location_url.trim() || null,
-      };
-      await api.put(`tasks/${id}`, payload);
-      setAssignmentSuccess('任務指派資訊已更新。');
+      if (canAssistAssignment && !isManager) {
+        await api.post(`tasks/${id}/assignees/add`, {
+          assignee_ids: assignmentForm.assignee_ids.map(Number),
+        });
+        setAssignmentSuccess('Assignees added to task.');
+      } else {
+        const payload = {
+          assignee_ids: assignmentForm.assignee_ids.map(Number),
+          due_date: assignmentForm.due_date || null,
+          location_url: assignmentForm.location_url.trim() || null,
+        };
+        await api.put(`tasks/${id}`, payload);
+        setAssignmentSuccess('Task assignment updated.');
+      }
       await loadTask();
     } catch (err) {
-      const message = getErrorMessage(err, '更新任務指派失敗。');
+      const message = getErrorMessage(err, 'Unable to update assignment settings.');
       setAssignmentError(message);
+    }
+  };
+
+  const handleBulkTimeChange = (event) => {
+    const { name, value } = event.target;
+    setBulkTimeForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleBulkTimeUsersChange = (selected) => {
+    setBulkTimeForm((prev) => ({
+      ...prev,
+      user_ids: (selected || []).map((option) => Number(option.value)),
+    }));
+  };
+
+  const handleBulkTimeSubmit = async (event) => {
+    event.preventDefault();
+    setTimeError('');
+    setTimeMessage('');
+
+    if (!bulkTimeForm.user_ids.length) {
+      setTimeError('Select at least one user.');
+      return;
+    }
+
+    const startTime = toApiDatetimeValue(bulkTimeForm.start_time);
+    const endTime = toApiDatetimeValue(bulkTimeForm.end_time);
+    const hasHours = bulkTimeForm.work_hours.trim() !== '';
+    const parsedHours = hasHours ? Number(bulkTimeForm.work_hours) : null;
+
+    if (!startTime && !endTime && parsedHours === null) {
+      setTimeError('Provide start/end time or work hours.');
+      return;
+    }
+    if (hasHours && Number.isNaN(parsedHours)) {
+      setTimeError('Work hours must be a number.');
+      return;
+    }
+
+    setBulkTimeLoading(true);
+    try {
+      await api.post(`tasks/${id}/time/manual`, {
+        user_ids: bulkTimeForm.user_ids.map(Number),
+        start_time: startTime || null,
+        end_time: endTime || null,
+        work_hours: parsedHours,
+        note: bulkTimeForm.note.trim() || null,
+      });
+      setTimeMessage('Created shared time entries for selected users.');
+      setBulkTimeForm((prev) => ({
+        ...prev,
+        start_time: '',
+        end_time: '',
+        work_hours: '',
+        note: '',
+      }));
+      await loadTask();
+    } catch (err) {
+      const message = getErrorMessage(err, 'Unable to create shared time entries.');
+      setTimeError(message);
+    } finally {
+      setBulkTimeLoading(false);
+    }
+  };
+
+  const handleStartEditTimeEntry = (entry) => {
+    if (!entry?.id) return;
+    setEditingTimeEntryId(entry.id);
+    setEditingTimeForm({
+      user_id: entry.user_id ? String(entry.user_id) : '',
+      start_time: toInputDatetimeValue(entry.start_time),
+      end_time: toInputDatetimeValue(entry.end_time),
+      work_hours:
+        entry.work_hours === null || entry.work_hours === undefined ? '' : String(entry.work_hours),
+      note: entry.note || '',
+    });
+    setTimeError('');
+    setTimeMessage('');
+  };
+
+  const handleEditingTimeChange = (event) => {
+    const { name, value } = event.target;
+    setEditingTimeForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleCancelEditTimeEntry = () => {
+    setEditingTimeEntryId(null);
+    setEditingTimeForm({
+      user_id: '',
+      start_time: '',
+      end_time: '',
+      work_hours: '',
+      note: '',
+    });
+  };
+
+  const handleSaveEditTimeEntry = async (event) => {
+    event.preventDefault();
+    if (!editingTimeEntryId) return;
+    setTimeError('');
+    setTimeMessage('');
+    setEditingTimeLoading(true);
+    try {
+      const payload = {
+        user_id: editingTimeForm.user_id ? Number(editingTimeForm.user_id) : null,
+        start_time: editingTimeForm.start_time ? toApiDatetimeValue(editingTimeForm.start_time) : null,
+        end_time: editingTimeForm.end_time ? toApiDatetimeValue(editingTimeForm.end_time) : null,
+        note: editingTimeForm.note.trim() || null,
+      };
+      if (editingTimeForm.work_hours.trim() !== '') {
+        const parsed = Number(editingTimeForm.work_hours);
+        if (Number.isNaN(parsed)) {
+          throw new Error('Work hours must be a number.');
+        }
+        payload.work_hours = parsed;
+      }
+      await api.patch(`tasks/${id}/time/${editingTimeEntryId}`, payload);
+      setTimeMessage('Time entry updated.');
+      handleCancelEditTimeEntry();
+      await loadTask();
+    } catch (err) {
+      const message = err?.message || getErrorMessage(err, 'Unable to update time entry.');
+      setTimeError(message);
+    } finally {
+      setEditingTimeLoading(false);
     }
   };
 
@@ -777,18 +956,21 @@ const TaskDetailPage = () => {
             )}
           </section>
 
-          {isManager && (
+          {canManageAssignmentPanel && (
             <section className="panel">
-              <h2>指派設定</h2>
+              <h2>{isManager ? 'Assignment' : 'Add Assignees On Site'}</h2>
               {assignmentError && <p className="error-text">{assignmentError}</p>}
               {assignmentSuccess && <p className="success-text">{assignmentSuccess}</p>}
+              {!isManager && (
+                <p className="hint-text">Assigned workers can add missing workers on site. Existing assignees will be kept.</p>
+              )}
               <form className="stack" onSubmit={handleAssignmentSubmit}>
                 <label>
-                  指派給
+                  Assignees
                   <Select
                     isMulti
                     classNamePrefix="assignee-select"
-                    placeholder="選擇負責人"
+                    placeholder="Select users to add"
                     options={assigneeOptions}
                     value={assigneeOptions.filter((option) =>
                       assignmentForm.assignee_ids.includes(option.value),
@@ -798,26 +980,30 @@ const TaskDetailPage = () => {
                     closeMenuOnSelect={false}
                   />
                 </label>
-                <label>
-                  截止時間
-                  <input
-                    type="datetime-local"
-                    name="due_date"
-                    value={assignmentForm.due_date}
-                    onChange={handleAssignmentChange}
-                  />
-                </label>
-                <label>
-                  地圖連結
-                  <input
-                    type="url"
-                    name="location_url"
-                    value={assignmentForm.location_url}
-                    onChange={handleAssignmentChange}
-                    placeholder="可貼上 Google 地圖連結"
-                  />
-                </label>
-                <button type="submit">儲存指派</button>
+                {isManager && (
+                  <>
+                    <label>
+                      Due Date
+                      <input
+                        type="datetime-local"
+                        name="due_date"
+                        value={assignmentForm.due_date}
+                        onChange={handleAssignmentChange}
+                      />
+                    </label>
+                    <label>
+                      Map URL
+                      <input
+                        type="url"
+                        name="location_url"
+                        value={assignmentForm.location_url}
+                        onChange={handleAssignmentChange}
+                        placeholder="Google Maps URL"
+                      />
+                    </label>
+                  </>
+                )}
+                <button type="submit">{isManager ? 'Save Assignment' : 'Add Assignees'}</button>
               </form>
             </section>
           )}
@@ -1097,48 +1283,147 @@ const TaskDetailPage = () => {
 
       {activeTab === 'time' && (
         <section className="panel">
-          <h2>⏱ 工時紀錄</h2>
+          <h2>Time Entries</h2>
           {timeError && <p className="error-text">{timeError}</p>}
           {timeMessage && <p className="success-text">{timeMessage}</p>}
           <p>
-            總工時：<strong>{formatHours(task.total_work_hours)} 小時</strong>
+            Total Hours: <strong>{formatHours(task.total_work_hours)} hrs</strong>
           </p>
           <div className="time-actions">
             <button type="button" onClick={handleStartTime} disabled={!!activeEntry || timeLoading}>
-              {activeEntry ? '已開始' : '開始工作'}
+              {activeEntry ? 'Started' : 'Start Timer'}
             </button>
             <button type="button" onClick={handleStopTime} disabled={!activeEntry || timeLoading}>
-              結束工作
+              Stop Timer
             </button>
           </div>
           {activeEntry && (
-            <p className="hint-text">
-              工時進行中（開始於 {formatDateTime(activeEntry.start_time)}）
-            </p>
+            <p className="hint-text">Timer is running (started at {formatDateTime(activeEntry.start_time)})</p>
           )}
+
+          {canManageMultiTime && (
+            <form className="stack" onSubmit={handleBulkTimeSubmit}>
+              <h3>Shared Time Entry</h3>
+              <label>
+                Users (multi-select)
+                <Select
+                  isMulti
+                  classNamePrefix="assignee-select"
+                  placeholder="Select assigned users"
+                  options={timeTargetOptions}
+                  value={timeTargetOptions.filter((option) =>
+                    bulkTimeForm.user_ids.includes(option.value),
+                  )}
+                  onChange={handleBulkTimeUsersChange}
+                  closeMenuOnSelect={false}
+                />
+              </label>
+              <label>
+                Start Time
+                <input type="datetime-local" name="start_time" value={bulkTimeForm.start_time} onChange={handleBulkTimeChange} />
+              </label>
+              <label>
+                End Time
+                <input type="datetime-local" name="end_time" value={bulkTimeForm.end_time} onChange={handleBulkTimeChange} />
+              </label>
+              <label>
+                Work Hours (optional)
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  name="work_hours"
+                  value={bulkTimeForm.work_hours}
+                  onChange={handleBulkTimeChange}
+                  placeholder="e.g. 7.5"
+                />
+              </label>
+              <label>
+                Note
+                <input name="note" value={bulkTimeForm.note} onChange={handleBulkTimeChange} placeholder="Optional note" />
+              </label>
+              <button type="submit" disabled={bulkTimeLoading}>
+                {bulkTimeLoading ? 'Saving...' : 'Create Shared Time Entries'}
+              </button>
+            </form>
+          )}
+
           {timeEntries.length === 0 ? (
-            <p>尚無工時紀錄。</p>
+            <p>No time entries yet.</p>
           ) : (
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>使用者</th>
-                  <th>開始時間</th>
-                  <th>結束時間</th>
-                  <th>工時（小時）</th>
+                  <th>User</th>
+                  <th>Start</th>
+                  <th>End</th>
+                  <th>Hours</th>
+                  {isManager && <th>Action</th>}
                 </tr>
               </thead>
               <tbody>
                 {timeEntries.map((entry) => (
                   <tr key={entry.id}>
-                    <td>{entry.author || `使用者 ${entry.user_id}`}</td>
-                    <td>{entry.start_time ? formatDateTime(entry.start_time) : '—'}</td>
-                    <td>{entry.end_time ? formatDateTime(entry.end_time) : '進行中'}</td>
+                    <td>{entry.author || `User #${entry.user_id}`}</td>
+                    <td>{entry.start_time ? formatDateTime(entry.start_time) : '-'}</td>
+                    <td>{entry.end_time ? formatDateTime(entry.end_time) : 'Running'}</td>
                     <td>{formatHours(entry.work_hours)}</td>
+                    {isManager && (
+                      <td>
+                        <button type="button" className="secondary-button" onClick={() => handleStartEditTimeEntry(entry)}>
+                          Edit
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
+          )}
+
+          {isManager && editingTimeEntryId && (
+            <form className="stack" onSubmit={handleSaveEditTimeEntry}>
+              <h3>Edit Time Entry #{editingTimeEntryId}</h3>
+              <label>
+                User
+                <select name="user_id" value={editingTimeForm.user_id} onChange={handleEditingTimeChange}>
+                  <option value="">Unassigned</option>
+                  {timeTargetOptions.map((option) => (
+                    <option key={option.value} value={String(option.value)}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Start Time
+                <input type="datetime-local" name="start_time" value={editingTimeForm.start_time} onChange={handleEditingTimeChange} />
+              </label>
+              <label>
+                End Time
+                <input type="datetime-local" name="end_time" value={editingTimeForm.end_time} onChange={handleEditingTimeChange} />
+              </label>
+              <label>
+                Work Hours
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  name="work_hours"
+                  value={editingTimeForm.work_hours}
+                  onChange={handleEditingTimeChange}
+                  placeholder="Leave blank to recalculate"
+                />
+              </label>
+              <label>
+                Note
+                <input name="note" value={editingTimeForm.note} onChange={handleEditingTimeChange} />
+              </label>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <button type="submit" disabled={editingTimeLoading}>
+                  {editingTimeLoading ? 'Saving...' : 'Save Time Entry'}
+                </button>
+                <button type="button" className="secondary-button" onClick={handleCancelEditTimeEntry}>Cancel</button>
+              </div>
+            </form>
           )}
         </section>
       )}

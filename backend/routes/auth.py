@@ -185,13 +185,15 @@ def list_users():
 
 
 @auth_bp.get("/assignable-users")
-@role_required("site_supervisor", "hq_staff")
+@role_required("site_supervisor", "hq_staff", "worker")
 def list_assignable_users():
-    users = (
-        User.query.filter(User.role != "admin")
-        .order_by(User.username.asc())
-        .all()
-    )
+    claims = get_jwt() or {}
+    role = claims.get("role")
+    query = User.query.filter(User.role != "admin")
+    if role == "worker":
+        # Workers can only pick other workers for field-side補派工/工時計算.
+        query = query.filter(User.role == "worker")
+    users = query.order_by(User.username.asc()).all()
     return jsonify([user.to_dict() for user in users])
 
 
