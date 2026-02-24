@@ -39,7 +39,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
           </div>
           <div className="app-sidebar__brand-meta">
             <strong>{brandName}</strong>
-            <span>Operations Suite</span>
+            <span>營運系統</span>
           </div>
         </div>
 
@@ -70,9 +70,9 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
               onChange={(event) => setPreference(event.target.value)}
               aria-label="主題切換"
             >
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
-              <option value="system">System</option>
+              <option value="light">淺色</option>
+              <option value="dark">深色</option>
+              <option value="system">跟隨系統</option>
             </select>
             <button type="button" className="secondary-button" onClick={logout}>
               登出

@@ -273,11 +273,11 @@ const TaskListPage = () => {
       } else if (isWorker && (task.assignee_ids || []).includes(user?.id)) {
         await api.post(`tasks/${task.id}/assignees/add`, { assignee_ids: values });
       } else {
-        throw new Error('No permission to add assignees');
+        throw new Error('你沒有新增派工人員的權限');
       }
       await loadTasks({ showLoading: false });
     } catch (err) {
-      const message = err?.message || getErrorMessage(err, 'Unable to update assignees.');
+      const message = err?.message || getErrorMessage(err, '更新指派對象失敗。');
       setError(message);
     } finally {
       setAssigningTaskId(null);
@@ -1092,7 +1092,7 @@ const TaskListPage = () => {
                           )}
                         </div>
                         {canAssistAssign && !isManager && (
-                          <p className="hint-text">Field worker add-only assignment (existing assignees will be kept).</p>
+                          <p className="hint-text">現場人員僅可補加派工，既有指派名單會保留。</p>
                         )}
                       </div>
                     )}

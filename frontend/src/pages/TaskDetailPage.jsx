@@ -408,7 +408,7 @@ const TaskDetailPage = () => {
         await api.post(`tasks/${id}/assignees/add`, {
           assignee_ids: assignmentForm.assignee_ids.map(Number),
         });
-        setAssignmentSuccess('Assignees added to task.');
+        setAssignmentSuccess('已將人員加入任務。');
       } else {
         const payload = {
           assignee_ids: assignmentForm.assignee_ids.map(Number),
@@ -416,11 +416,11 @@ const TaskDetailPage = () => {
           location_url: assignmentForm.location_url.trim() || null,
         };
         await api.put(`tasks/${id}`, payload);
-        setAssignmentSuccess('Task assignment updated.');
+        setAssignmentSuccess('派工設定已更新。');
       }
       await loadTask();
     } catch (err) {
-      const message = getErrorMessage(err, 'Unable to update assignment settings.');
+      const message = getErrorMessage(err, '更新派工設定失敗。');
       setAssignmentError(message);
     }
   };
@@ -443,7 +443,7 @@ const TaskDetailPage = () => {
     setTimeMessage('');
 
     if (!bulkTimeForm.user_ids.length) {
-      setTimeError('Select at least one user.');
+      setTimeError('請至少選擇一位人員。');
       return;
     }
 
@@ -453,11 +453,11 @@ const TaskDetailPage = () => {
     const parsedHours = hasHours ? Number(bulkTimeForm.work_hours) : null;
 
     if (!startTime && !endTime && parsedHours === null) {
-      setTimeError('Provide start/end time or work hours.');
+      setTimeError('請提供開始/結束時間或工時。');
       return;
     }
     if (hasHours && Number.isNaN(parsedHours)) {
-      setTimeError('Work hours must be a number.');
+      setTimeError('工時必須是數字。');
       return;
     }
 
@@ -470,7 +470,7 @@ const TaskDetailPage = () => {
         work_hours: parsedHours,
         note: bulkTimeForm.note.trim() || null,
       });
-      setTimeMessage('Created shared time entries for selected users.');
+      setTimeMessage('已為選取人員建立多人工時紀錄。');
       setBulkTimeForm((prev) => ({
         ...prev,
         start_time: '',
@@ -480,7 +480,7 @@ const TaskDetailPage = () => {
       }));
       await loadTask();
     } catch (err) {
-      const message = getErrorMessage(err, 'Unable to create shared time entries.');
+      const message = getErrorMessage(err, '建立多人工時紀錄失敗。');
       setTimeError(message);
     } finally {
       setBulkTimeLoading(false);
@@ -534,16 +534,16 @@ const TaskDetailPage = () => {
       if (editingTimeForm.work_hours.trim() !== '') {
         const parsed = Number(editingTimeForm.work_hours);
         if (Number.isNaN(parsed)) {
-          throw new Error('Work hours must be a number.');
+          throw new Error('工時必須是數字。');
         }
         payload.work_hours = parsed;
       }
       await api.patch(`tasks/${id}/time/${editingTimeEntryId}`, payload);
-      setTimeMessage('Time entry updated.');
+      setTimeMessage('工時紀錄已更新。');
       handleCancelEditTimeEntry();
       await loadTask();
     } catch (err) {
-      const message = err?.message || getErrorMessage(err, 'Unable to update time entry.');
+      const message = err?.message || getErrorMessage(err, '更新工時紀錄失敗。');
       setTimeError(message);
     } finally {
       setEditingTimeLoading(false);
@@ -958,19 +958,19 @@ const TaskDetailPage = () => {
 
           {canManageAssignmentPanel && (
             <section className="panel">
-              <h2>{isManager ? 'Assignment' : 'Add Assignees On Site'}</h2>
+              <h2>{isManager ? '派工設定' : '現場補派工'}</h2>
               {assignmentError && <p className="error-text">{assignmentError}</p>}
               {assignmentSuccess && <p className="success-text">{assignmentSuccess}</p>}
               {!isManager && (
-                <p className="hint-text">Assigned workers can add missing workers on site. Existing assignees will be kept.</p>
+                <p className="hint-text">已派工人員可在現場補加漏派人員，既有指派名單會保留。</p>
               )}
               <form className="stack" onSubmit={handleAssignmentSubmit}>
                 <label>
-                  Assignees
+                  指派對象
                   <Select
                     isMulti
                     classNamePrefix="assignee-select"
-                    placeholder="Select users to add"
+                    placeholder="選擇要加入的人員"
                     options={assigneeOptions}
                     value={assigneeOptions.filter((option) =>
                       assignmentForm.assignee_ids.includes(option.value),
@@ -983,7 +983,7 @@ const TaskDetailPage = () => {
                 {isManager && (
                   <>
                     <label>
-                      Due Date
+                      截止日期
                       <input
                         type="datetime-local"
                         name="due_date"
@@ -992,18 +992,18 @@ const TaskDetailPage = () => {
                       />
                     </label>
                     <label>
-                      Map URL
+                      地圖連結
                       <input
                         type="url"
                         name="location_url"
                         value={assignmentForm.location_url}
                         onChange={handleAssignmentChange}
-                        placeholder="Google Maps URL"
+                        placeholder="Google 地圖連結"
                       />
                     </label>
                   </>
                 )}
-                <button type="submit">{isManager ? 'Save Assignment' : 'Add Assignees'}</button>
+                <button type="submit">{isManager ? '儲存派工' : '新增人員'}</button>
               </form>
             </section>
           )}
@@ -1283,33 +1283,33 @@ const TaskDetailPage = () => {
 
       {activeTab === 'time' && (
         <section className="panel">
-          <h2>Time Entries</h2>
+          <h2>工時紀錄</h2>
           {timeError && <p className="error-text">{timeError}</p>}
           {timeMessage && <p className="success-text">{timeMessage}</p>}
           <p>
-            Total Hours: <strong>{formatHours(task.total_work_hours)} hrs</strong>
+            總工時：<strong>{formatHours(task.total_work_hours)} 小時</strong>
           </p>
           <div className="time-actions">
             <button type="button" onClick={handleStartTime} disabled={!!activeEntry || timeLoading}>
-              {activeEntry ? 'Started' : 'Start Timer'}
+              {activeEntry ? '已開始' : '開始工時'}
             </button>
             <button type="button" onClick={handleStopTime} disabled={!activeEntry || timeLoading}>
-              Stop Timer
+              結束工時
             </button>
           </div>
           {activeEntry && (
-            <p className="hint-text">Timer is running (started at {formatDateTime(activeEntry.start_time)})</p>
+            <p className="hint-text">工時計時中（開始於 {formatDateTime(activeEntry.start_time)}）</p>
           )}
 
           {canManageMultiTime && (
             <form className="stack" onSubmit={handleBulkTimeSubmit}>
-              <h3>Shared Time Entry</h3>
+              <h3>多人共用工時</h3>
               <label>
-                Users (multi-select)
+                人員（可複選）
                 <Select
                   isMulti
                   classNamePrefix="assignee-select"
-                  placeholder="Select assigned users"
+                  placeholder="選擇已指派人員"
                   options={timeTargetOptions}
                   value={timeTargetOptions.filter((option) =>
                     bulkTimeForm.user_ids.includes(option.value),
@@ -1319,15 +1319,15 @@ const TaskDetailPage = () => {
                 />
               </label>
               <label>
-                Start Time
+                開始時間
                 <input type="datetime-local" name="start_time" value={bulkTimeForm.start_time} onChange={handleBulkTimeChange} />
               </label>
               <label>
-                End Time
+                結束時間
                 <input type="datetime-local" name="end_time" value={bulkTimeForm.end_time} onChange={handleBulkTimeChange} />
               </label>
               <label>
-                Work Hours (optional)
+                工時（選填）
                 <input
                   type="number"
                   step="0.01"
@@ -1335,43 +1335,43 @@ const TaskDetailPage = () => {
                   name="work_hours"
                   value={bulkTimeForm.work_hours}
                   onChange={handleBulkTimeChange}
-                  placeholder="e.g. 7.5"
+                  placeholder="例如 7.5"
                 />
               </label>
               <label>
-                Note
-                <input name="note" value={bulkTimeForm.note} onChange={handleBulkTimeChange} placeholder="Optional note" />
+                備註
+                <input name="note" value={bulkTimeForm.note} onChange={handleBulkTimeChange} placeholder="選填備註" />
               </label>
               <button type="submit" disabled={bulkTimeLoading}>
-                {bulkTimeLoading ? 'Saving...' : 'Create Shared Time Entries'}
+                {bulkTimeLoading ? '儲存中...' : '建立多人工時紀錄'}
               </button>
             </form>
           )}
 
           {timeEntries.length === 0 ? (
-            <p>No time entries yet.</p>
+            <p>目前尚無工時紀錄。</p>
           ) : (
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>User</th>
-                  <th>Start</th>
-                  <th>End</th>
-                  <th>Hours</th>
-                  {isManager && <th>Action</th>}
+                  <th>人員</th>
+                  <th>開始</th>
+                  <th>結束</th>
+                  <th>工時</th>
+                  {isManager && <th>操作</th>}
                 </tr>
               </thead>
               <tbody>
                 {timeEntries.map((entry) => (
                   <tr key={entry.id}>
-                    <td>{entry.author || `User #${entry.user_id}`}</td>
+                    <td>{entry.author || `人員 #${entry.user_id}`}</td>
                     <td>{entry.start_time ? formatDateTime(entry.start_time) : '-'}</td>
-                    <td>{entry.end_time ? formatDateTime(entry.end_time) : 'Running'}</td>
+                    <td>{entry.end_time ? formatDateTime(entry.end_time) : '進行中'}</td>
                     <td>{formatHours(entry.work_hours)}</td>
                     {isManager && (
                       <td>
                         <button type="button" className="secondary-button" onClick={() => handleStartEditTimeEntry(entry)}>
-                          Edit
+                          編輯
                         </button>
                       </td>
                     )}
@@ -1383,26 +1383,26 @@ const TaskDetailPage = () => {
 
           {isManager && editingTimeEntryId && (
             <form className="stack" onSubmit={handleSaveEditTimeEntry}>
-              <h3>Edit Time Entry #{editingTimeEntryId}</h3>
+              <h3>編輯工時紀錄 #{editingTimeEntryId}</h3>
               <label>
-                User
+                人員
                 <select name="user_id" value={editingTimeForm.user_id} onChange={handleEditingTimeChange}>
-                  <option value="">Unassigned</option>
+                  <option value="">未指定</option>
                   {timeTargetOptions.map((option) => (
                     <option key={option.value} value={String(option.value)}>{option.label}</option>
                   ))}
                 </select>
               </label>
               <label>
-                Start Time
+                開始時間
                 <input type="datetime-local" name="start_time" value={editingTimeForm.start_time} onChange={handleEditingTimeChange} />
               </label>
               <label>
-                End Time
+                結束時間
                 <input type="datetime-local" name="end_time" value={editingTimeForm.end_time} onChange={handleEditingTimeChange} />
               </label>
               <label>
-                Work Hours
+                工時
                 <input
                   type="number"
                   step="0.01"
@@ -1410,18 +1410,18 @@ const TaskDetailPage = () => {
                   name="work_hours"
                   value={editingTimeForm.work_hours}
                   onChange={handleEditingTimeChange}
-                  placeholder="Leave blank to recalculate"
+                  placeholder="留空時自動重新計算"
                 />
               </label>
               <label>
-                Note
+                備註
                 <input name="note" value={editingTimeForm.note} onChange={handleEditingTimeChange} />
               </label>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 <button type="submit" disabled={editingTimeLoading}>
-                  {editingTimeLoading ? 'Saving...' : 'Save Time Entry'}
+                  {editingTimeLoading ? '儲存中...' : '儲存工時紀錄'}
                 </button>
-                <button type="button" className="secondary-button" onClick={handleCancelEditTimeEntry}>Cancel</button>
+                <button type="button" className="secondary-button" onClick={handleCancelEditTimeEntry}>取消</button>
               </div>
             </form>
           )}

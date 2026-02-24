@@ -180,13 +180,13 @@ def _build_week_schedule_flex(tasks: list[Task], week_start: datetime) -> dict:
                 "type": "button",
                 "style": "link",
                 "height": "sm",
-                "action": {"type": "uri", "label": "Open Web", "uri": f"{base}/tasks"},
+                "action": {"type": "uri", "label": "開啟網站", "uri": f"{base}/tasks"},
             }
         )
 
     return {
         "type": "flex",
-        "altText": f"This week schedule {range_text}",
+        "altText": f"本週行程 {range_text}",
         "contents": {
             "type": "bubble",
             "size": "giga",
@@ -198,7 +198,7 @@ def _build_week_schedule_flex(tasks: list[Task], week_start: datetime) -> dict:
                 "contents": [
                     {
                         "type": "text",
-                        "text": "This Week Schedule",
+                        "text": "本週行程",
                         "weight": "bold",
                         "size": "md",
                         "color": "#111827",
@@ -244,12 +244,12 @@ def _handle_week_schedule(line_user_id: str, reply_token: str) -> None:
     if not tasks:
         reply_text(
             reply_token,
-            f"This week ({week_start.strftime('%m/%d')}-{(week_start + timedelta(days=6)).strftime('%m/%d')}) has no scheduled tasks.",
+            f"本週（{week_start.strftime('%m/%d')}-{(week_start + timedelta(days=6)).strftime('%m/%d')}）目前沒有排程任務。",
         )
         return
 
     if not reply_messages(reply_token, [_build_week_schedule_flex(tasks, week_start)]):
-        reply_text(reply_token, "Unable to render weekly schedule card. Try again later.")
+        reply_text(reply_token, "本週行程卡片顯示失敗，請稍後再試。")
 
 
 def _help_text() -> str:
