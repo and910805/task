@@ -3,10 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 
 import brandFallback from '../assets/brand-logo.svg';
+import LoginPixelDino from '../components/LoginPixelDino.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useBranding } from '../context/BrandingContext.jsx';
 
-const LoginPixelShowcase = ({ brandName }) => (
+const LoginPixelShowcase = () => (
   <section className="login-showcase" aria-hidden="true">
     <div className="login-showcase__panel">
       <div className="login-showcase__label">現場派工工作台</div>
@@ -14,19 +15,17 @@ const LoginPixelShowcase = ({ brandName }) => (
         <div className="login-showcase__grid" />
         <div className="login-showcase__scanline" />
         <div className="login-showcase__shadow" />
-        <aside className="login-dino-loader" style={{ '--wh-number': 24 }} aria-hidden="true">
-          <div className="login-dino-loader__pixel" />
-        </aside>
+        <LoginPixelDino />
       </div>
       <div className="login-showcase__copy">
-        <h2>{brandName}</h2>
-        <p>任務、工時、行事曆、LINE 通知整合</p>
-        <div className="login-showcase__chips">
-          <span>派工</span>
-          <span>工時</span>
-          <span>行事曆</span>
-          <span>報價</span>
-        </div>
+        <h2>派工、工時、行事曆整合</h2>
+        <p>現場回報與後台排程同步，支援 LINE 通知與任務追蹤。</p>
+        <ul className="login-showcase__features">
+          <li>任務指派與接單狀態同步</li>
+          <li>工時開始與結束快速記錄</li>
+          <li>月曆與週檢視安排行程</li>
+          <li>LINE 卡片通知與快捷操作</li>
+        </ul>
       </div>
     </div>
   </section>
@@ -38,7 +37,8 @@ const LoginPage = () => {
   const { branding, refresh: refreshBranding } = useBranding();
   const [mode, setMode] = useState('login');
   const [form, setForm] = useState({ username: '', password: '' });
-  const brandName = branding.name || '立翔水電行';
+
+  const brandName = branding.name || '立翔水電工程行';
   const logoSrc = branding.logoUrl || brandFallback;
 
   const handleChange = (event) => {
@@ -53,22 +53,23 @@ const LoginPage = () => {
         await login({ username: form.username, password: form.password });
         refreshBranding().catch(() => {});
         navigate('/app');
-      } else {
-        await register({
-          username: form.username,
-          password: form.password,
-        });
-        toast.success('帳號建立成功，請使用該帳號登入。');
-        setForm({ username: '', password: '' });
-        setMode('login');
+        return;
       }
+
+      await register({
+        username: form.username,
+        password: form.password,
+      });
+      toast.success('建立帳號成功，請使用新帳號登入');
+      setForm({ username: '', password: '' });
+      setMode('login');
     } catch (err) {
       const isLogin = mode === 'login';
       const notFoundUser = err.response?.status === 404 && isLogin;
       const message =
-        (notFoundUser && '沒有這個使用者') ||
+        (notFoundUser && '查無此帳號或密碼錯誤') ||
         err.response?.data?.msg ||
-        '操作失敗，請稍後再試。';
+        '操作失敗，請稍後再試';
 
       toast.error(message);
     }
@@ -81,19 +82,23 @@ const LoginPage = () => {
   return (
     <div className="login-page">
       <div className="login-shell">
-        <LoginPixelShowcase brandName={brandName} />
+        <LoginPixelShowcase />
         <form className="login-card login-card--animated" onSubmit={handleSubmit}>
           <div className="card-header">
             <div className="login-brand">
               <div className="login-brand__logo">
                 <img src={logoSrc} alt={`${brandName} Logo`} />
               </div>
-              <h1 className="login-brand__name">{brandName}</h1>
+              <div className="login-brand__text">
+                <h1 className="login-brand__name">{brandName}</h1>
+                <p className="login-brand__tag">OPERATIONS SUITE</p>
+              </div>
             </div>
             <p className="login-card__subtitle">
-              {mode === 'login' ? '請輸入帳號密碼登入系統' : '建立新的工人帳號'}
+              {mode === 'login' ? '請輸入帳號密碼登入系統' : '建立新帳號開始使用系統'}
             </p>
           </div>
+
           <div className="form-group">
             <label htmlFor="username">帳號</label>
             <input
@@ -107,6 +112,7 @@ const LoginPage = () => {
               placeholder="輸入帳號"
             />
           </div>
+
           <div className="form-group">
             <label htmlFor="password">密碼</label>
             <input
@@ -120,13 +126,15 @@ const LoginPage = () => {
               placeholder="輸入密碼"
             />
           </div>
+
           <button type="submit" disabled={loading}>
-            {mode === 'login' ? '登入' : '註冊'}
+            {mode === 'login' ? '登入' : '建立帳號'}
           </button>
+
           <p className="login-switch">
             {mode === 'login' ? '沒有帳號？' : '已有帳號？'}{' '}
             <button type="button" onClick={switchMode}>
-              {mode === 'login' ? '建立新帳號' : '立即登入'}
+              {mode === 'login' ? '建立新帳號' : '返回登入'}
             </button>
           </p>
         </form>
