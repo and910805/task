@@ -58,7 +58,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
         </nav>
 
         <div className="app-sidebar__footer">
-          <SidebarOwnerOrb logoSrc={logoSrc} text="eric" />
+          <SidebarOwnerOrb logoSrc={logoSrc} text={user?.username || 'eric'} />
           <p className="app-sidebar__user">
             目前登入：{user?.username}
             {roleLabel ? `（${roleLabel}）` : ''}
