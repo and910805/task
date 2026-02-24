@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom';
 
 import brandFallback from '../assets/brand-logo.svg';
 import GlobalSearch from './GlobalSearch.jsx';
+import SidebarOwnerOrb from './SidebarOwnerOrb.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useBranding } from '../context/BrandingContext.jsx';
 import { useRoleLabels } from '../context/RoleLabelContext.jsx';
@@ -57,6 +58,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
         </nav>
 
         <div className="app-sidebar__footer">
+          <SidebarOwnerOrb logoSrc={logoSrc} text="eric" />
           <p className="app-sidebar__user">
             目前登入：{user?.username}
             {roleLabel ? `（${roleLabel}）` : ''}
