@@ -10,12 +10,20 @@ from urllib.parse import parse_qs
 from flask import Blueprint, current_app, jsonify, request
 from werkzeug.datastructures import FileStorage
 
+from decorators import role_required
 from extensions import db
 from models import SiteSetting, User, Task, TaskUpdate
 from services.attachments import create_file_attachment
 from services.line_messaging import (
+    build_default_rich_menu,
+    create_rich_menu,
+    delete_rich_menu,
+    has_line_bot_config,
+    list_rich_menus,
     reply_messages,
     reply_text,
+    set_default_rich_menu,
+    upload_rich_menu_image,
     verify_signature,
     get_message_content_bytes,
 )
@@ -253,7 +261,14 @@ def _help_text() -> str:
         "4) accept <id>   → 接單（尚未接單且未指派）\n"
         "5) start <id>    → 設為進行中\n"
         "6) done <id> <說明> → 完工（會要求傳照片）\n\n"
-        "綁定碼請到網站『個人資料』產生。"
+        "進階指令（可選）：\n"
+        "- stop <id>              → 結束工時\n"
+        "- timer-start <id>       → 開始工時（文字版）\n"
+        "- timer-stop <id>        → 結束工時（文字版）\n"
+        "- reject <id> <原因>      → 回報無法接單\n"
+        "- week / calendar / 本週  → 顯示本週工作行程\n\n"
+        "綁定碼請到網站『個人資料』產生。\n"
+        "任務卡片也可以直接按按鈕操作（接受 / 拒絕 / 開始工時 / 結束工時）。"
     )
 
 
@@ -625,6 +640,62 @@ def _handle_text_command(line_user_id: str, reply_token: str, text: str) -> None
         reply_text(reply_token, f"已將任務 #{task.id} 設為「進行中」。")
         return
 
+    if t.startswith("stop "):
+        parts = t.split()
+        if len(parts) != 2 or not parts[1].isdigit():
+            reply_text(reply_token, "用法：stop <task_id>")
+            return
+
+        task_id = int(parts[1])
+        task = Task.query.get(task_id)
+        if task is None:
+            reply_text(reply_token, "找不到任務")
+            return
+
+        _ok, msg = _line_time_stop(task, user)
+        reply_text(reply_token, msg)
+        return
+
+    if (
+        t.startswith("timer-start ")
+        or t.startswith("tstart ")
+        or t.startswith("工時開始 ")
+    ):
+        parts = t.split()
+        if len(parts) != 2 or not parts[1].isdigit():
+            reply_text(reply_token, "用法：timer-start <task_id>")
+            return
+
+        task_id = int(parts[1])
+        task = Task.query.get(task_id)
+        if task is None:
+            reply_text(reply_token, "找不到任務")
+            return
+
+        _ok, msg = _line_time_start(task, user)
+        reply_text(reply_token, msg)
+        return
+
+    if (
+        t.startswith("timer-stop ")
+        or t.startswith("tstop ")
+        or t.startswith("工時結束 ")
+    ):
+        parts = t.split()
+        if len(parts) != 2 or not parts[1].isdigit():
+            reply_text(reply_token, "用法：timer-stop <task_id>")
+            return
+
+        task_id = int(parts[1])
+        task = Task.query.get(task_id)
+        if task is None:
+            reply_text(reply_token, "找不到任務")
+            return
+
+        _ok, msg = _line_time_stop(task, user)
+        reply_text(reply_token, msg)
+        return
+
     if t.startswith("accept "):
         parts = t.split()
         if len(parts) != 2 or not parts[1].isdigit():
@@ -664,6 +735,40 @@ def _handle_text_command(line_user_id: str, reply_token: str, text: str) -> None
         db.session.add(TaskUpdate(task_id=task_id, user_id=user.id, status="已接單", note=None))
         db.session.commit()
         reply_text(reply_token, f"已接單任務 #{task_id} ✅")
+        return
+
+    if t.startswith("reject "):
+        parts = t.split(maxsplit=2)
+        if len(parts) < 2 or not parts[1].isdigit():
+            reply_text(reply_token, "用法：reject <task_id> <原因>")
+            return
+
+        task_id = int(parts[1])
+        task = Task.query.get(task_id)
+        if task is None:
+            reply_text(reply_token, "找不到任務")
+            return
+
+        if len(parts) == 2 or not (parts[2] or "").strip():
+            if not _worker_can_access_task(task, user.id):
+                reply_text(reply_token, "你沒有此任務的權限。")
+                return
+            _set_pending(
+                line_user_id,
+                {
+                    "type": "reject_reason",
+                    "task_id": task_id,
+                    "created_at": datetime.utcnow().isoformat(),
+                },
+            )
+            reply_text(
+                reply_token,
+                f"請輸入無法接單原因（任務 #{task_id}）。\n或直接輸入：reject {task_id} <原因>",
+            )
+            return
+
+        _ok, msg = _line_reject_task(task, user, parts[2])
+        reply_text(reply_token, msg)
         return
 
     if t.startswith("done "):
@@ -759,6 +864,130 @@ def _handle_image_message(line_user_id: str, reply_token: str, message_id: str) 
 
     _clear_pending(line_user_id)
     reply_text(reply_token, f"已完成任務 #{task.id} ✅（照片已存、說明已記錄）")
+
+
+@line_bp.get("/rich-menu/template")
+@role_required("admin")
+def get_rich_menu_template():
+    base_url = (_cfg("APP_BASE_URL") or "").strip().rstrip("/")
+    menu = build_default_rich_menu(base_url=base_url or None)
+    return jsonify(
+        {
+            "ok": True,
+            "msg": "LINE Rich Menu default template",
+            "image_requirements": {
+                "width": 2500,
+                "height": 1686,
+                "format": ["image/png", "image/jpeg"],
+            },
+            "recommended_tiles": [
+                "任務列表 (tasks)",
+                "本週行程 (本週)",
+                "功能說明 (help)",
+                "任務頁面 (/app)",
+                "個人資料 (/profile)",
+                "行事曆 (/calendar)",
+            ],
+            "base_url": base_url or None,
+            "menu": menu,
+        }
+    )
+
+
+@line_bp.get("/rich-menu/list")
+@role_required("admin")
+def get_rich_menu_list():
+    if not has_line_bot_config():
+        return jsonify({"ok": False, "msg": "LINE Bot is not configured"}), 400
+    try:
+        data = list_rich_menus()
+    except Exception as exc:
+        return jsonify({"ok": False, "msg": f"LINE rich menu list failed: {exc}"}), 500
+    return jsonify({"ok": True, **(data if isinstance(data, dict) else {"richmenus": []})})
+
+
+@line_bp.post("/rich-menu/default")
+@role_required("admin")
+def create_default_rich_menu():
+    """Create + upload + set default LINE Rich Menu using uploaded image."""
+    if not has_line_bot_config():
+        return jsonify({"ok": False, "msg": "LINE Bot is not configured"}), 400
+
+    upload = request.files.get("file") or request.files.get("image")
+    if upload is None:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "msg": "Please upload image file via multipart/form-data field 'file' (or 'image').",
+                }
+            ),
+            400,
+        )
+
+    filename = (upload.filename or "").strip()
+    if not filename:
+        return jsonify({"ok": False, "msg": "Image filename is required"}), 400
+
+    content_type = (upload.content_type or "").strip().lower()
+    if content_type not in {"image/png", "image/jpeg", "image/jpg"}:
+        lower_name = filename.lower()
+        if lower_name.endswith(".png"):
+            content_type = "image/png"
+        elif lower_name.endswith(".jpg") or lower_name.endswith(".jpeg"):
+            content_type = "image/jpeg"
+        else:
+            return jsonify({"ok": False, "msg": "Only PNG/JPEG image is supported"}), 400
+
+    image_bytes = upload.read()
+    if not image_bytes:
+        return jsonify({"ok": False, "msg": "Uploaded image is empty"}), 400
+
+    base_url = (request.form.get("base_url") or _cfg("APP_BASE_URL") or "").strip().rstrip("/")
+    chat_bar_text = (request.form.get("chat_bar_text") or "功能選單").strip() or "功能選單"
+    menu_name = (request.form.get("menu_name") or "TaskGo Worker Menu").strip() or "TaskGo Worker Menu"
+
+    menu = build_default_rich_menu(
+        base_url=base_url or None,
+        chat_bar_text=chat_bar_text,
+    )
+    menu["name"] = menu_name[:300]
+
+    rich_menu_id = None
+    try:
+        rich_menu_id = create_rich_menu(menu)
+        upload_rich_menu_image(rich_menu_id, image_bytes, content_type="image/jpeg" if content_type == "image/jpg" else content_type)
+        set_default_rich_menu(rich_menu_id)
+    except Exception as exc:
+        # Best effort cleanup if creation succeeded but later steps failed.
+        if rich_menu_id:
+            try:
+                delete_rich_menu(rich_menu_id)
+            except Exception:
+                pass
+        return jsonify({"ok": False, "msg": f"LINE rich menu setup failed: {exc}"}), 500
+
+    return jsonify(
+        {
+            "ok": True,
+            "msg": "LINE Rich Menu created and set as default",
+            "rich_menu_id": rich_menu_id,
+            "menu": menu,
+            "image_requirements": {"width": 2500, "height": 1686},
+        }
+    )
+
+
+@line_bp.delete("/rich-menu/<string:rich_menu_id>")
+@role_required("admin")
+def remove_rich_menu(rich_menu_id: str):
+    if not has_line_bot_config():
+        return jsonify({"ok": False, "msg": "LINE Bot is not configured"}), 400
+    try:
+        delete_rich_menu(rich_menu_id)
+    except Exception as exc:
+        return jsonify({"ok": False, "msg": f"Delete rich menu failed: {exc}"}), 500
+    return jsonify({"ok": True, "msg": "Rich menu deleted", "rich_menu_id": rich_menu_id})
 
 
 @line_bp.post("/webhook")

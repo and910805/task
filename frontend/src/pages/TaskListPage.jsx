@@ -36,7 +36,7 @@ const sortOptions = [
   { value: 'created_desc', label: '最新建立' },
 ];
 
-const calendarWeekLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const calendarWeekLabels = ['日', '一', '二', '三', '四', '五', '六'];
 
 const toDateOnlyKey = (value) => {
   if (!value) return '';
@@ -409,6 +409,7 @@ const TaskListPage = () => {
       const inCurrentMonth = date.getMonth() === monthStart.getMonth();
       const isToday = key === toDateOnlyKey(new Date());
       const isSelected = key === selectedCalendarDate;
+      const isWeekend = date.getDay() === 0 || date.getDay() === 6;
       const dayTasks = tasksByCalendarDate.get(key) || [];
       return {
         date,
@@ -416,6 +417,7 @@ const TaskListPage = () => {
         inCurrentMonth,
         isToday,
         isSelected,
+        isWeekend,
         dayTasks,
       };
     });
@@ -431,6 +433,13 @@ const TaskListPage = () => {
     const parsed = new Date(`${selectedCalendarDate}T00:00:00`);
     if (Number.isNaN(parsed.getTime())) return selectedCalendarDate;
     return parsed.toLocaleDateString();
+  }, [selectedCalendarDate]);
+
+  const selectedDateWeekdayLabel = useMemo(() => {
+    if (!selectedCalendarDate) return '';
+    const parsed = new Date(`${selectedCalendarDate}T00:00:00`);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return `星期${calendarWeekLabels[parsed.getDay()]}`;
   }, [selectedCalendarDate]);
 
   const calendarMonthLabel = useMemo(() => {
@@ -509,6 +518,13 @@ const TaskListPage = () => {
     已完成: 'status-badge status-completed',
   };
 
+  const calendarEventToneClass = {
+    尚未接單: 'task-calendar-event--pending',
+    已接單: 'task-calendar-event--queued',
+    進行中: 'task-calendar-event--progress',
+    已完成: 'task-calendar-event--done',
+  };
+
   const headerActions = isManager ? (
     <div className="task-toolbar">
       <label>
@@ -580,238 +596,166 @@ const TaskListPage = () => {
       : '此狀態沒有符合的任務。';
 
   const calendarView = (
-    <div style={{ display: 'grid', gap: '16px' }}>
-      <div
-        className="task-toolbar"
-        style={{ justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}
-      >
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => moveCalendarMonth(-1)}
-          >
-            上個月
-          </button>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={goToCurrentMonth}
-          >
-            本月
-          </button>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => moveCalendarMonth(1)}
-          >
-            下個月
-          </button>
-          <strong>{calendarMonthLabel}</strong>
+    <div className="task-calendar-view">
+      <div className="task-calendar-toolbar">
+        <div className="task-calendar-toolbar__left">
+          <div className="task-calendar-nav">
+            <button type="button" className="secondary-button" onClick={() => moveCalendarMonth(-1)}>
+              上個月
+            </button>
+            <button type="button" className="secondary-button" onClick={goToCurrentMonth}>
+              今天
+            </button>
+            <button type="button" className="secondary-button" onClick={() => moveCalendarMonth(1)}>
+              下個月
+            </button>
+          </div>
+          <div className="task-calendar-toolbar__month">{calendarMonthLabel}</div>
         </div>
-        <div className="hint-text">點日期查看當日任務（共 {filteredTasks.length} 筆）</div>
+        <div className="task-calendar-toolbar__meta">
+          <span className="hint-text">月曆視圖</span>
+          <span className="hint-text">共 {filteredTasks.length} 筆任務</span>
+        </div>
       </div>
 
-      <div style={{ overflowX: 'auto' }}>
-        <div style={{ minWidth: '820px' }}>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
-              gap: '8px',
-              marginBottom: '8px',
-            }}
-          >
-            {calendarWeekLabels.map((label) => (
+      <div className="task-calendar-layout">
+        <div className="task-calendar-board">
+          <div className="task-calendar-weekdays">
+            {calendarWeekLabels.map((label, idx) => (
               <div
                 key={label}
-                style={{
-                  textAlign: 'center',
-                  fontSize: '0.85rem',
-                  fontWeight: 700,
-                  color: '#475569',
-                  padding: '6px 4px',
-                }}
+                className={`task-calendar-weekdays__cell${idx === 0 || idx === 6 ? ' is-weekend' : ''}`}
               >
                 {label}
               </div>
             ))}
           </div>
 
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
-              gap: '8px',
-            }}
-          >
+          <div className="task-calendar-grid">
             {calendarGridDates.map((cell) => {
               const taskCount = cell.dayTasks.length;
-              const summaryTasks = cell.dayTasks.slice(0, 2);
+              const summaryTasks = cell.dayTasks.slice(0, 3);
+
               return (
                 <button
                   key={cell.key}
                   type="button"
                   onClick={() => setSelectedCalendarDate(cell.key)}
-                  style={{
-                    textAlign: 'left',
-                    borderRadius: '12px',
-                    border: cell.isSelected ? '2px solid #0ea5e9' : '1px solid #e2e8f0',
-                    background: cell.isSelected
-                      ? '#f0f9ff'
-                      : cell.inCurrentMonth
-                      ? '#ffffff'
-                      : '#f8fafc',
-                    color: '#0f172a',
-                    minHeight: '120px',
-                    padding: '10px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '6px',
-                    boxShadow: cell.isSelected ? '0 0 0 1px rgba(14,165,233,0.2)' : 'none',
-                  }}
+                  className={[
+                    'task-calendar-cell',
+                    !cell.inCurrentMonth ? 'is-outside' : '',
+                    cell.isSelected ? 'is-selected' : '',
+                    cell.isWeekend ? 'is-weekend' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
-                    <span
-                      style={{
-                        fontWeight: 700,
-                        color: cell.inCurrentMonth ? '#0f172a' : '#94a3b8',
-                      }}
-                    >
+                  <div className="task-calendar-cell__head">
+                    <span className={`task-calendar-daynum${cell.isToday ? ' is-today' : ''}`}>
                       {cell.date.getDate()}
                     </span>
-                    {cell.isToday ? (
-                      <span
-                        style={{
-                          fontSize: '0.72rem',
-                          color: '#0284c7',
-                          background: '#e0f2fe',
-                          borderRadius: '999px',
-                          padding: '1px 6px',
-                        }}
-                      >
-                        Today
-                      </span>
+                    {taskCount > 0 ? (
+                      <span className="task-calendar-cell__count">{taskCount}</span>
                     ) : null}
                   </div>
 
-                  {taskCount > 0 ? (
-                    <>
-                      <div style={{ fontSize: '0.78rem', color: '#475569', fontWeight: 600 }}>
-                        {taskCount} 筆任務
+                  <div className="task-calendar-events">
+                    {summaryTasks.map((task) => {
+                      const when = getTaskCalendarDate(task);
+                      const timeText = when
+                        ? new Date(when).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })
+                        : '';
+                      const toneClass =
+                        calendarEventToneClass[task.status] || 'task-calendar-event--default';
+
+                      return (
+                        <div
+                          key={`calendar-summary-${cell.key}-${task.id}`}
+                          className={`task-calendar-event ${toneClass}`}
+                          title={`${timeText ? `${timeText} ` : ''}${task.title}`}
+                        >
+                          <span className="task-calendar-event__dot" />
+                          {timeText ? (
+                            <span className="task-calendar-event__time">{timeText}</span>
+                          ) : null}
+                          <span className="task-calendar-event__title">{task.title}</span>
+                        </div>
+                      );
+                    })}
+
+                    {taskCount > summaryTasks.length ? (
+                      <div className="task-calendar-more">
+                        +{taskCount - summaryTasks.length} 筆
                       </div>
-                      <div style={{ display: 'grid', gap: '4px' }}>
-                        {summaryTasks.map((task) => {
-                          const when = getTaskCalendarDate(task);
-                          const timeText = when
-                            ? new Date(when).toLocaleTimeString([], {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })
-                            : '--:--';
-                          return (
-                            <div
-                              key={`calendar-summary-${cell.key}-${task.id}`}
-                              style={{
-                                fontSize: '0.75rem',
-                                color: '#1f2937',
-                                background: '#f8fafc',
-                                borderRadius: '8px',
-                                padding: '4px 6px',
-                                border: '1px solid #e2e8f0',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                              }}
-                              title={`${timeText} ${task.title}`}
-                            >
-                              {timeText} {task.title}
-                            </div>
-                          );
-                        })}
-                        {taskCount > summaryTasks.length ? (
-                          <div style={{ fontSize: '0.72rem', color: '#0ea5e9', fontWeight: 600 }}>
-                            +{taskCount - summaryTasks.length} more
-                          </div>
-                        ) : null}
-                      </div>
-                    </>
-                  ) : (
-                    <div style={{ marginTop: 'auto', fontSize: '0.78rem', color: '#94a3b8' }}>
-                      無任務
-                    </div>
-                  )}
+                    ) : null}
+                  </div>
                 </button>
               );
             })}
           </div>
         </div>
-      </div>
 
-      <div
-        style={{
-          border: '1px solid #e2e8f0',
-          borderRadius: '14px',
-          padding: '14px',
-          background: '#ffffff',
-          display: 'grid',
-          gap: '10px',
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
-          <h3 style={{ margin: 0 }}>當日任務</h3>
-          <div className="hint-text">{selectedDateLabel || selectedCalendarDate}</div>
-        </div>
-        {selectedDateTasks.length === 0 ? (
-          <p style={{ margin: 0, color: '#64748b' }}>此日期沒有任務。</p>
-        ) : (
-          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: '10px' }}>
-            {selectedDateTasks.map((task) => {
-              const when = getTaskCalendarDate(task);
-              const whenText = when ? new Date(when).toLocaleString() : '未設定時間';
-              const assignedUsers = task.assignees || [];
-              return (
-                <li
-                  key={`selected-day-task-${task.id}`}
-                  style={{
-                    border: '1px solid #e2e8f0',
-                    borderRadius: '12px',
-                    padding: '12px',
-                    background: '#f8fafc',
-                    display: 'grid',
-                    gap: '6px',
-                  }}
-                >
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      gap: '10px',
-                      alignItems: 'center',
-                      flexWrap: 'wrap',
-                    }}
-                  >
-                    <strong>
-                      <Link to={`/tasks/${task.id}`}>{task.title}</Link>
-                    </strong>
-                    <span className={statusBadgeClass[task.status] || 'status-badge'}>
-                      {task.status}
-                    </span>
-                  </div>
-                  <div className="task-secondary">{task.location || '未設定地點'}</div>
-                  <div className="task-secondary">時間：{whenText}</div>
-                  <div className="task-secondary">
-                    指派：
-                    {assignedUsers.length > 0
-                      ? ` ${assignedUsers.map((x) => x.username).join(', ')}`
-                      : ' 未指派'}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+        <aside className="task-calendar-daypanel">
+          <div className="task-calendar-daypanel__header">
+            <div>
+              <h3>當日任務</h3>
+              <p>
+                {selectedDateLabel || selectedCalendarDate}
+                {selectedDateWeekdayLabel ? ` · ${selectedDateWeekdayLabel}` : ''}
+              </p>
+            </div>
+            <div className="task-calendar-daypanel__count">{selectedDateTasks.length} 筆</div>
+          </div>
+
+          {selectedDateTasks.length === 0 ? (
+            <div className="task-calendar-empty">此日期沒有任務。</div>
+          ) : (
+            <ul className="task-calendar-daylist">
+              {selectedDateTasks.map((task) => {
+                const when = getTaskCalendarDate(task);
+                const whenText = when
+                  ? new Date(when).toLocaleString([], {
+                      year: 'numeric',
+                      month: '2-digit',
+                      day: '2-digit',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })
+                  : '未設定時間';
+                const assignedUsers = task.assignees || [];
+                const toneClass =
+                  calendarEventToneClass[task.status] || 'task-calendar-event--default';
+
+                return (
+                  <li key={`selected-day-task-${task.id}`} className="task-calendar-dayitem">
+                    <div className="task-calendar-dayitem__head">
+                      <Link to={`/tasks/${task.id}`} className="task-calendar-dayitem__title">
+                        {task.title}
+                      </Link>
+                      <span className={statusBadgeClass[task.status] || 'status-badge'}>
+                        {task.status}
+                      </span>
+                    </div>
+
+                    <div className="task-calendar-dayitem__meta">{task.location || '未設定地點'}</div>
+                    <div className="task-calendar-dayitem__meta">時間：{whenText}</div>
+                    <div className="task-calendar-dayitem__meta">
+                      指派：
+                      {assignedUsers.length > 0
+                        ? ` ${assignedUsers.map((x) => x.username).join(', ')}`
+                        : ' 未指派'}
+                    </div>
+
+                    <div className={`task-calendar-dayitem__bar ${toneClass}`} />
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </aside>
       </div>
     </div>
   );

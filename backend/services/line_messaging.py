@@ -16,6 +16,7 @@ except Exception:
 
 LINE_API_BASE = "https://api.line.me/v2/bot/message"
 LINE_DATA_API_BASE = "https://api-data.line.me/v2/bot/message"
+LINE_RICHMENU_API_BASE = "https://api.line.me/v2/bot/richmenu"
 _MAX_TEXT_LEN = 1800
 
 
@@ -405,6 +406,171 @@ def build_task_action_flex(task: Any, *, app=None) -> dict[str, Any]:
 def push_task_action_flex(to_user_id: str, task: Any, app=None) -> bool:
     """Push a task action card to LINE."""
     return push_messages(to_user_id, [build_task_action_flex(task, app=app)], app=app)
+
+
+def _line_http(
+    method: str,
+    url: str,
+    *,
+    app=None,
+    timeout: int = 20,
+    **kwargs,
+) -> requests.Response:
+    headers = kwargs.pop("headers", None)
+    if headers is None:
+        headers = _headers(app=app)
+    resp = requests.request(method, url, headers=headers, timeout=timeout, **kwargs)
+    if resp.status_code >= 400:
+        detail = ""
+        try:
+            detail = resp.text
+        except Exception:
+            detail = ""
+        raise RuntimeError(f"LINE API failed: {resp.status_code} {detail}".strip())
+    return resp
+
+
+def build_default_rich_menu(
+    *,
+    app=None,
+    chat_bar_text: str = "功能選單",
+    base_url: str | None = None,
+) -> dict[str, Any]:
+    """Default rich menu layout (3x2) for task operations.
+
+    Image requirement:
+      - width: 2500
+      - height: 1686
+      - PNG or JPEG
+    """
+    width = 2500
+    height = 1686
+    col_widths = [833, 834, 833]
+    row_heights = [843, 843]
+
+    base = (base_url or _cfg("APP_BASE_URL", app=app) or "").strip().rstrip("/")
+    has_base = bool(base)
+
+    x_positions = [0, col_widths[0], col_widths[0] + col_widths[1]]
+    y_positions = [0, row_heights[0]]
+
+    def area(x: int, y: int, w: int, h: int, action: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "bounds": {"x": x, "y": y, "width": w, "height": h},
+            "action": action,
+        }
+
+    areas: list[dict[str, Any]] = [
+        area(
+            x_positions[0],
+            y_positions[0],
+            col_widths[0],
+            row_heights[0],
+            {"type": "message", "label": "任務列表", "text": "tasks"},
+        ),
+        area(
+            x_positions[1],
+            y_positions[0],
+            col_widths[1],
+            row_heights[0],
+            {"type": "message", "label": "本週行程", "text": "本週"},
+        ),
+        area(
+            x_positions[2],
+            y_positions[0],
+            col_widths[2],
+            row_heights[0],
+            {"type": "message", "label": "功能說明", "text": "help"},
+        ),
+        area(
+            x_positions[0],
+            y_positions[1],
+            col_widths[0],
+            row_heights[1],
+            (
+                {"type": "uri", "label": "任務頁面", "uri": f"{base}/app"}
+                if has_base
+                else {"type": "message", "label": "任務頁面", "text": "tasks"}
+            ),
+        ),
+        area(
+            x_positions[1],
+            y_positions[1],
+            col_widths[1],
+            row_heights[1],
+            (
+                {"type": "uri", "label": "個人資料", "uri": f"{base}/profile"}
+                if has_base
+                else {"type": "message", "label": "個人資料", "text": "help"}
+            ),
+        ),
+        area(
+            x_positions[2],
+            y_positions[1],
+            col_widths[2],
+            row_heights[1],
+            (
+                {"type": "uri", "label": "行事曆", "uri": f"{base}/calendar"}
+                if has_base
+                else {"type": "message", "label": "行事曆", "text": "calendar"}
+            ),
+        ),
+    ]
+
+    return {
+        "size": {"width": width, "height": height},
+        "selected": True,
+        "name": "TaskGo Worker Menu",
+        "chatBarText": str(chat_bar_text or "功能選單")[:14],
+        "areas": areas,
+    }
+
+
+def list_rich_menus(*, app=None) -> dict[str, Any]:
+    resp = _line_http("GET", "/".join([LINE_RICHMENU_API_BASE, "list"]), app=app)
+    return resp.json() if resp.content else {}
+
+
+def create_rich_menu(menu: dict[str, Any], *, app=None) -> str:
+    resp = _line_http("POST", LINE_RICHMENU_API_BASE, app=app, json=menu)
+    payload = resp.json() if resp.content else {}
+    rich_menu_id = str(payload.get("richMenuId") or "").strip()
+    if not rich_menu_id:
+        raise RuntimeError("LINE API returned no richMenuId")
+    return rich_menu_id
+
+
+def upload_rich_menu_image(
+    rich_menu_id: str,
+    image_bytes: bytes,
+    *,
+    content_type: str = "image/png",
+    app=None,
+) -> bool:
+    if not rich_menu_id:
+        raise RuntimeError("rich_menu_id is required")
+    if not image_bytes:
+        raise RuntimeError("image content is empty")
+    url = f"{LINE_RICHMENU_API_BASE}/{rich_menu_id}/content"
+    headers = _headers(app=app, json_content=False)
+    headers["Content-Type"] = content_type
+    _line_http("POST", url, app=app, headers=headers, data=image_bytes, timeout=30)
+    return True
+
+
+def set_default_rich_menu(rich_menu_id: str, *, app=None) -> bool:
+    if not rich_menu_id:
+        raise RuntimeError("rich_menu_id is required")
+    url = f"https://api.line.me/v2/bot/user/all/richmenu/{rich_menu_id}"
+    _line_http("POST", url, app=app, json={})
+    return True
+
+
+def delete_rich_menu(rich_menu_id: str, *, app=None) -> bool:
+    if not rich_menu_id:
+        raise RuntimeError("rich_menu_id is required")
+    _line_http("DELETE", f"{LINE_RICHMENU_API_BASE}/{rich_menu_id}", app=app)
+    return True
 
 
 def get_message_content_bytes(message_id: str, app=None) -> Tuple[bytes, str]:
