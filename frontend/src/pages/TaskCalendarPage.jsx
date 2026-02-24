@@ -4,7 +4,32 @@ import { Link } from 'react-router-dom';
 import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
 
-const calendarWeekLabels = ['日', '一', '二', '三', '四', '五', '六'];
+const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
+const VIEW_MODE_OPTIONS = [
+  { value: 'month', label: '月檢視' },
+  { value: 'week', label: '週檢視' },
+];
+const STATUS_FILTER_OPTIONS = [
+  { value: 'all', label: '全部狀態' },
+  { value: '尚未接單', label: '尚未接單' },
+  { value: '已接單', label: '已接單' },
+  { value: '進行中', label: '進行中' },
+  { value: '已完成', label: '已完成' },
+];
+
+const STATUS_BADGE_CLASS = {
+  尚未接單: 'status-badge status-pending',
+  已接單: 'status-badge status-in-progress',
+  進行中: 'status-badge status-in-progress',
+  已完成: 'status-badge status-completed',
+};
+
+const EVENT_TONE_CLASS = {
+  尚未接單: 'task-calendar-event--pending',
+  已接單: 'task-calendar-event--queued',
+  進行中: 'task-calendar-event--progress',
+  已完成: 'task-calendar-event--done',
+};
 
 const getMonthAnchor = (value = new Date()) => {
   const date = value instanceof Date ? value : new Date(value);
@@ -25,6 +50,12 @@ const toDateOnlyKey = (value) => {
   return `${year}-${month}-${day}`;
 };
 
+const fromDateOnlyKey = (value) => {
+  if (!value) return null;
+  const parsed = new Date(`${value}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
 const getTaskCalendarDate = (task) => task?.expected_time || task?.due_date || null;
 
 const getTaskCalendarTimestamp = (task) => {
@@ -32,6 +63,14 @@ const getTaskCalendarTimestamp = (task) => {
   if (!raw) return Number.POSITIVE_INFINITY;
   const ts = new Date(raw).getTime();
   return Number.isNaN(ts) ? Number.POSITIVE_INFINITY : ts;
+};
+
+const getWeekStart = (value) => {
+  const date = value instanceof Date ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) return new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() - date.getDay());
+  return date;
 };
 
 const formatDateTime = (value) => {
@@ -47,22 +86,35 @@ const formatDateTime = (value) => {
   });
 };
 
-const statusBadgeClass = {
-  尚未接單: 'status-badge status-pending',
-  已接單: 'status-badge status-in-progress',
-  進行中: 'status-badge status-in-progress',
-  已完成: 'status-badge status-completed',
+const formatTimeShort = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
 
-const calendarEventToneClass = {
-  尚未接單: 'task-calendar-event--pending',
-  已接單: 'task-calendar-event--queued',
-  進行中: 'task-calendar-event--progress',
-  已完成: 'task-calendar-event--done',
+const formatMonthLabel = (value) => {
+  const monthStart = getMonthAnchor(value);
+  return monthStart.toLocaleDateString([], {
+    year: 'numeric',
+    month: 'long',
+  });
+};
+
+const formatWeekRangeLabel = (weekDates) => {
+  if (!Array.isArray(weekDates) || weekDates.length === 0) return '';
+  const first = weekDates[0]?.date;
+  const last = weekDates[weekDates.length - 1]?.date;
+  if (!(first instanceof Date) || !(last instanceof Date)) return '';
+  const sameYear = first.getFullYear() === last.getFullYear();
+  const left = first.toLocaleDateString([], sameYear ? { month: '2-digit', day: '2-digit' } : { year: 'numeric', month: '2-digit', day: '2-digit' });
+  const right = last.toLocaleDateString([], { year: 'numeric', month: '2-digit', day: '2-digit' });
+  return `${left} - ${right}`;
 };
 
 const getTaskAssigneeNames = (task) => {
   const names = [];
+
   if (Array.isArray(task?.assignees)) {
     task.assignees.forEach((assignee) => {
       if (assignee?.username) {
@@ -70,9 +122,11 @@ const getTaskAssigneeNames = (task) => {
       }
     });
   }
+
   if (names.length === 0 && task?.assigned_to) {
     names.push(String(task.assigned_to));
   }
+
   return names;
 };
 
@@ -81,6 +135,7 @@ const TaskCalendarPage = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [viewMode, setViewMode] = useState('month');
   const [calendarMonth, setCalendarMonth] = useState(() => getMonthAnchor());
   const [selectedCalendarDate, setSelectedCalendarDate] = useState(() => toDateOnlyKey(new Date()));
   const [assigneeFilter, setAssigneeFilter] = useState('all');
@@ -92,7 +147,9 @@ const TaskCalendarPage = () => {
     } else {
       setLoading(true);
     }
+
     setError('');
+
     try {
       const { data } = await api.get('tasks/');
       setTasks(Array.isArray(data) ? data : []);
@@ -108,8 +165,16 @@ const TaskCalendarPage = () => {
     loadTasks();
   }, []);
 
+  const selectCalendarDate = (value) => {
+    const date = value instanceof Date ? value : fromDateOnlyKey(value);
+    if (!date || Number.isNaN(date.getTime())) return;
+    setSelectedCalendarDate(toDateOnlyKey(date));
+    setCalendarMonth(getMonthAnchor(date));
+  };
+
   const assigneeOptions = useMemo(() => {
     const map = new Map();
+
     tasks.forEach((task) => {
       if (Array.isArray(task.assignees)) {
         task.assignees.forEach((assignee) => {
@@ -120,6 +185,7 @@ const TaskCalendarPage = () => {
           });
         });
       }
+
       if (task.assigned_to_id && !map.has(String(task.assigned_to_id))) {
         map.set(String(task.assigned_to_id), {
           value: String(task.assigned_to_id),
@@ -188,6 +254,7 @@ const TaskCalendarPage = () => {
       const date = new Date(gridStart);
       date.setDate(gridStart.getDate() + index);
       const key = toDateOnlyKey(date);
+
       return {
         date,
         key,
@@ -200,44 +267,86 @@ const TaskCalendarPage = () => {
     });
   }, [calendarMonth, selectedCalendarDate, tasksByCalendarDate]);
 
+  const weekDates = useMemo(() => {
+    const selectedDate = fromDateOnlyKey(selectedCalendarDate) || new Date();
+    const weekStart = getWeekStart(selectedDate);
+    const todayKey = toDateOnlyKey(new Date());
+
+    return Array.from({ length: 7 }, (_, index) => {
+      const date = new Date(weekStart);
+      date.setDate(weekStart.getDate() + index);
+      const key = toDateOnlyKey(date);
+      return {
+        date,
+        key,
+        isToday: key === todayKey,
+        isSelected: key === selectedCalendarDate,
+        isWeekend: date.getDay() === 0 || date.getDay() === 6,
+        dayTasks: tasksByCalendarDate.get(key) || [],
+      };
+    });
+  }, [selectedCalendarDate, tasksByCalendarDate]);
+
   const selectedDateTasks = useMemo(
     () => tasksByCalendarDate.get(selectedCalendarDate) || [],
     [selectedCalendarDate, tasksByCalendarDate],
   );
 
   const selectedDateLabel = useMemo(() => {
-    if (!selectedCalendarDate) return '';
-    const parsed = new Date(`${selectedCalendarDate}T00:00:00`);
-    if (Number.isNaN(parsed.getTime())) return selectedCalendarDate;
-    return parsed.toLocaleDateString([], { year: 'numeric', month: '2-digit', day: '2-digit' });
+    const parsed = fromDateOnlyKey(selectedCalendarDate);
+    if (!parsed) return selectedCalendarDate || '';
+    return parsed.toLocaleDateString([], {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
   }, [selectedCalendarDate]);
 
   const selectedDateWeekdayLabel = useMemo(() => {
-    if (!selectedCalendarDate) return '';
-    const parsed = new Date(`${selectedCalendarDate}T00:00:00`);
-    if (Number.isNaN(parsed.getTime())) return '';
-    return `星期${calendarWeekLabels[parsed.getDay()]}`;
+    const parsed = fromDateOnlyKey(selectedCalendarDate);
+    if (!parsed) return '';
+    return `星期${WEEKDAY_LABELS[parsed.getDay()]}`;
   }, [selectedCalendarDate]);
 
-  const calendarMonthLabel = useMemo(() => {
-    const monthStart = getMonthAnchor(calendarMonth);
-    return monthStart.toLocaleDateString([], {
-      year: 'numeric',
-      month: 'long',
+  const selectedDateSummary = useMemo(() => {
+    let totalHours = 0;
+    selectedDateTasks.forEach((task) => {
+      const value = Number(task?.total_work_hours || 0);
+      if (Number.isFinite(value)) {
+        totalHours += value;
+      }
     });
-  }, [calendarMonth]);
+    return {
+      count: selectedDateTasks.length,
+      totalHours: Math.round(totalHours * 100) / 100,
+    };
+  }, [selectedDateTasks]);
 
-  const moveCalendarMonth = (deltaMonths) => {
+  const periodLabel = useMemo(() => {
+    if (viewMode === 'week') {
+      return formatWeekRangeLabel(weekDates);
+    }
+    return formatMonthLabel(calendarMonth);
+  }, [viewMode, weekDates, calendarMonth]);
+
+  const navigatePeriod = (delta) => {
+    if (viewMode === 'week') {
+      const base = fromDateOnlyKey(selectedCalendarDate) || new Date();
+      const next = new Date(base);
+      next.setDate(next.getDate() + delta * 7);
+      selectCalendarDate(next);
+      return;
+    }
+
     const anchor = getMonthAnchor(calendarMonth);
-    const nextMonth = new Date(anchor.getFullYear(), anchor.getMonth() + deltaMonths, 1);
+    const nextMonth = new Date(anchor.getFullYear(), anchor.getMonth() + delta, 1);
     setCalendarMonth(nextMonth);
     setSelectedCalendarDate((prev) => {
-      if (!prev) return toDateOnlyKey(nextMonth);
-      const parsed = new Date(`${prev}T00:00:00`);
-      if (Number.isNaN(parsed.getTime())) return toDateOnlyKey(nextMonth);
+      const prevDate = fromDateOnlyKey(prev);
+      if (!prevDate) return toDateOnlyKey(nextMonth);
       if (
-        parsed.getFullYear() === nextMonth.getFullYear() &&
-        parsed.getMonth() === nextMonth.getMonth()
+        prevDate.getFullYear() === nextMonth.getFullYear() &&
+        prevDate.getMonth() === nextMonth.getMonth()
       ) {
         return prev;
       }
@@ -245,14 +354,30 @@ const TaskCalendarPage = () => {
     });
   };
 
-  const goToCurrentMonth = () => {
-    const now = new Date();
-    setCalendarMonth(getMonthAnchor(now));
-    setSelectedCalendarDate(toDateOnlyKey(now));
+  const goToToday = () => {
+    selectCalendarDate(new Date());
   };
 
   const headerActions = (
     <div className="task-toolbar">
+      <label>
+        檢視
+        <div className="task-calendar-view-toggle" role="tablist" aria-label="日曆檢視模式">
+          {VIEW_MODE_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="tab"
+              aria-selected={viewMode === option.value}
+              className={`task-calendar-view-toggle__button${viewMode === option.value ? ' is-active' : ''}`}
+              onClick={() => setViewMode(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </label>
+
       <label>
         人員
         <select value={assigneeFilter} onChange={(event) => setAssigneeFilter(event.target.value)}>
@@ -263,16 +388,18 @@ const TaskCalendarPage = () => {
           ))}
         </select>
       </label>
+
       <label>
         狀態
         <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
-          <option value="all">全部狀態</option>
-          <option value="尚未接單">尚未接單</option>
-          <option value="已接單">已接單</option>
-          <option value="進行中">進行中</option>
-          <option value="已完成">已完成</option>
+          {STATUS_FILTER_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
         </select>
       </label>
+
       <button
         type="button"
         className="secondary-button"
@@ -284,107 +411,170 @@ const TaskCalendarPage = () => {
     </div>
   );
 
+  const renderMonthBoard = () => (
+    <div className="task-calendar-board">
+      <div className="task-calendar-weekdays">
+        {WEEKDAY_LABELS.map((label, idx) => (
+          <div
+            key={label}
+            className={`task-calendar-weekdays__cell${idx === 0 || idx === 6 ? ' is-weekend' : ''}`}
+          >
+            {label}
+          </div>
+        ))}
+      </div>
+
+      <div className="task-calendar-grid">
+        {calendarGridDates.map((cell) => {
+          const taskCount = cell.dayTasks.length;
+          const summaryTasks = cell.dayTasks.slice(0, 3);
+
+          return (
+            <button
+              key={cell.key}
+              type="button"
+              onClick={() => selectCalendarDate(cell.date)}
+              className={[
+                'task-calendar-cell',
+                !cell.inCurrentMonth ? 'is-outside' : '',
+                cell.isSelected ? 'is-selected' : '',
+                cell.isWeekend ? 'is-weekend' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+            >
+              <div className="task-calendar-cell__head">
+                <span className={`task-calendar-daynum${cell.isToday ? ' is-today' : ''}`}>
+                  {cell.date.getDate()}
+                </span>
+                {taskCount > 0 ? <span className="task-calendar-cell__count">{taskCount}</span> : null}
+              </div>
+
+              <div className="task-calendar-events">
+                {summaryTasks.map((task) => {
+                  const toneClass = EVENT_TONE_CLASS[task.status] || 'task-calendar-event--default';
+                  const timeText = formatTimeShort(getTaskCalendarDate(task));
+
+                  return (
+                    <div
+                      key={`month-${cell.key}-${task.id}`}
+                      className={`task-calendar-event ${toneClass}`}
+                      title={`${timeText ? `${timeText} ` : ''}${task.title}`}
+                    >
+                      <span className="task-calendar-event__dot" />
+                      {timeText ? <span className="task-calendar-event__time">{timeText}</span> : null}
+                      <span className="task-calendar-event__title">{task.title}</span>
+                    </div>
+                  );
+                })}
+
+                {taskCount > summaryTasks.length ? (
+                  <div className="task-calendar-more">+{taskCount - summaryTasks.length} 筆</div>
+                ) : null}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  const renderWeekBoard = () => (
+    <div className="task-calendar-weekboard">
+      <div className="task-calendar-weekstrip">
+        {weekDates.map((day) => {
+          const taskCount = day.dayTasks.length;
+
+          return (
+            <section
+              key={day.key}
+              className={[
+                'task-calendar-weekcol',
+                day.isSelected ? 'is-selected' : '',
+                day.isToday ? 'is-today' : '',
+                day.isWeekend ? 'is-weekend' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+            >
+              <button
+                type="button"
+                className="task-calendar-weekcol__header"
+                onClick={() => selectCalendarDate(day.date)}
+              >
+                <span className="task-calendar-weekcol__weekday">{WEEKDAY_LABELS[day.date.getDay()]}</span>
+                <span className="task-calendar-weekcol__date">{day.date.getDate()}</span>
+                {taskCount > 0 ? (
+                  <span className="task-calendar-weekcol__count">{taskCount}</span>
+                ) : (
+                  <span className="task-calendar-weekcol__count is-empty">0</span>
+                )}
+              </button>
+
+              <div className="task-calendar-weekcol__subhead">
+                {day.date.toLocaleDateString([], { month: '2-digit', day: '2-digit' })}
+              </div>
+
+              <div className="task-calendar-weekcol__list">
+                {taskCount === 0 ? (
+                  <div className="task-calendar-weekcol__empty">無排程</div>
+                ) : (
+                  day.dayTasks.map((task) => {
+                    const toneClass = EVENT_TONE_CLASS[task.status] || 'task-calendar-event--default';
+                    const assignees = getTaskAssigneeNames(task);
+                    const timeText = formatTimeShort(getTaskCalendarDate(task));
+
+                    return (
+                      <article key={`week-${day.key}-${task.id}`} className={`task-calendar-weekitem ${toneClass}`}>
+                        <div className="task-calendar-weekitem__row">
+                          <span className="task-calendar-weekitem__time">{timeText || '未排時間'}</span>
+                          <span className="task-calendar-weekitem__status">{task.status || '未設定'}</span>
+                        </div>
+                        <Link to={`/tasks/${task.id}`} className="task-calendar-weekitem__title">
+                          {task.title}
+                        </Link>
+                        <div className="task-calendar-weekitem__meta">{task.location || '未填地點'}</div>
+                        <div className="task-calendar-weekitem__meta">
+                          {assignees.length ? assignees.join(', ') : '未指派'}
+                        </div>
+                      </article>
+                    );
+                  })
+                )}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    </div>
+  );
+
   const calendarView = (
     <div className="task-calendar-view">
       <div className="task-calendar-toolbar">
         <div className="task-calendar-toolbar__left">
           <div className="task-calendar-nav">
-            <button type="button" className="secondary-button" onClick={() => moveCalendarMonth(-1)}>
-              上個月
+            <button type="button" className="secondary-button" onClick={() => navigatePeriod(-1)}>
+              上一{viewMode === 'week' ? '週' : '月'}
             </button>
-            <button type="button" className="secondary-button" onClick={goToCurrentMonth}>
+            <button type="button" className="secondary-button" onClick={goToToday}>
               今天
             </button>
-            <button type="button" className="secondary-button" onClick={() => moveCalendarMonth(1)}>
-              下個月
+            <button type="button" className="secondary-button" onClick={() => navigatePeriod(1)}>
+              下一{viewMode === 'week' ? '週' : '月'}
             </button>
           </div>
-          <div className="task-calendar-toolbar__month">{calendarMonthLabel}</div>
+          <div className="task-calendar-toolbar__month">{periodLabel}</div>
         </div>
 
         <div className="task-calendar-toolbar__meta">
-          <span className="hint-text">月檢視</span>
+          <span className="hint-text">{viewMode === 'week' ? '週檢視' : '月檢視'}</span>
           <span className="hint-text">共 {filteredTasks.length} 筆任務</span>
         </div>
       </div>
 
       <div className="task-calendar-layout">
-        <div className="task-calendar-board">
-          <div className="task-calendar-weekdays">
-            {calendarWeekLabels.map((label, idx) => (
-              <div
-                key={label}
-                className={`task-calendar-weekdays__cell${idx === 0 || idx === 6 ? ' is-weekend' : ''}`}
-              >
-                {label}
-              </div>
-            ))}
-          </div>
-
-          <div className="task-calendar-grid">
-            {calendarGridDates.map((cell) => {
-              const taskCount = cell.dayTasks.length;
-              const summaryTasks = cell.dayTasks.slice(0, 3);
-
-              return (
-                <button
-                  key={cell.key}
-                  type="button"
-                  onClick={() => setSelectedCalendarDate(cell.key)}
-                  className={[
-                    'task-calendar-cell',
-                    !cell.inCurrentMonth ? 'is-outside' : '',
-                    cell.isSelected ? 'is-selected' : '',
-                    cell.isWeekend ? 'is-weekend' : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' ')}
-                >
-                  <div className="task-calendar-cell__head">
-                    <span className={`task-calendar-daynum${cell.isToday ? ' is-today' : ''}`}>
-                      {cell.date.getDate()}
-                    </span>
-                    {taskCount > 0 ? (
-                      <span className="task-calendar-cell__count">{taskCount}</span>
-                    ) : null}
-                  </div>
-
-                  <div className="task-calendar-events">
-                    {summaryTasks.map((task) => {
-                      const when = getTaskCalendarDate(task);
-                      const timeText = when
-                        ? new Date(when).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })
-                        : '';
-                      const toneClass =
-                        calendarEventToneClass[task.status] || 'task-calendar-event--default';
-
-                      return (
-                        <div
-                          key={`calendar-summary-${cell.key}-${task.id}`}
-                          className={`task-calendar-event ${toneClass}`}
-                          title={`${timeText ? `${timeText} ` : ''}${task.title}`}
-                        >
-                          <span className="task-calendar-event__dot" />
-                          {timeText ? (
-                            <span className="task-calendar-event__time">{timeText}</span>
-                          ) : null}
-                          <span className="task-calendar-event__title">{task.title}</span>
-                        </div>
-                      );
-                    })}
-
-                    {taskCount > summaryTasks.length ? (
-                      <div className="task-calendar-more">+{taskCount - summaryTasks.length} 筆</div>
-                    ) : null}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        {viewMode === 'week' ? renderWeekBoard() : renderMonthBoard()}
 
         <aside className="task-calendar-daypanel">
           <div className="task-calendar-daypanel__header">
@@ -394,8 +584,11 @@ const TaskCalendarPage = () => {
                 {selectedDateLabel || selectedCalendarDate}
                 {selectedDateWeekdayLabel ? ` · ${selectedDateWeekdayLabel}` : ''}
               </p>
+              <p className="task-calendar-daypanel__subline">
+                合計 {selectedDateSummary.count} 筆 / 工時 {selectedDateSummary.totalHours} 小時
+              </p>
             </div>
-            <div className="task-calendar-daypanel__count">{selectedDateTasks.length} 筆</div>
+            <div className="task-calendar-daypanel__count">{selectedDateSummary.count}</div>
           </div>
 
           {selectedDateTasks.length === 0 ? (
@@ -403,8 +596,7 @@ const TaskCalendarPage = () => {
           ) : (
             <ul className="task-calendar-daylist">
               {selectedDateTasks.map((task) => {
-                const toneClass =
-                  calendarEventToneClass[task.status] || 'task-calendar-event--default';
+                const toneClass = EVENT_TONE_CLASS[task.status] || 'task-calendar-event--default';
                 const assigneeNames = getTaskAssigneeNames(task);
 
                 return (
@@ -413,7 +605,7 @@ const TaskCalendarPage = () => {
                       <Link to={`/tasks/${task.id}`} className="task-calendar-dayitem__title">
                         {task.title}
                       </Link>
-                      <span className={statusBadgeClass[task.status] || 'status-badge'}>
+                      <span className={STATUS_BADGE_CLASS[task.status] || 'status-badge'}>
                         {task.status || '未設定'}
                       </span>
                     </div>
@@ -441,7 +633,7 @@ const TaskCalendarPage = () => {
     <div className="page calendar-page">
       <AppHeader
         title="排程視圖"
-        subtitle="以月曆檢視任務排程，點日期查看當日任務明細"
+        subtitle="從 LINE 進入也可直接使用月曆 / 週曆檢視任務排程"
         actions={headerActions}
       />
 
