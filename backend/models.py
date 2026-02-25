@@ -408,6 +408,12 @@ class Quote(db.Model):
     customer = db.relationship("Customer", back_populates="quotes")
     contact = db.relationship("Contact", back_populates="quotes")
     items = db.relationship("QuoteItem", back_populates="quote", cascade="all, delete-orphan")
+    versions = db.relationship(
+        "QuoteVersion",
+        back_populates="quote",
+        cascade="all, delete-orphan",
+        order_by="QuoteVersion.version_no.desc()",
+    )
     invoices = db.relationship("Invoice", back_populates="quote")
 
     def to_dict(self) -> dict:
@@ -458,6 +464,39 @@ class QuoteItem(db.Model):
             "unit_price": round(self.unit_price or 0.0, 2),
             "amount": round(self.amount or 0.0, 2),
             "sort_order": self.sort_order,
+        }
+
+
+class QuoteVersion(db.Model):
+    __tablename__ = "quote_version"
+
+    id = db.Column(db.Integer, primary_key=True)
+    quote_id = db.Column(db.Integer, db.ForeignKey("quote.id", ondelete="CASCADE"), nullable=False, index=True)
+    version_no = db.Column(db.Integer, nullable=False)
+    action = db.Column(db.String(32), nullable=False, default="update")
+    summary = db.Column(db.String(255))
+    snapshot_json = db.Column(db.Text, nullable=False)
+    changed_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    quote = db.relationship("Quote", back_populates="versions")
+    changed_by = db.relationship("User", foreign_keys=[changed_by_id])
+
+    __table_args__ = (
+        UniqueConstraint("quote_id", "version_no", name="uq_quote_version_quote_version_no"),
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "quote_id": self.quote_id,
+            "version_no": self.version_no,
+            "action": self.action,
+            "summary": self.summary,
+            "snapshot_json": self.snapshot_json,
+            "changed_by_id": self.changed_by_id,
+            "changed_by_username": self.changed_by.username if self.changed_by else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
 

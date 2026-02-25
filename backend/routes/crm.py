@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 from io import BytesIO
+import json
 import os
 from pathlib import Path
 import re
@@ -13,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from decorators import role_required
 from extensions import db
-from models import Contact, Customer, Invoice, InvoiceItem, Quote, QuoteItem, ServiceCatalogItem, Task
+from models import Contact, Customer, Invoice, InvoiceItem, Quote, QuoteItem, QuoteVersion, ServiceCatalogItem, Task
 from utils import get_current_user_id
 
 from reportlab.lib import colors
@@ -44,6 +45,7 @@ PDF_FONT_CANDIDATES = (
     "/usr/share/fonts/opentype/source-han-sans/SourceHanSansTW-Regular.otf",
 )
 PDF_CID_FALLBACKS = ("MSung-Light", "STSong-Light")
+PDF_REQUIRE_EMBEDDED_FONT_ENV = "PDF_REQUIRE_EMBEDDED_FONT"
 PDF_CJK_PROBE = "估價單發票台照"
 PDF_FONT_SOURCE = "default"
 PDF_FONT_PATH_USED = ""
@@ -75,6 +77,13 @@ def _font_supports_traditional_chinese(font_name: str) -> bool:
     return all(ord(ch) in char_widths for ch in PDF_CJK_PROBE)
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = (os.environ.get(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _ensure_pdf_font():
     global PDF_FONT_NAME, PDF_FONT_SOURCE, PDF_FONT_PATH_USED
 
@@ -102,32 +111,51 @@ def _ensure_pdf_font():
             except Exception:
                 continue
 
-    # Final fallback: use built-in CID fonts for Chinese text rendering.
-    for cid_name in PDF_CID_FALLBACKS:
-        try:
-            pdfmetrics.registerFont(UnicodeCIDFont(cid_name))
-            if _font_supports_traditional_chinese(cid_name):
-                PDF_FONT_NAME = cid_name
-                PDF_FONT_SOURCE = f"cid:{cid_name}"
-                PDF_FONT_PATH_USED = ""
-                return
-        except Exception:
-            continue
+    # Optional fallback: built-in CID fonts are not embedded and may render incorrectly
+    # on some mobile/desktop PDF readers. Keep this disabled by default.
+    if not _env_flag(PDF_REQUIRE_EMBEDDED_FONT_ENV, default=True):
+        for cid_name in PDF_CID_FALLBACKS:
+            try:
+                pdfmetrics.registerFont(UnicodeCIDFont(cid_name))
+                if _font_supports_traditional_chinese(cid_name):
+                    PDF_FONT_NAME = cid_name
+                    PDF_FONT_SOURCE = f"cid:{cid_name}"
+                    PDF_FONT_PATH_USED = ""
+                    return
+            except Exception:
+                continue
 
     PDF_FONT_NAME = "Helvetica"
     PDF_FONT_SOURCE = "default"
     PDF_FONT_PATH_USED = ""
 
 
+def _require_embedded_pdf_font() -> None:
+    _ensure_pdf_font()
+    if PDF_FONT_SOURCE == "filesystem" and _font_supports_traditional_chinese(PDF_FONT_NAME):
+        return
+    raise RuntimeError(
+        "PDF font is not embedded-capable for Traditional Chinese. "
+        f"Current source={PDF_FONT_SOURCE!r}. Set {PDF_FONT_ENV} to a CJK font file "
+        "(e.g. NotoSansCJK-Regular.ttc)."
+    )
+
+
 def _pdf_font_health_payload() -> dict:
     _ensure_pdf_font()
+    require_embedded = _env_flag(PDF_REQUIRE_EMBEDDED_FONT_ENV, default=True)
+    embedded_ok = PDF_FONT_SOURCE == "filesystem" and _font_supports_traditional_chinese(PDF_FONT_NAME)
     return {
         "font_name": PDF_FONT_NAME,
         "font_source": PDF_FONT_SOURCE,
         "font_path": PDF_FONT_PATH_USED,
         "supports_traditional_chinese": _font_supports_traditional_chinese(PDF_FONT_NAME),
+        "require_embedded_font": require_embedded,
+        "embedded_font_ready": embedded_ok,
+        "pdf_generation_ready": embedded_ok or not require_embedded,
         "probe_text": PDF_CJK_PROBE,
         "candidates": list(PDF_FONT_CANDIDATES),
+        "hint": f"Set {PDF_FONT_ENV} to a Noto/SourceHan CJK font file path if PDF is not ready.",
     }
 
 
@@ -365,6 +393,30 @@ def _next_quote_no() -> str:
         next_seq += 1
         candidate = f"{prefix}{next_seq:03d}"
     return candidate
+
+
+def _next_quote_version_no(quote_id: int) -> int:
+    latest = (
+        QuoteVersion.query.with_entities(QuoteVersion.version_no)
+        .filter(QuoteVersion.quote_id == quote_id)
+        .order_by(QuoteVersion.version_no.desc())
+        .first()
+    )
+    return int(latest[0]) + 1 if latest else 1
+
+
+def _append_quote_version_snapshot(quote: Quote, *, action: str, summary: str | None = None) -> None:
+    quote_payload = quote.to_dict()
+    db.session.add(
+        QuoteVersion(
+            quote_id=quote.id,
+            version_no=_next_quote_version_no(quote.id),
+            action=(action or "update").strip().lower() or "update",
+            summary=(summary or "").strip() or None,
+            snapshot_json=json.dumps(quote_payload, ensure_ascii=False),
+            changed_by_id=get_current_user_id(),
+        )
+    )
 
 
 def _invoice_module_disabled():
@@ -612,7 +664,7 @@ def _serialize_customer_service_history(customer: Customer, *, quote_limit: int 
 
 
 def _build_pdf_document(title: str, meta_rows: list[list[str]], item_rows: list[list[str]], totals_rows: list[list[str]]):
-    _ensure_pdf_font()
+    _require_embedded_pdf_font()
     buffer = BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -696,7 +748,7 @@ def _build_pdf_document(title: str, meta_rows: list[list[str]], item_rows: list[
 
 
 def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: Contact | None):
-    _ensure_pdf_font()
+    _require_embedded_pdf_font()
     recipient = _resolve_quote_recipient_display(quote, customer, contact)
 
     ordered_items = sorted(
@@ -839,7 +891,7 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
 
 
 def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, contact: Contact | None):
-    _ensure_pdf_font()
+    _require_embedded_pdf_font()
 
     customer_name = (customer.name if customer else "") or ""
     contact_name = (contact.name if contact else "") or ""
@@ -1451,6 +1503,7 @@ def create_quote():
     db.session.flush()
     quote = Quote.query.options(selectinload(Quote.items)).get(quote.id)
     if quote:
+        _append_quote_version_snapshot(quote, action="create", summary="Initial quote created")
         db.session.add(_create_task_for_quote(quote, customer, contact))
 
     db.session.commit()
@@ -1515,9 +1568,33 @@ def update_quote(quote_id: int):
     if total_err:
         return total_err
 
+    db.session.flush()
+    quote = Quote.query.options(selectinload(Quote.items)).get(quote.id)
+    if quote:
+        _append_quote_version_snapshot(quote, action="update", summary="Quote updated")
+
     db.session.commit()
     quote = Quote.query.options(selectinload(Quote.items)).get(quote.id)
     return jsonify(quote.to_dict())
+
+
+@crm_bp.get("/quotes/<int:quote_id>/versions")
+@role_required(*READ_ROLES)
+def quote_versions(quote_id: int):
+    quote = Quote.query.get_or_404(quote_id)
+    rows = (
+        QuoteVersion.query.options(selectinload(QuoteVersion.changed_by))
+        .filter(QuoteVersion.quote_id == quote.id)
+        .order_by(QuoteVersion.version_no.desc(), QuoteVersion.id.desc())
+        .all()
+    )
+    return jsonify(
+        {
+            "quote_id": quote.id,
+            "quote_no": quote.quote_no,
+            "versions": [row.to_dict() for row in rows],
+        }
+    )
 
 
 @crm_bp.post("/quotes/<int:quote_id>/convert-to-invoice")
@@ -1601,7 +1678,16 @@ def quote_pdf(quote_id: int):
     customer = Customer.query.get(quote.customer_id)
     contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
 
-    buffer = _build_quote_template_pdf(quote, customer, contact)
+    try:
+        buffer = _build_quote_template_pdf(quote, customer, contact)
+    except RuntimeError as exc:
+        return jsonify(
+            {
+                "msg": "PDF 字型未就緒：目前未使用可嵌入的繁中字型，已停止輸出以避免手機/部分電腦顯示異常。",
+                "detail": str(exc),
+                "font_health": _pdf_font_health_payload(),
+            }
+        ), 500
     customer_part = _safe_download_filename_part(customer.name if customer else None, fallback="客戶")
     quote_part = _safe_download_filename_part(quote.quote_no, fallback="估價單")
     filename = f"{customer_part}-{quote_part}.pdf"

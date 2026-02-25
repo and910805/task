@@ -41,5 +41,6 @@ RUN mkdir -p /app/backend/uploads
 
 ENV PYTHONUNBUFFERED=1
 ENV PDF_FONT_PATH=/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+ENV PDF_REQUIRE_EMBEDDED_FONT=1
 
 CMD ["sh", "-c", "gunicorn --chdir backend -w ${WEB_CONCURRENCY:-1} --threads ${WEB_THREADS:-2} -b 0.0.0.0:${PORT:-5000} app:app"]

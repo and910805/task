@@ -3,7 +3,10 @@
 import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
 
-const blankItem = () => ({ description: '', unit: '式', quantity: 1, unit_price: 0 });
+let lineItemKeySeed = 1;
+const nextLineItemKey = () => `line-${lineItemKeySeed++}`;
+const blankItem = () => ({ _key: nextLineItemKey(), description: '', unit: '式', quantity: 1, unit_price: 0 });
+const withLineItemKey = (item = {}) => ({ _key: nextLineItemKey(), ...item });
 const quoteDisplayAmount = (quote) => Number(quote?.subtotal ?? quote?.total_amount ?? 0).toFixed(2);
 const toDateInputValue = (value) => value.toISOString().slice(0, 10);
 const addDaysToDateInput = (dateInput, days) => {
@@ -42,6 +45,10 @@ const CrmQuotesPage = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [editingQuoteId, setEditingQuoteId] = useState(null);
+  const [versionsForQuoteId, setVersionsForQuoteId] = useState(null);
+  const [quoteVersions, setQuoteVersions] = useState([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
   const [catalogPick, setCatalogPick] = useState('');
   const [catalogQuery, setCatalogQuery] = useState('');
   const [catalogOpen, setCatalogOpen] = useState(false);
@@ -165,6 +172,26 @@ const CrmQuotesPage = () => {
     setItems((prev) => prev.map((item, idx) => (idx === index ? { ...item, [field]: value } : item)));
   };
 
+  const resetForm = () => {
+    setForm({
+      customer_id: '',
+      contact_id: '',
+      recipient_name: '',
+      ...defaultQuoteDateFields(),
+      currency: 'TWD',
+      tax_rate: 0,
+      note: '',
+    });
+    setItems([blankItem()]);
+    setHistory({ quotes: [] });
+    setCatalogPick('');
+    setCatalogQuery('');
+    setCatalogOpen(false);
+    setEditingQuoteId(null);
+    setVersionsForQuoteId(null);
+    setQuoteVersions([]);
+  };
+
   const addItem = () => setItems((prev) => [...prev, blankItem()]);
 
   const removeItem = (index) => {
@@ -181,6 +208,7 @@ const CrmQuotesPage = () => {
     setItems((prev) => [
       ...prev,
       {
+        _key: nextLineItemKey(),
         description: selected.name || '',
         unit: selected.unit || '式',
         quantity: 1,
@@ -195,6 +223,53 @@ const CrmQuotesPage = () => {
     setCatalogPick(String(item.id));
     setCatalogQuery(item.name || '');
     setCatalogOpen(true);
+  };
+
+  const loadQuoteVersions = async (quoteId) => {
+    if (!quoteId) return;
+    setVersionsLoading(true);
+    setError('');
+    try {
+      const { data } = await api.get(`crm/quotes/${quoteId}/versions`);
+      setQuoteVersions(Array.isArray(data?.versions) ? data.versions : []);
+      setVersionsForQuoteId(quoteId);
+    } catch (err) {
+      setError(err?.response?.data?.msg || '載入版本紀錄失敗');
+    } finally {
+      setVersionsLoading(false);
+    }
+  };
+
+  const startEditQuote = (quote) => {
+    setError('');
+    setEditingQuoteId(quote.id);
+    setForm({
+      customer_id: quote.customer_id ? String(quote.customer_id) : '',
+      contact_id: quote.contact_id ? String(quote.contact_id) : '',
+      recipient_name: quote.recipient_name || '',
+      issue_date: quote.issue_date || '',
+      expiry_date: quote.expiry_date || '',
+      currency: quote.currency || 'TWD',
+      tax_rate: Number(quote.tax_rate || 0),
+      note: quote.note || '',
+    });
+    setItems(
+      Array.isArray(quote.items) && quote.items.length > 0
+        ? quote.items.map((item) =>
+            withLineItemKey({
+              description: item.description || '',
+              unit: item.unit || '式',
+              quantity: item.quantity ?? 1,
+              unit_price: item.unit_price ?? 0,
+            }),
+          )
+        : [blankItem()],
+    );
+    if (quote.customer_id) {
+      loadHistory(quote.customer_id).catch(() => null);
+    }
+    loadQuoteVersions(quote.id).catch(() => null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const submitQuote = async (event) => {
@@ -213,7 +288,7 @@ const CrmQuotesPage = () => {
     setSaving(true);
     setError('');
     try {
-      await api.post('crm/quotes', {
+      const payload = {
         ...form,
         customer_id: Number(form.customer_id),
         contact_id: form.contact_id ? Number(form.contact_id) : null,
@@ -225,22 +300,17 @@ const CrmQuotesPage = () => {
           quantity: Number(item.quantity || 0),
           unit_price: Number(item.unit_price || 0),
         })),
-      });
+      };
+      if (editingQuoteId) {
+        await api.put(`crm/quotes/${editingQuoteId}`, payload);
+      } else {
+        await api.post('crm/quotes', payload);
+      }
 
-      setForm({
-        customer_id: '',
-        contact_id: '',
-        recipient_name: '',
-        ...defaultQuoteDateFields(),
-        currency: 'TWD',
-        tax_rate: 0,
-        note: '',
-      });
-      setItems([blankItem()]);
-      setHistory({ quotes: [] });
+      resetForm();
       await loadQuotes();
     } catch (err) {
-      setError(err?.response?.data?.msg || '新增報價失敗');
+      setError(err?.response?.data?.msg || (editingQuoteId ? '更新報價失敗' : '新增報價失敗'));
     } finally {
       setSaving(false);
     }
@@ -294,6 +364,7 @@ const CrmQuotesPage = () => {
 
       <section className="panel">
         <h2>新增報價單</h2>
+        {editingQuoteId ? <div className="panel-tag">編輯中：#{editingQuoteId}</div> : null}
         <form className="stack" onSubmit={submitQuote}>
           <div className="crm-form-grid">
             <label>
@@ -416,7 +487,7 @@ const CrmQuotesPage = () => {
             </div>
 
             {items.map((item, idx) => (
-              <div key={`${idx}-${item.description}`} className="crm-line-item">
+              <div key={item._key || idx} className="crm-line-item">
                 <input
                   value={item.description}
                   onChange={(event) => handleItemChange(idx, 'description', event.target.value)}
@@ -449,12 +520,60 @@ const CrmQuotesPage = () => {
           </div>
 
           <div className="crm-form-actions">
+            {editingQuoteId ? (
+              <button type="button" className="secondary-btn" onClick={resetForm} disabled={saving}>
+                取消編輯
+              </button>
+            ) : null}
             <button type="submit" disabled={saving}>
-              {saving ? '處理中...' : '建立報價單'}
+              {saving ? '處理中...' : editingQuoteId ? '儲存報價單' : '建立報價單'}
             </button>
           </div>
         </form>
       </section>
+
+      {versionsForQuoteId ? (
+        <section className="panel panel--table">
+          <div className="panel-header">
+            <h2>報價版本紀錄</h2>
+            <span className="panel-tag">報價單 #{versionsForQuoteId}</span>
+          </div>
+          <div className="table-wrapper">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>版本</th>
+                  <th>動作</th>
+                  <th>時間</th>
+                  <th>人員</th>
+                  <th>摘要</th>
+                </tr>
+              </thead>
+              <tbody>
+                {quoteVersions.map((version) => (
+                  <tr key={version.id}>
+                    <td>v{version.version_no}</td>
+                    <td>{version.action || '-'}</td>
+                    <td>{version.created_at || '-'}</td>
+                    <td>{version.changed_by_username || '-'}</td>
+                    <td>{version.summary || '-'}</td>
+                  </tr>
+                ))}
+                {!versionsLoading && quoteVersions.length === 0 ? (
+                  <tr>
+                    <td colSpan="5">尚無版本紀錄</td>
+                  </tr>
+                ) : null}
+                {versionsLoading ? (
+                  <tr>
+                    <td colSpan="5">載入中...</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
 
       <section className="panel panel--table">
         <div className="panel-header">
@@ -518,6 +637,12 @@ const CrmQuotesPage = () => {
                     </button>
                     <button type="button" className="secondary-btn" onClick={() => downloadXlsx(quote)}>
                       XLSX
+                    </button>
+                    <button type="button" className="secondary-btn" onClick={() => startEditQuote(quote)}>
+                      編輯
+                    </button>
+                    <button type="button" className="secondary-btn" onClick={() => loadQuoteVersions(quote.id)}>
+                      版本
                     </button>
                   </td>
                 </tr>
