@@ -72,10 +72,16 @@ def _font_supports_traditional_chinese(font_name: str) -> bool:
 
     face = getattr(font, "face", None)
     char_widths = getattr(face, "charWidths", None)
-    if not isinstance(char_widths, dict):
-        return False
+    if isinstance(char_widths, dict) and all(ord(ch) in char_widths for ch in PDF_CJK_PROBE):
+        return True
 
-    return all(ord(ch) in char_widths for ch in PDF_CJK_PROBE)
+    # Some reportlab/font combinations don't expose complete charWidths for TTC fonts.
+    # Fallback to a render-width probe to avoid false negatives in container deployments.
+    try:
+        width = float(pdfmetrics.stringWidth(PDF_CJK_PROBE, font_name, 12))
+        return width > 0
+    except Exception:
+        return False
 
 
 def _env_flag(name: str, default: bool = False) -> bool:

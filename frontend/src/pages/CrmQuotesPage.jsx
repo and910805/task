@@ -330,6 +330,18 @@ const CrmQuotesPage = () => {
       }
       window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
     } catch (err) {
+      const blobPayload = err?.response?.data;
+      if (typeof Blob !== 'undefined' && blobPayload instanceof Blob) {
+        try {
+          const text = await blobPayload.text();
+          const parsed = JSON.parse(text);
+          const detail = [parsed?.msg, parsed?.detail].filter(Boolean).join(' / ');
+          setError(detail || '開啟 PDF 失敗');
+          return;
+        } catch {
+          // Fall through to generic error handling.
+        }
+      }
       setError(err?.networkMessage || err?.response?.data?.msg || '開啟 PDF 失敗');
     }
   };
