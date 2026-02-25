@@ -335,7 +335,11 @@ const CrmQuotesPage = () => {
         try {
           const text = await blobPayload.text();
           const parsed = JSON.parse(text);
-          const detail = [parsed?.msg, parsed?.detail].filter(Boolean).join(' / ');
+          const fontHealth = parsed?.font_health || {};
+          const fontSummary = [fontHealth?.font_source, fontHealth?.discovered_font_path]
+            .filter(Boolean)
+            .join(' @ ');
+          const detail = [parsed?.msg, parsed?.detail, fontSummary].filter(Boolean).join(' / ');
           setError(detail || '開啟 PDF 失敗');
           return;
         } catch {

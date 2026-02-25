@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 from io import BytesIO
+import glob
 import json
 import os
 from pathlib import Path
@@ -91,15 +92,33 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _discover_pdf_font_path() -> str:
+    configured = os.environ.get(PDF_FONT_ENV, "").strip()
+    if configured and os.path.exists(configured):
+        return configured
+
+    for candidate in PDF_FONT_CANDIDATES:
+        if os.path.exists(candidate):
+            return candidate
+
+    # Runtime fallback for distros where the package path differs.
+    dynamic_patterns = (
+        "/usr/share/fonts/**/*NotoSansCJK*Regular*.ttc",
+        "/usr/share/fonts/**/*NotoSerifCJK*Regular*.ttc",
+        "/usr/share/fonts/**/*SourceHanSansTW*Regular*.otf",
+        "/usr/share/fonts/**/*SourceHanSans*Regular*.otf",
+    )
+    for pattern in dynamic_patterns:
+        for path in sorted(glob.glob(pattern, recursive=True)):
+            if os.path.isfile(path):
+                return path
+    return ""
+
+
 def _ensure_pdf_font():
     global PDF_FONT_NAME, PDF_FONT_SOURCE, PDF_FONT_PATH_USED
 
-    font_path = os.environ.get(PDF_FONT_ENV, "").strip()
-    if not font_path:
-        for candidate in PDF_FONT_CANDIDATES:
-            if os.path.exists(candidate):
-                font_path = candidate
-                break
+    font_path = _discover_pdf_font_path()
     if PDF_FONT_NAME in ("CustomFont", *PDF_CID_FALLBACKS) and _font_supports_traditional_chinese(PDF_FONT_NAME):
         return
 
@@ -152,10 +171,14 @@ def _pdf_font_health_payload() -> dict:
     _ensure_pdf_font()
     require_embedded = _env_flag(PDF_REQUIRE_EMBEDDED_FONT_ENV, default=True)
     embedded_ok = PDF_FONT_SOURCE == "filesystem" and _font_supports_traditional_chinese(PDF_FONT_NAME)
+    configured_font_path = (os.environ.get(PDF_FONT_ENV) or "").strip()
     return {
         "font_name": PDF_FONT_NAME,
         "font_source": PDF_FONT_SOURCE,
         "font_path": PDF_FONT_PATH_USED,
+        "configured_font_path": configured_font_path or None,
+        "configured_font_path_exists": bool(configured_font_path and os.path.exists(configured_font_path)),
+        "discovered_font_path": _discover_pdf_font_path() or None,
         "supports_traditional_chinese": _font_supports_traditional_chinese(PDF_FONT_NAME),
         "require_embedded_font": require_embedded,
         "embedded_font_ready": embedded_ok,
