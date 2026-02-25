@@ -29,9 +29,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
-# reportlab may fail to load TTC subfonts on some environments; provide a direct OTF fallback.
+# reportlab may fail to load TTC subfonts and does not support CFF OTF outlines.
+# Download a TTF (variable font) fallback that reportlab can embed reliably.
 RUN mkdir -p /usr/local/share/fonts \
-    && python -c "from urllib.request import urlopen; u='https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf'; o='/usr/local/share/fonts/NotoSansCJKtc-Regular.otf'; open(o,'wb').write(urlopen(u, timeout=60).read()); print('downloaded', o)"
+    && python -c "from urllib.request import urlopen; u='https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC%5Bwght%5D.ttf'; o='/usr/local/share/fonts/NotoSansTC-wght.ttf'; open(o,'wb').write(urlopen(u, timeout=60).read()); print('downloaded', o)"
 
 COPY backend/requirements.txt ./backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
@@ -44,7 +45,7 @@ COPY data/ ./data
 RUN mkdir -p /app/backend/uploads
 
 ENV PYTHONUNBUFFERED=1
-ENV PDF_FONT_PATH=/usr/local/share/fonts/NotoSansCJKtc-Regular.otf
+ENV PDF_FONT_PATH=/usr/local/share/fonts/NotoSansTC-wght.ttf
 ENV PDF_REQUIRE_EMBEDDED_FONT=1
 ENV INIT_DB_ON_STARTUP=1
 

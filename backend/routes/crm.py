@@ -39,7 +39,7 @@ VALID_INVOICE_STATUS = {"draft", "issued", "partially_paid", "paid", "cancelled"
 PDF_FONT_NAME = "Helvetica"
 PDF_FONT_ENV = "PDF_FONT_PATH"
 PDF_FONT_CANDIDATES = (
-    "/usr/local/share/fonts/NotoSansCJKtc-Regular.otf",
+    "/usr/local/share/fonts/NotoSansTC-wght.ttf",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
     "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
@@ -114,7 +114,8 @@ def _candidate_pdf_font_paths() -> list[str]:
 
     # Runtime fallback for distros where the package path differs.
     dynamic_patterns = (
-        "/usr/local/share/fonts/**/*NotoSansCJKtc*Regular*.otf",
+        "/usr/local/share/fonts/**/*NotoSansTC*.ttf",
+        "/usr/local/share/fonts/**/*NotoSerifTC*.ttf",
         "/usr/share/fonts/**/*NotoSansCJK*Regular*.ttc",
         "/usr/share/fonts/**/*NotoSerifCJK*Regular*.ttc",
         "/usr/share/fonts/**/*SourceHanSansTW*Regular*.otf",
