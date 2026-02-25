@@ -318,16 +318,16 @@ const CrmQuotesPage = () => {
 
   const openPdf = async (quoteId) => {
     try {
-      const { data } = await api.get(`crm/quotes/${quoteId}/pdf`, { responseType: 'blob' });
+      const response = await api.get(`crm/quotes/${quoteId}/pdf`, { responseType: 'blob' });
+      const data = response.data;
+      const filenameFromHeader = getFilenameFromDisposition(response.headers?.['content-disposition']);
       const blobUrl = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }));
-      const popup = window.open(blobUrl, '_blank', 'noopener');
-      if (!popup) {
-        const link = document.createElement('a');
-        link.href = blobUrl;
-        link.target = '_blank';
-        link.rel = 'noopener';
-        link.click();
-      }
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filenameFromHeader || `quote-${quoteId}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
       window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
     } catch (err) {
       const blobPayload = err?.response?.data;
@@ -346,7 +346,7 @@ const CrmQuotesPage = () => {
           // Fall through to generic error handling.
         }
       }
-      setError(err?.networkMessage || err?.response?.data?.msg || '開啟 PDF 失敗');
+      setError(err?.networkMessage || err?.response?.data?.msg || '下載 PDF 失敗');
     }
   };
 
@@ -649,7 +649,7 @@ const CrmQuotesPage = () => {
                   <td>{quoteDisplayAmount(quote)}</td>
                   <td className="crm-actions-cell">
                     <button type="button" className="secondary-btn" onClick={() => openPdf(quote.id)}>
-                      PDF
+                      PDF下載
                     </button>
                     <button type="button" className="secondary-btn" onClick={() => downloadXlsx(quote)}>
                       XLSX
