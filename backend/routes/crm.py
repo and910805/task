@@ -39,6 +39,7 @@ VALID_INVOICE_STATUS = {"draft", "issued", "partially_paid", "paid", "cancelled"
 PDF_FONT_NAME = "Helvetica"
 PDF_FONT_ENV = "PDF_FONT_PATH"
 PDF_FONT_CANDIDATES = (
+    "/usr/local/share/fonts/NotoSansCJKtc-Regular.otf",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
     "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
@@ -92,17 +93,28 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
-def _discover_pdf_font_path() -> str:
+def _candidate_pdf_font_paths() -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+
+    def _add(path: str) -> None:
+        normalized = (path or "").strip()
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        paths.append(normalized)
+
     configured = os.environ.get(PDF_FONT_ENV, "").strip()
     if configured and os.path.exists(configured):
-        return configured
+        _add(configured)
 
     for candidate in PDF_FONT_CANDIDATES:
         if os.path.exists(candidate):
-            return candidate
+            _add(candidate)
 
     # Runtime fallback for distros where the package path differs.
     dynamic_patterns = (
+        "/usr/local/share/fonts/**/*NotoSansCJKtc*Regular*.otf",
         "/usr/share/fonts/**/*NotoSansCJK*Regular*.ttc",
         "/usr/share/fonts/**/*NotoSerifCJK*Regular*.ttc",
         "/usr/share/fonts/**/*SourceHanSansTW*Regular*.otf",
@@ -111,18 +123,23 @@ def _discover_pdf_font_path() -> str:
     for pattern in dynamic_patterns:
         for path in sorted(glob.glob(pattern, recursive=True)):
             if os.path.isfile(path):
-                return path
-    return ""
+                _add(path)
+    return paths
+
+
+def _discover_pdf_font_path() -> str:
+    return (_candidate_pdf_font_paths() or [""])[0]
 
 
 def _ensure_pdf_font():
     global PDF_FONT_NAME, PDF_FONT_SOURCE, PDF_FONT_PATH_USED
 
-    font_path = _discover_pdf_font_path()
     if PDF_FONT_NAME in ("CustomFont", *PDF_CID_FALLBACKS) and _font_supports_traditional_chinese(PDF_FONT_NAME):
         return
 
-    if font_path and os.path.exists(font_path):
+    for font_path in _candidate_pdf_font_paths():
+        if not font_path or not os.path.exists(font_path):
+            continue
         # Noto CJK on Debian is usually a .ttc. Try multiple subfont indexes.
         # Prefer TC/HK indices first, then SC/KR/JP.
         ttc_indices = (3, 4, 2, 1, 0) if font_path.lower().endswith(".ttc") else (0,)
@@ -179,6 +196,7 @@ def _pdf_font_health_payload() -> dict:
         "configured_font_path": configured_font_path or None,
         "configured_font_path_exists": bool(configured_font_path and os.path.exists(configured_font_path)),
         "discovered_font_path": _discover_pdf_font_path() or None,
+        "font_candidates_found": _candidate_pdf_font_paths(),
         "supports_traditional_chinese": _font_supports_traditional_chinese(PDF_FONT_NAME),
         "require_embedded_font": require_embedded,
         "embedded_font_ready": embedded_ok,

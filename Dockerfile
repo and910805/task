@@ -29,6 +29,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
+# reportlab may fail to load TTC subfonts on some environments; provide a direct OTF fallback.
+RUN mkdir -p /usr/local/share/fonts \
+    && python -c "from urllib.request import urlopen; u='https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf'; o='/usr/local/share/fonts/NotoSansCJKtc-Regular.otf'; open(o,'wb').write(urlopen(u, timeout=60).read()); print('downloaded', o)"
+
 COPY backend/requirements.txt ./backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
@@ -40,7 +44,7 @@ COPY data/ ./data
 RUN mkdir -p /app/backend/uploads
 
 ENV PYTHONUNBUFFERED=1
-ENV PDF_FONT_PATH=/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+ENV PDF_FONT_PATH=/usr/local/share/fonts/NotoSansCJKtc-Regular.otf
 ENV PDF_REQUIRE_EMBEDDED_FONT=1
 ENV INIT_DB_ON_STARTUP=1
 
