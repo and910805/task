@@ -46,7 +46,8 @@ PDF_FONT_CANDIDATES = (
 )
 PDF_CID_FALLBACKS = ("MSung-Light", "STSong-Light")
 PDF_REQUIRE_EMBEDDED_FONT_ENV = "PDF_REQUIRE_EMBEDDED_FONT"
-PDF_CJK_PROBE = "估價單發票台照"
+# Use unicode escapes to avoid source-file encoding issues on Windows/editors.
+PDF_CJK_PROBE = "\u4f30\u50f9\u55ae\u767c\u7968\u53f0\u7167"  # ???????
 PDF_FONT_SOURCE = "default"
 PDF_FONT_PATH_USED = ""
 PDF_STAMP_ENV = "PDF_STAMP_IMAGE_PATH"
