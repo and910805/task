@@ -1737,9 +1737,13 @@ def quote_pdf(quote_id: int):
                 "font_health": _pdf_font_health_payload(),
             }
         ), 500
-    customer_part = _safe_download_filename_part(customer.name if customer else None, fallback="客戶")
-    quote_part = _safe_download_filename_part(quote.quote_no, fallback="估價單")
-    filename = f"{customer_part}-{quote_part}.pdf"
+    recipient_raw = (quote.recipient_name or "").strip() or (customer.name if customer else None) or (contact.name if contact else None)
+    recipient_part = _safe_download_filename_part(recipient_raw, fallback="台照")
+    date_raw = quote.issue_date.isoformat() if quote.issue_date else (
+        quote.created_at.date().isoformat() if getattr(quote, "created_at", None) else None
+    )
+    date_part = _safe_download_filename_part(date_raw, fallback="date")
+    filename = f"{recipient_part}-{date_part}.pdf"
     return send_file(
         buffer,
         mimetype="application/pdf",
