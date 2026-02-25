@@ -1737,13 +1737,16 @@ def quote_pdf(quote_id: int):
                 "font_health": _pdf_font_health_payload(),
             }
         ), 500
-    recipient_raw = (quote.recipient_name or "").strip() or (customer.name if customer else None) or (contact.name if contact else None)
-    recipient_part = _safe_download_filename_part(recipient_raw, fallback="台照")
-    date_raw = quote.issue_date.isoformat() if quote.issue_date else (
-        quote.created_at.date().isoformat() if getattr(quote, "created_at", None) else None
-    )
-    date_part = _safe_download_filename_part(date_raw, fallback="date")
-    filename = f"{recipient_part}-{date_part}.pdf"
+    customer_raw = (customer.name if customer else None) or (quote.recipient_name or "").strip() or (contact.name if contact else None)
+    customer_part = _safe_download_filename_part(customer_raw, fallback="客戶")
+    if quote.issue_date:
+        date_compact = quote.issue_date.strftime("%Y%m%d")
+    elif getattr(quote, "created_at", None):
+        date_compact = quote.created_at.strftime("%Y%m%d")
+    else:
+        date_compact = datetime.utcnow().strftime("%Y%m%d")
+    date_part = _safe_download_filename_part(date_compact, fallback="date")
+    filename = f"{customer_part}_{date_part}.pdf"
     return send_file(
         buffer,
         mimetype="application/pdf",
