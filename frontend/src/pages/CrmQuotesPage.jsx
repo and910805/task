@@ -7,7 +7,7 @@ let lineItemKeySeed = 1;
 const nextLineItemKey = () => `line-${lineItemKeySeed++}`;
 const blankItem = () => ({ _key: nextLineItemKey(), description: '', unit: '式', quantity: 1, unit_price: 0 });
 const withLineItemKey = (item = {}) => ({ _key: nextLineItemKey(), ...item });
-const quoteDisplayAmount = (quote) => Number(quote?.subtotal ?? quote?.total_amount ?? 0).toFixed(2);
+const quoteDisplayAmount = (quote) => Number(quote?.total_amount ?? quote?.subtotal ?? 0).toFixed(2);
 const toDateInputValue = (value) => value.toISOString().slice(0, 10);
 const addDaysToDateInput = (dateInput, days) => {
   if (!dateInput) return '';

@@ -39,6 +39,7 @@ VALID_INVOICE_STATUS = {"draft", "issued", "partially_paid", "paid", "cancelled"
 PDF_FONT_NAME = "Helvetica"
 PDF_FONT_ENV = "PDF_FONT_PATH"
 PDF_FONT_CANDIDATES = (
+    "/usr/local/share/fonts/NotoSerifTC-wght.ttf",
     "/usr/local/share/fonts/NotoSansTC-wght.ttf",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
@@ -56,7 +57,7 @@ PDF_STAMP_ENV = "PDF_STAMP_IMAGE_PATH"
 PDF_STAMP_DEFAULT_FILENAME = "S__5505135-removebg-preview.png"
 PDF_STAMP_ROTATE_ENV = "PDF_STAMP_ROTATE_DEG"
 PDF_STAMP_DEFAULT_ROTATE_DEG = 90.0
-PDF_STAMP_WIDTH_MM = 24.0
+PDF_STAMP_WIDTH_MM = 24.0 * 1.35
 PDF_STAMP_Y_OFFSET_ENV = "PDF_STAMP_Y_OFFSET_MM"
 PDF_STAMP_DEFAULT_Y_OFFSET_MM = 10.0
 FINANCIAL_DIGITS = ("零", "壹", "貳", "參", "肆", "伍", "陸", "柒", "捌", "玖")
@@ -337,8 +338,40 @@ def _draw_pdf_stamp(canvas, doc, center: tuple[float, float] | None = None):
 
 
 def _make_pdf_stamp_canvasmaker(doc, center: tuple[float, float] | None = None):
+    def _draw_page_watermark(canvas_obj) -> None:
+        try:
+            page_no = int(getattr(canvas_obj, "_pageNumber", 1) or 1)
+        except Exception:
+            page_no = 1
+        page_w, page_h = doc.pagesize
+        label = f"第{page_no}頁"
+
+        canvas_obj.saveState()
+        try:
+            canvas_obj.setFillAlpha(0.18)
+        except Exception:
+            pass
+        canvas_obj.setFillColor(colors.HexColor("#64748b"))
+        try:
+            canvas_obj.setFont(PDF_FONT_NAME, 44)
+        except Exception:
+            canvas_obj.setFont("Helvetica", 44)
+        canvas_obj.drawCentredString(page_w / 2.0, page_h / 2.0, label)
+
+        try:
+            canvas_obj.setFillAlpha(0.55)
+        except Exception:
+            pass
+        try:
+            canvas_obj.setFont(PDF_FONT_NAME, 10)
+        except Exception:
+            canvas_obj.setFont("Helvetica", 10)
+        canvas_obj.drawRightString(float(page_w) - float(doc.rightMargin), float(page_h) - float(doc.topMargin) + (2 * mm), label)
+        canvas_obj.restoreState()
+
     class _StampCanvas(pdf_canvas.Canvas):
         def showPage(self):
+            _draw_page_watermark(self)
             _draw_pdf_stamp(self, doc, center)
             super().showPage()
 
@@ -473,10 +506,10 @@ def _invoice_module_disabled():
 
 
 def _quote_display_total_without_tax(quote: Quote) -> float:
-    # The template-style quote output is tax-exclusive.
-    if quote.subtotal is not None:
-        return float(quote.subtotal)
-    return float(quote.total_amount or 0)
+    # Show tax-inclusive amount so tax rate changes are reflected in quote totals.
+    if quote.total_amount is not None:
+        return float(quote.total_amount)
+    return float(quote.subtotal or 0)
 
 
 def _invoice_display_total_without_tax(invoice: Invoice) -> float:
@@ -830,6 +863,23 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
     total_amount = _quote_display_total_without_tax(quote)
     total_amount_numeric = _format_amount_number(total_amount)
     total_amount_upper = _format_financial_amount_text(total_amount)
+    tax_row_index = None
+    tax_amount_value = float(quote.tax_amount or 0)
+    tax_rate_value = float(quote.tax_rate or 0)
+    if abs(tax_amount_value) > 0.0001:
+        tax_row_index = len(rows)
+        rows.append(
+            [
+                "",
+                "",
+                f"稅金 ({tax_rate_value:.2f}%)",
+                "",
+                "",
+                "NT$",
+                _format_amount_number(tax_amount_value),
+                "",
+            ]
+        )
     rows.append(
         [
             "合計",
@@ -871,20 +921,60 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
 
     body_style = styles["Normal"].clone("QuoteTemplateBody")
     body_style.fontName = PDF_FONT_NAME
-    body_style.fontSize = 10
-    body_style.leading = 14
+    body_style.fontSize = 10.5
+    body_style.leading = 15
     body_style.textColor = colors.HexColor("#1f2937")
+    meta_label_style = styles["Normal"].clone("QuoteTemplateMetaLabel")
+    meta_label_style.fontName = PDF_FONT_NAME
+    meta_label_style.fontSize = 11.5
+    meta_label_style.leading = 15
+    meta_label_style.textColor = colors.HexColor("#111827")
+    meta_value_style = styles["Normal"].clone("QuoteTemplateMetaValue")
+    meta_value_style.fontName = PDF_FONT_NAME
+    meta_value_style.fontSize = 11
+    meta_value_style.leading = 15
+    meta_value_style.textColor = colors.HexColor("#0f172a")
     signer_style = styles["Normal"].clone("QuoteTemplateSigner")
     signer_style.fontName = PDF_FONT_NAME
     signer_style.alignment = 2
     signer_style.fontSize = 12
     signer_style.leading = 16
 
+    issue_date_text = quote.issue_date.isoformat() if quote.issue_date else "-"
+    tax_rate_text = f"{float(quote.tax_rate or 0):.2f}%"
+    tax_amount_text = f"NT$ {float(quote.tax_amount or 0):,.2f}"
+    total_amount_text = f"NT$ {float(quote.total_amount or 0):,.2f}"
+    meta_rows = [
+        [Paragraph("客戶", meta_label_style), Paragraph(recipient or "-", meta_value_style)],
+        [Paragraph("報價日期", meta_label_style), Paragraph(issue_date_text, meta_value_style)],
+        [Paragraph("稅率", meta_label_style), Paragraph(tax_rate_text, meta_value_style)],
+        [Paragraph("稅額", meta_label_style), Paragraph(tax_amount_text, meta_value_style)],
+        [Paragraph("含稅總額", meta_label_style), Paragraph(total_amount_text, meta_value_style)],
+    ]
+    meta_table = Table(meta_rows, colWidths=[28 * mm, 102 * mm], hAlign="LEFT")
+    meta_table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, -1), PDF_FONT_NAME),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#e5e7eb")),
+                ("ROWBACKGROUNDS", (1, 0), (1, -1), [colors.HexColor("#f8fafc"), colors.white]),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d1d5db")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("LINEBELOW", (0, 4), (-1, 4), 1.0, colors.HexColor("#334155")),
+            ]
+        )
+    )
+
     story = [
         Paragraph("立翔水電工程行", title_style),
         Paragraph("估價單", subtitle_style),
         Spacer(1, 3 * mm),
-        Paragraph(f"{recipient} 台照", body_style),
+        meta_table,
+        Spacer(1, 2 * mm),
         Paragraph(_to_roc_date_text(quote.issue_date), body_style),
         Spacer(1, 4 * mm),
     ]
@@ -919,6 +1009,18 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
             ]
         )
     )
+    if tax_row_index is not None:
+        table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, tax_row_index), (-1, tax_row_index), colors.HexColor("#f1f5f9")),
+                    ("LINEABOVE", (0, tax_row_index), (-1, tax_row_index), 0.8, colors.HexColor("#64748b")),
+                    ("SPAN", (2, tax_row_index), (4, tax_row_index)),
+                    ("ALIGN", (2, tax_row_index), (4, tax_row_index), "LEFT"),
+                    ("FONTSIZE", (2, tax_row_index), (6, tax_row_index), 10),
+                ]
+            )
+        )
     totals_row_index = len(rows) - 1 if rows else 0
     stamp_center = _estimate_table_cell_center(
         doc,
