@@ -4,6 +4,7 @@ from datetime import date, datetime, time, timedelta
 from io import BytesIO
 import glob
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -251,7 +252,16 @@ def _flowable_render_height(flowable, avail_width: float, avail_height: float) -
     return float(wrapped_h) + before + after
 
 
-def _estimate_table_cell_center(doc, flowables_before, table, row_index: int, col_index: int, h_align: str):
+def _rotated_rect_half_extents(width: float, height: float, rotate_deg: float) -> tuple[float, float]:
+    radians = math.radians(float(rotate_deg or 0.0))
+    cos_v = abs(math.cos(radians))
+    sin_v = abs(math.sin(radians))
+    half_w = (float(width) * cos_v + float(height) * sin_v) / 2.0
+    half_h = (float(width) * sin_v + float(height) * cos_v) / 2.0
+    return half_w, half_h
+
+
+def _estimate_table_cell_box(doc, flowables_before, table, row_index: int, col_index: int, h_align: str):
     try:
         table.wrap(doc.width, doc.height)
         row_heights = [float(v) for v in getattr(table, "_rowHeights", [])]
@@ -282,12 +292,30 @@ def _estimate_table_cell_center(doc, flowables_before, table, row_index: int, co
 
         table_top = float(page_h) - float(doc.topMargin) - used_height
         row_top = table_top - sum(row_heights[:row_index])
+        row_bottom = row_top - row_heights[row_index]
         row_center_y = row_top - row_heights[row_index] / 2.0
         col_left = table_left + sum(col_widths[:col_index])
+        col_right = col_left + col_widths[col_index]
         col_center_x = col_left + col_widths[col_index] / 2.0
-        return col_center_x, row_center_y
+        return {
+            "col_left_x": float(col_left),
+            "col_right_x": float(col_right),
+            "col_center_x": float(col_center_x),
+            "row_top_y": float(row_top),
+            "row_bottom_y": float(row_bottom),
+            "row_center_y": float(row_center_y),
+            "row_height": float(row_heights[row_index]),
+            "col_width": float(col_widths[col_index]),
+        }
     except Exception:
         return None
+
+
+def _estimate_table_cell_center(doc, flowables_before, table, row_index: int, col_index: int, h_align: str):
+    box = _estimate_table_cell_box(doc, flowables_before, table, row_index=row_index, col_index=col_index, h_align=h_align)
+    if not box:
+        return None
+    return box["col_center_x"], box["row_center_y"]
 
 
 def _draw_pdf_stamp(canvas, doc, center: tuple[float, float] | None = None):
@@ -304,19 +332,20 @@ def _draw_pdf_stamp(canvas, doc, center: tuple[float, float] | None = None):
         stamp_h = stamp_w * float(src_h) / float(src_w)
         rotate_deg = _resolve_pdf_stamp_rotation_deg()
         y_offset = _resolve_pdf_stamp_y_offset_mm() * mm
+        bbox_half_w, bbox_half_h = _rotated_rect_half_extents(stamp_w, stamp_h, rotate_deg)
 
         if center is not None:
             center_x, center_y = center
         else:
             page_w, page_h = doc.pagesize
-            center_x = page_w - doc.rightMargin - (stamp_w / 2.0)
-            center_y = page_h - doc.topMargin - (stamp_h / 2.0) + 4 * mm
+            center_x = page_w - doc.rightMargin - bbox_half_w
+            center_y = page_h - doc.topMargin - bbox_half_h + 4 * mm
         center_y += y_offset
         page_w, page_h = doc.pagesize
-        min_x = float(doc.leftMargin) + (stamp_w / 2.0)
-        max_x = float(page_w) - float(doc.rightMargin) - (stamp_w / 2.0)
-        min_y = float(doc.bottomMargin) + (stamp_h / 2.0)
-        max_y = float(page_h) - float(doc.topMargin) - (stamp_h / 2.0)
+        min_x = float(doc.leftMargin) + bbox_half_w
+        max_x = float(page_w) - float(doc.rightMargin) - bbox_half_w
+        min_y = float(doc.bottomMargin) + bbox_half_h
+        max_y = float(page_h) - float(doc.topMargin) - bbox_half_h
         center_x = max(min_x, min(max_x, float(center_x)))
         center_y = max(min_y, min(max_y, float(center_y)))
 
@@ -983,7 +1012,8 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
         )
     )
     totals_row_index = len(rows) - 1 if rows else 0
-    stamp_center = _estimate_table_cell_center(
+    stamp_center = None
+    stamp_cell_box = _estimate_table_cell_box(
         doc,
         story,
         table,
@@ -991,6 +1021,33 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
         col_index=6,
         h_align="LEFT",
     )
+    if stamp_cell_box is not None:
+        try:
+            stamp_path = _resolve_pdf_stamp_path()
+            if stamp_path:
+                stamp_image = ImageReader(stamp_path)
+                src_w, src_h = stamp_image.getSize()
+                if src_w and src_h:
+                    stamp_w = PDF_STAMP_WIDTH_MM * mm
+                    stamp_h = stamp_w * float(src_h) / float(src_w)
+                    rotate_deg = _resolve_pdf_stamp_rotation_deg()
+                    _, bbox_half_h = _rotated_rect_half_extents(stamp_w, stamp_h, rotate_deg)
+                    y_offset = _resolve_pdf_stamp_y_offset_mm() * mm
+                    stamp_center = (
+                        float(stamp_cell_box["col_center_x"]),
+                        float(stamp_cell_box["row_top_y"]) + float(bbox_half_h) - float(y_offset),
+                    )
+        except Exception:
+            stamp_center = None
+    if stamp_center is None:
+        stamp_center = _estimate_table_cell_center(
+            doc,
+            story,
+            table,
+            row_index=max(1, totals_row_index - 5),
+            col_index=6,
+            h_align="LEFT",
+        )
     story.append(table)
 
     if quote.note:
