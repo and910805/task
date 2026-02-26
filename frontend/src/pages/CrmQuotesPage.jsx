@@ -41,9 +41,11 @@ const CrmQuotesPage = () => {
   const [contacts, setContacts] = useState([]);
   const [catalogItems, setCatalogItems] = useState([]);
   const [quotes, setQuotes] = useState([]);
+  const [invoices, setInvoices] = useState([]);
   const [history, setHistory] = useState({ quotes: [] });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [convertingQuoteId, setConvertingQuoteId] = useState(null);
   const [error, setError] = useState('');
   const [editingQuoteId, setEditingQuoteId] = useState(null);
   const [versionsForQuoteId, setVersionsForQuoteId] = useState(null);
@@ -80,6 +82,11 @@ const CrmQuotesPage = () => {
     setQuotes(Array.isArray(data) ? data : []);
   };
 
+  const loadInvoices = async () => {
+    const { data } = await api.get('crm/invoices');
+    setInvoices(Array.isArray(data) ? data : []);
+  };
+
   const loadHistory = async (customerId) => {
     if (!customerId) {
       setHistory({ quotes: [] });
@@ -96,7 +103,7 @@ const CrmQuotesPage = () => {
       setLoading(true);
       setError('');
       try {
-        await Promise.all([loadBase(), loadQuotes()]);
+        await Promise.all([loadBase(), loadQuotes(), loadInvoices()]);
       } catch (err) {
         setError(err?.networkMessage || err?.response?.data?.msg || '報價資料載入失敗');
       } finally {
@@ -130,6 +137,15 @@ const CrmQuotesPage = () => {
       })
       .slice(0, 30);
   }, [catalogItems, catalogQuery]);
+  const invoiceByQuoteId = useMemo(() => {
+    const mapping = new Map();
+    invoices.forEach((invoice) => {
+      const quoteId = Number(invoice?.quote_id || 0);
+      if (!quoteId || mapping.has(quoteId)) return;
+      mapping.set(quoteId, invoice);
+    });
+    return mapping;
+  }, [invoices]);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -369,6 +385,21 @@ const CrmQuotesPage = () => {
       window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
     } catch (err) {
       setError(err?.networkMessage || err?.response?.data?.msg || '下載估價單失敗');
+    }
+  };
+
+  const convertQuoteToInvoice = async (quote) => {
+    const quoteId = Number(quote?.id || 0);
+    if (!quoteId) return;
+    setConvertingQuoteId(quoteId);
+    setError('');
+    try {
+      await api.post(`crm/quotes/${quoteId}/convert-to-invoice`);
+      await loadInvoices();
+    } catch (err) {
+      setError(err?.networkMessage || err?.response?.data?.msg || '轉成請款單失敗');
+    } finally {
+      setConvertingQuoteId(null);
     }
   };
 
@@ -648,6 +679,18 @@ const CrmQuotesPage = () => {
                   <td>{quote.status}</td>
                   <td>{quoteDisplayAmount(quote)}</td>
                   <td className="crm-actions-cell">
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      onClick={() => convertQuoteToInvoice(quote)}
+                      disabled={convertingQuoteId === quote.id || invoiceByQuoteId.has(Number(quote.id))}
+                    >
+                      {convertingQuoteId === quote.id
+                        ? '轉換中...'
+                        : invoiceByQuoteId.has(Number(quote.id))
+                          ? '已轉請款單'
+                          : '轉成請款單'}
+                    </button>
                     <button type="button" className="secondary-btn" onClick={() => openPdf(quote.id)}>
                       PDF下載
                     </button>
@@ -671,6 +714,48 @@ const CrmQuotesPage = () => {
               {loading ? (
                 <tr>
                   <td colSpan="4">載入中...</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel panel--table">
+        <div className="panel-header">
+          <h2>請款單列表</h2>
+        </div>
+        <div className="table-wrapper">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>請款單號</th>
+                <th>來源報價單</th>
+                <th>客戶</th>
+                <th>狀態</th>
+                <th>金額</th>
+                <th>日期</th>
+              </tr>
+            </thead>
+            <tbody>
+              {invoices.map((invoice) => (
+                <tr key={invoice.id}>
+                  <td>{invoice.invoice_no || '-'}</td>
+                  <td>{invoice.quote_no || '-'}</td>
+                  <td>{invoice.customer_name || '-'}</td>
+                  <td>{invoice.status || '-'}</td>
+                  <td>{quoteDisplayAmount(invoice)}</td>
+                  <td>{invoice.issue_date || '-'}</td>
+                </tr>
+              ))}
+              {!loading && invoices.length === 0 ? (
+                <tr>
+                  <td colSpan="6">尚無請款單</td>
+                </tr>
+              ) : null}
+              {loading ? (
+                <tr>
+                  <td colSpan="6">載入中...</td>
                 </tr>
               ) : null}
             </tbody>

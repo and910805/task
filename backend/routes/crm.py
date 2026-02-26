@@ -506,6 +506,27 @@ def _next_quote_no() -> str:
     return candidate
 
 
+def _next_invoice_no() -> str:
+    ymd = datetime.utcnow().strftime("%Y%m%d")
+    prefix = f"INV-{ymd}-"
+
+    rows = Invoice.query.with_entities(Invoice.invoice_no).filter(Invoice.invoice_no.like(f"{prefix}%")).all()
+    max_seq = 0
+    for (invoice_no,) in rows:
+        if not isinstance(invoice_no, str) or not invoice_no.startswith(prefix):
+            continue
+        suffix = invoice_no[len(prefix):]
+        if suffix.isdigit():
+            max_seq = max(max_seq, int(suffix))
+
+    next_seq = max_seq + 1
+    candidate = f"{prefix}{next_seq:03d}"
+    while Invoice.query.filter(Invoice.invoice_no == candidate).first() is not None:
+        next_seq += 1
+        candidate = f"{prefix}{next_seq:03d}"
+    return candidate
+
+
 def _next_quote_version_no(quote_id: int) -> int:
     latest = (
         QuoteVersion.query.with_entities(QuoteVersion.version_no)
@@ -1775,13 +1796,124 @@ def quote_versions(quote_id: int):
 @crm_bp.post("/quotes/<int:quote_id>/convert-to-invoice")
 @role_required(*WRITE_ROLES)
 def convert_quote_to_invoice(quote_id: int):
-    return _invoice_module_disabled()
+    quote = Quote.query.options(
+        selectinload(Quote.items),
+        selectinload(Quote.customer),
+        selectinload(Quote.contact),
+    ).get_or_404(quote_id)
+
+    existing = (
+        Invoice.query.options(
+            selectinload(Invoice.items),
+            selectinload(Invoice.customer),
+            selectinload(Invoice.contact),
+            selectinload(Invoice.quote),
+        )
+        .filter(Invoice.quote_id == quote.id)
+        .order_by(Invoice.created_at.desc(), Invoice.id.desc())
+        .first()
+    )
+    if existing is not None:
+        return jsonify(
+            {
+                "msg": "Quote already converted to invoice",
+                "created": False,
+                "invoice": existing.to_dict(),
+            }
+        )
+
+    items = []
+    for idx, quote_item in enumerate(
+        sorted(
+            list(quote.items or []),
+            key=lambda item: (
+                item.sort_order if item.sort_order is not None else 10**9,
+                item.id if item.id is not None else 10**9,
+            ),
+        )
+    ):
+        items.append(
+            {
+                "description": (quote_item.description or "").strip(),
+                "unit": (quote_item.unit or "").strip() or "式",
+                "quantity": float(quote_item.quantity or 0.0),
+                "unit_price": float(quote_item.unit_price or 0.0),
+                "amount": round(float(quote_item.amount or 0.0), 2),
+                "sort_order": idx,
+            }
+        )
+
+    if not items:
+        return jsonify({"msg": "Quote has no items to convert"}), 400
+
+    invoice = Invoice(
+        invoice_no=_next_invoice_no(),
+        status="draft",
+        customer_id=quote.customer_id,
+        contact_id=quote.contact_id,
+        quote_id=quote.id,
+        issue_date=quote.issue_date or date.today(),
+        due_date=quote.expiry_date or quote.issue_date or date.today(),
+        currency=(quote.currency or "TWD").strip().upper() or "TWD",
+        note=(quote.note or "").strip() or None,
+        created_by_id=get_current_user_id(),
+    )
+
+    total_err = _apply_totals(invoice, items, quote.tax_rate or 0)
+    if total_err:
+        return total_err
+
+    db.session.add(invoice)
+    db.session.flush()
+
+    for item in items:
+        db.session.add(InvoiceItem(invoice_id=invoice.id, **item))
+
+    db.session.commit()
+    invoice = (
+        Invoice.query.options(
+            selectinload(Invoice.items),
+            selectinload(Invoice.customer),
+            selectinload(Invoice.contact),
+            selectinload(Invoice.quote),
+        )
+        .get(invoice.id)
+    )
+    return (
+        jsonify(
+            {
+                "msg": "Invoice created from quote",
+                "created": True,
+                "invoice": invoice.to_dict() if invoice else None,
+            }
+        ),
+        201,
+    )
 
 
 @crm_bp.get("/invoices")
 @role_required(*READ_ROLES)
 def list_invoices():
-    return _invoice_module_disabled()
+    query = Invoice.query.options(
+        selectinload(Invoice.items),
+        selectinload(Invoice.customer),
+        selectinload(Invoice.contact),
+        selectinload(Invoice.quote),
+    ).order_by(Invoice.updated_at.desc(), Invoice.id.desc())
+
+    customer_id = request.args.get("customer_id", type=int)
+    quote_id = request.args.get("quote_id", type=int)
+    status = (request.args.get("status") or "").strip().lower()
+
+    if customer_id:
+        query = query.filter(Invoice.customer_id == customer_id)
+    if quote_id:
+        query = query.filter(Invoice.quote_id == quote_id)
+    if status:
+        query = query.filter(Invoice.status == status)
+
+    rows = query.limit(200).all()
+    return jsonify([row.to_dict() for row in rows])
 
 
 @crm_bp.post("/invoices")
