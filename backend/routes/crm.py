@@ -991,7 +991,7 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
         TableStyle(
             [
                 ("FONTNAME", (0, 0), (-1, -1), PDF_FONT_NAME),
-                ("FONTSIZE", (0, 0), (-1, -1), 11),
+                ("FONTSIZE", (0, 0), (-1, -1), 10),
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f3f4f6")),
                 ("ALIGN", (0, 0), (0, -1), "CENTER"),
                 ("ALIGN", (3, 0), (5, -1), "CENTER"),
@@ -1012,8 +1012,8 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
                 ("LEFTPADDING", (3, -1), (5, -1), 4),
                 ("RIGHTPADDING", (3, -1), (5, -1), 2),
                 ("FONTSIZE", (3, -1), (5, -1), 10),
-                ("FONTSIZE", (6, -1), (6, -1), 12),
-                ("FONTSIZE", (7, -1), (7, -1), 13),
+                ("FONTSIZE", (6, -1), (6, -1), 10),
+                ("FONTSIZE", (7, -1), (7, -1), 10),
             ]
         )
     )
