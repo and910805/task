@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+﻿import { NavLink } from 'react-router-dom';
 
 import brandFallback from '../assets/brand-logo.svg';
 import GlobalSearch from './GlobalSearch.jsx';
@@ -23,7 +23,6 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
     { to: '/attendance', label: '出勤' },
     { to: '/calendar', label: '行事曆' },
     { to: '/crm', label: '經營管理' },
-    { to: '/crm/catalog', label: '價目資料庫' },
     { to: '/reports', label: '報表' },
     { to: '/profile', label: '個人設定' },
     { to: '/admin', label: '管理後台', adminOnly: true },

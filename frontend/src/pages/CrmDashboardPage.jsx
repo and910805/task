@@ -56,6 +56,7 @@ const CrmDashboardPage = () => {
     () => [
       { title: '客戶管理', desc: '維護客戶主檔與基本聯絡資訊。', to: '/crm/customers', tag: 'Master Data' },
       { title: '聯絡人管理', desc: '管理客戶聯絡窗口與聯繫方式。', to: '/crm/contacts', tag: 'Master Data' },
+      { title: '價目資料庫', desc: '維護常用服務品項、單位與預設價格。', to: '/crm/catalog', tag: 'Pricing' },
       { title: '報價與請款', desc: '建立報價單、轉請款單並下載 PDF。', to: '/crm/quotes', tag: 'Sales' },
       { title: '考勤管理', desc: '查看人員出勤與現場打卡記錄。', to: '/attendance', tag: 'Field Ops' },
       { title: '報表中心', desc: '檢視營運數據與任務統計報表。', to: '/reports', tag: 'Analytics' },
@@ -66,7 +67,7 @@ const CrmDashboardPage = () => {
   const moduleCards = useMemo(() => {
     if (!isManager) return baseModuleCards;
     return [
-      ...baseModuleCards.slice(0, 3),
+      ...baseModuleCards.slice(0, 4),
       {
         title: '耗材入庫',
         desc: '建立耗材主檔、記錄進貨與入庫成本。',
@@ -79,7 +80,7 @@ const CrmDashboardPage = () => {
         to: '/materials/reports',
         tag: 'Materials',
       },
-      ...baseModuleCards.slice(3),
+      ...baseModuleCards.slice(4),
     ];
   }, [baseModuleCards, isManager]);
 

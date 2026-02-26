@@ -1493,6 +1493,15 @@ def update_catalog_item(item_id: int):
     return jsonify(item.to_dict())
 
 
+@crm_bp.delete("/catalog-items/<int:item_id>")
+@role_required(*WRITE_ROLES)
+def delete_catalog_item(item_id: int):
+    item = ServiceCatalogItem.query.get_or_404(item_id)
+    db.session.delete(item)
+    db.session.commit()
+    return jsonify({"msg": "catalog item deleted", "id": item_id})
+
+
 @crm_bp.get("/customers/<int:customer_id>/service-history")
 @role_required(*READ_ROLES)
 def customer_service_history(customer_id: int):
