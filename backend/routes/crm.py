@@ -1840,6 +1840,7 @@ def convert_quote_to_invoice(quote_id: int):
             selectinload(Invoice.quote),
         )
         .filter(Invoice.quote_id == quote.id)
+        .filter(Invoice.status != "cancelled")
         .order_by(Invoice.created_at.desc(), Invoice.id.desc())
         .first()
     )

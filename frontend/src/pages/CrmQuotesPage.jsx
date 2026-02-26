@@ -17,10 +17,10 @@ const STATUS_LABELS = {
     expired: '已過期',
   },
   invoice: {
-    draft: '草稿',
-    issued: '已開立',
-    partially_paid: '部分付款',
-    paid: '已付款',
+    draft: '尚未請款',
+    issued: '已請款',
+    partially_paid: '部分收款',
+    paid: '已收款',
     cancelled: '已取消',
   },
 };
@@ -162,12 +162,18 @@ const CrmQuotesPage = () => {
   const invoiceByQuoteId = useMemo(() => {
     const mapping = new Map();
     invoices.forEach((invoice) => {
+      const status = String(invoice?.status || '').trim().toLowerCase();
+      if (status === 'cancelled') return;
       const quoteId = Number(invoice?.quote_id || 0);
       if (!quoteId || mapping.has(quoteId)) return;
       mapping.set(quoteId, invoice);
     });
     return mapping;
   }, [invoices]);
+  const activeInvoices = useMemo(
+    () => invoices.filter((invoice) => String(invoice?.status || '').trim().toLowerCase() !== 'cancelled'),
+    [invoices],
+  );
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -810,7 +816,7 @@ const CrmQuotesPage = () => {
               </tr>
             </thead>
             <tbody>
-              {invoices.map((invoice) => (
+              {activeInvoices.map((invoice) => (
                 <tr key={invoice.id}>
                   <td>{invoice.invoice_no || '-'}</td>
                   <td>{invoice.quote_no || '-'}</td>
@@ -837,7 +843,7 @@ const CrmQuotesPage = () => {
                   </td>
                 </tr>
               ))}
-              {!loading && invoices.length === 0 ? (
+              {!loading && activeInvoices.length === 0 ? (
                 <tr>
                   <td colSpan="7">尚無請款單</td>
                 </tr>
