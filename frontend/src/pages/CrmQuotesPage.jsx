@@ -10,7 +10,7 @@ const withLineItemKey = (item = {}) => ({ _key: nextLineItemKey(), ...item });
 const quoteDisplayAmount = (quote) => Number(quote?.total_amount ?? quote?.subtotal ?? 0).toFixed(2);
 const STATUS_LABELS = {
   quote: {
-    draft: '草稿',
+    draft: '尚未送出',
     sent: '已送出',
     accepted: '已接受',
     rejected: '已拒絕',
