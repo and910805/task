@@ -24,13 +24,17 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
     { to: '/calendar', label: '行事曆' },
     { to: '/crm', label: '營運中台' },
     { to: '/crm/catalog', label: '價目資料庫' },
-    { to: '/materials/purchases', label: '耗材入庫' },
-    { to: '/materials/reports', label: '耗材月結' },
+    { to: '/materials/purchases', label: '耗材入庫', managerOnly: true },
+    { to: '/materials/reports', label: '耗材月結', managerOnly: true },
     { to: '/reports', label: '報表' },
     { to: '/profile', label: '個人設定' },
     { to: '/admin', label: '管理後台', adminOnly: true },
   ];
-  const visibleNavItems = navItems.filter((item) => !item.adminOnly || isAdmin);
+  const visibleNavItems = navItems.filter((item) => {
+    if (item.adminOnly && !isAdmin) return false;
+    if (item.managerOnly && user?.role === 'worker') return false;
+    return true;
+  });
 
   return (
     <>

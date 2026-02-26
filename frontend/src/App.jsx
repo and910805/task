@@ -24,6 +24,8 @@ import MaterialsMonthlyReportPage from './pages/MaterialsMonthlyReportPage.jsx';
 import LandingPage from './pages/LandingPage.jsx';
 import './App.css';
 
+const managerOnlyRouteRoles = ['site_supervisor', 'hq_staff', 'admin'];
+
 const PrivateRoute = ({ children, roles }) => {
   const { isAuthenticated, user, initializing } = useAuth();
 
@@ -136,7 +138,7 @@ const AppRoutes = () => (
     <Route
       path="/materials/purchases"
       element={(
-        <PrivateRoute>
+        <PrivateRoute roles={managerOnlyRouteRoles}>
           <MaterialsPurchasesPage />
         </PrivateRoute>
       )}
@@ -144,7 +146,7 @@ const AppRoutes = () => (
     <Route
       path="/materials/reports"
       element={(
-        <PrivateRoute>
+        <PrivateRoute roles={managerOnlyRouteRoles}>
           <MaterialsMonthlyReportPage />
         </PrivateRoute>
       )}

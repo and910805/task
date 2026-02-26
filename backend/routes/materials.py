@@ -145,6 +145,65 @@ def _manager_only_error():
     return jsonify({"msg": "Insufficient permissions"}), 403
 
 
+def _is_manager_role(role: str | None) -> bool:
+    return role in MANAGER_ROLES
+
+
+def _parse_bool_flag(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _normalize_material_spec(value) -> str:
+    return (value or "").strip()
+
+
+def _serialize_material_item(row: MaterialItem, *, include_cost: bool = True, compact: bool = False) -> dict:
+    payload = row.to_dict()
+    if compact:
+        return {
+            "id": payload.get("id"),
+            "name": payload.get("name"),
+            "spec": payload.get("spec"),
+            "unit": payload.get("unit"),
+            "is_active": payload.get("is_active"),
+            "display_name": _material_item_display_name(row),
+        }
+    if not include_cost:
+        payload.pop("reference_cost", None)
+    return payload
+
+
+def _serialize_task_usage(row: TaskMaterialUsage, *, include_cost: bool = True) -> dict:
+    payload = row.to_dict()
+    if not include_cost:
+        payload.pop("unit_cost_snapshot", None)
+        payload.pop("total_cost", None)
+    return payload
+
+
+def _task_is_completed(task: Task) -> bool:
+    if bool(getattr(task, "completed_at", None)):
+        return True
+    return str(getattr(task, "status", "") or "").strip() == "已完成"
+
+
+def _worker_task_materials_locked(task: Task, role: str | None) -> bool:
+    return role == "worker" and _task_is_completed(task)
+
+
+def _task_material_write_lock_error(task: Task, role: str | None):
+    if _worker_task_materials_locked(task, role):
+        return (
+            jsonify({"msg": "Task is completed; material usage is locked for workers"}),
+            403,
+        )
+    return None
+
+
 def _material_stock_snapshot_map(*, as_of: datetime | None = None, material_item_ids: list[int] | None = None) -> dict[int, dict]:
     query = db.session.query(
         MaterialStockTransaction.material_item_id,
@@ -186,6 +245,45 @@ def _material_item_display_name(item: MaterialItem | None) -> str:
     if item.spec:
         return f"{item.name} ({item.spec})"
     return item.name
+
+
+def _material_qty_on_hand(material_item_id: int, *, excluding_usage: TaskMaterialUsage | None = None) -> float:
+    snapshot = _material_stock_snapshot_map(material_item_ids=[material_item_id]).get(material_item_id) or {}
+    qty_on_hand = float(snapshot.get("qty_on_hand") or 0.0)
+    if excluding_usage is not None and int(excluding_usage.material_item_id or 0) == int(material_item_id):
+        qty_on_hand += float(excluding_usage.used_qty or 0.0)
+    return round(qty_on_hand, 4)
+
+
+def _insufficient_stock_error(material: MaterialItem, *, qty_on_hand: float, requested_qty: float):
+    shortage_qty = round(max(float(requested_qty or 0.0) - float(qty_on_hand or 0.0), 0.0), 4)
+    return (
+        jsonify(
+            {
+                "msg": "庫存不足 / Insufficient stock",
+                "material_name": _material_item_display_name(material) or material.name,
+                "qty_on_hand": _round_qty(qty_on_hand),
+                "requested_qty": _round_qty(requested_qty),
+                "shortage_qty": _round_qty(shortage_qty),
+            }
+        ),
+        400,
+    )
+
+
+def _validate_usage_stock_available(
+    material: MaterialItem,
+    *,
+    requested_qty: float,
+    allow_negative: bool = False,
+    excluding_usage: TaskMaterialUsage | None = None,
+):
+    if allow_negative:
+        return None
+    qty_on_hand = _material_qty_on_hand(material.id, excluding_usage=excluding_usage)
+    if qty_on_hand - float(requested_qty or 0.0) < -1e-9:
+        return _insufficient_stock_error(material, qty_on_hand=qty_on_hand, requested_qty=float(requested_qty or 0.0))
+    return None
 
 
 def _serialize_stock_summary_rows(items: list[MaterialItem], *, as_of: datetime | None = None) -> list[dict]:
@@ -277,12 +375,15 @@ def _normalize_purchase_items(raw_items) -> tuple[list[dict] | None, tuple | Non
 @materials_bp.get("/items")
 @role_required(*ALL_ROLES)
 def list_material_items():
+    role = _current_role()
+    for_task = _parse_bool_flag(request.args.get("for_task"))
     include_inactive = str(request.args.get("include_inactive") or "").strip().lower() in {"1", "true", "yes"}
     query = MaterialItem.query.order_by(MaterialItem.name.asc(), MaterialItem.spec.asc(), MaterialItem.id.asc())
     if not include_inactive:
         query = query.filter(MaterialItem.is_active.is_(True))
     rows = query.limit(500).all()
-    return jsonify([row.to_dict() for row in rows])
+    include_cost = _is_manager_role(role) and not for_task
+    return jsonify([_serialize_material_item(row, include_cost=include_cost, compact=for_task) for row in rows])
 
 
 @materials_bp.post("/items")
@@ -290,7 +391,7 @@ def list_material_items():
 def create_material_item():
     data = request.get_json() or {}
     name = (data.get("name") or "").strip()
-    spec = (data.get("spec") or "").strip() or None
+    spec = _normalize_material_spec(data.get("spec"))
     unit = (data.get("unit") or "").strip() or "個"
     if not name:
         return jsonify({"msg": "name is required"}), 400
@@ -300,7 +401,10 @@ def create_material_item():
     except (TypeError, ValueError):
         return jsonify({"msg": "reference_cost must be a number"}), 400
 
-    exists = MaterialItem.query.filter(MaterialItem.name == name, MaterialItem.spec == spec).first()
+    exists = MaterialItem.query.filter(
+        MaterialItem.name == name,
+        func.coalesce(MaterialItem.spec, "") == spec,
+    ).first()
     if exists is not None:
         return jsonify({"msg": "Material item already exists", "item": exists.to_dict()}), 409
 
@@ -325,7 +429,7 @@ def update_material_item(item_id: int):
     if "name" in data:
         item.name = (data.get("name") or "").strip() or item.name
     if "spec" in data:
-        item.spec = (data.get("spec") or "").strip() or None
+        item.spec = _normalize_material_spec(data.get("spec"))
     if "unit" in data:
         item.unit = (data.get("unit") or "").strip() or item.unit or "個"
     if "reference_cost" in data:
@@ -335,12 +439,19 @@ def update_material_item(item_id: int):
             return jsonify({"msg": "reference_cost must be a number"}), 400
     if "is_active" in data:
         item.is_active = bool(data.get("is_active"))
+    duplicate = MaterialItem.query.filter(
+        MaterialItem.id != item.id,
+        MaterialItem.name == item.name,
+        func.coalesce(MaterialItem.spec, "") == _normalize_material_spec(item.spec),
+    ).first()
+    if duplicate is not None:
+        return jsonify({"msg": "Material item already exists", "item": duplicate.to_dict()}), 409
     db.session.commit()
     return jsonify(item.to_dict())
 
 
 @materials_bp.get("/stock/summary")
-@role_required(*ALL_ROLES)
+@role_required(*MANAGER_ROLES)
 def stock_summary():
     as_of_raw = (request.args.get("as_of") or "").strip()
     as_of = None
@@ -361,7 +472,7 @@ def stock_summary():
 
 
 @materials_bp.get("/stock/transactions")
-@role_required(*ALL_ROLES)
+@role_required(*MANAGER_ROLES)
 def stock_transactions():
     month_raw = request.args.get("month")
     material_item_id = request.args.get("material_item_id", type=int)
@@ -503,6 +614,8 @@ def list_task_material_usages(task_id: int):
     task, task_err = _get_task_or_403(task_id)
     if task_err:
         return task_err
+    role = _current_role()
+    include_cost = _is_manager_role(role)
 
     rows = (
         TaskMaterialUsage.query.options(selectinload(TaskMaterialUsage.material_item))
@@ -510,12 +623,14 @@ def list_task_material_usages(task_id: int):
         .order_by(TaskMaterialUsage.used_date.desc(), TaskMaterialUsage.id.desc())
         .all()
     )
-    total_cost = round(sum(float(row.total_cost or 0.0) for row in rows), 2)
+    total_cost = round(sum(float(row.total_cost or 0.0) for row in rows), 2) if include_cost else None
     return jsonify(
         {
             "task_id": task.id,
-            "rows": [row.to_dict() for row in rows],
+            "rows": [_serialize_task_usage(row, include_cost=include_cost) for row in rows],
             "total_cost": total_cost,
+            "cost_visible": include_cost,
+            "worker_locked": _worker_task_materials_locked(task, role),
         }
     )
 
@@ -526,6 +641,10 @@ def create_task_material_usage(task_id: int):
     task, task_err = _get_task_or_403(task_id)
     if task_err:
         return task_err
+    role = _current_role()
+    lock_err = _task_material_write_lock_error(task, role)
+    if lock_err:
+        return lock_err
 
     data = request.get_json() or {}
     material_item_id = data.get("material_item_id")
@@ -549,14 +668,28 @@ def create_task_material_usage(task_id: int):
         return date_err
     assert used_date is not None
 
-    unit_cost_raw = data.get("unit_cost_snapshot")
-    if unit_cost_raw in (None, ""):
-        unit_cost = _current_average_cost(material)
+    allow_negative_requested = _parse_bool_flag(data.get("allow_negative")) or _parse_bool_flag(request.args.get("allow_negative"))
+    allow_negative = bool(allow_negative_requested and _is_manager_role(role))
+    stock_err = _validate_usage_stock_available(
+        material,
+        requested_qty=float(used_qty or 0.0),
+        allow_negative=allow_negative,
+    )
+    if stock_err:
+        return stock_err
+
+    if _is_manager_role(role):
+        unit_cost_raw = data.get("unit_cost_snapshot")
+        if unit_cost_raw in (None, ""):
+            unit_cost = _current_average_cost(material)
+        else:
+            parsed_cost, cost_err = _parse_float(unit_cost_raw, "unit_cost_snapshot", minimum=0)
+            if cost_err:
+                return cost_err
+            unit_cost = round(float(parsed_cost or 0.0), 4)
     else:
-        parsed_cost, cost_err = _parse_float(unit_cost_raw, "unit_cost_snapshot", minimum=0)
-        if cost_err:
-            return cost_err
-        unit_cost = round(float(parsed_cost or 0.0), 4)
+        # Worker submissions cannot override cost snapshots; always use system cost.
+        unit_cost = _current_average_cost(material)
 
     total_cost = round(float(used_qty or 0.0) * float(unit_cost or 0.0), 2)
     actor_id = get_current_user_id()
@@ -575,7 +708,7 @@ def create_task_material_usage(task_id: int):
     _upsert_usage_stock_txn(usage, actor_id=actor_id)
     db.session.commit()
     usage = TaskMaterialUsage.query.options(selectinload(TaskMaterialUsage.material_item)).get(usage.id)
-    return jsonify(usage.to_dict() if usage else {}), 201
+    return jsonify(_serialize_task_usage(usage, include_cost=_is_manager_role(role)) if usage else {}), 201
 
 
 @materials_bp.put("/tasks/<int:task_id>/usages/<int:usage_id>")
@@ -584,6 +717,13 @@ def update_task_material_usage(task_id: int, usage_id: int):
     task, task_err = _get_task_or_403(task_id)
     if task_err:
         return task_err
+    role = _current_role()
+    lock_err = _task_material_write_lock_error(task, role)
+    if lock_err:
+        return lock_err
+    manager_err = _manager_only_error()
+    if manager_err:
+        return manager_err
 
     usage = TaskMaterialUsage.query.options(selectinload(TaskMaterialUsage.material_item)).filter(
         TaskMaterialUsage.id == usage_id,
@@ -592,6 +732,8 @@ def update_task_material_usage(task_id: int, usage_id: int):
     if usage is None:
         return jsonify({"msg": "Task material usage not found"}), 404
 
+    original_material_item_id = int(usage.material_item_id)
+    original_used_qty = float(usage.used_qty or 0.0)
     data = request.get_json() or {}
     if "material_item_id" in data:
         try:
@@ -631,11 +773,23 @@ def update_task_material_usage(task_id: int, usage_id: int):
     if "note" in data:
         usage.note = (data.get("note") or "").strip() or None
 
+    allow_negative = _parse_bool_flag(data.get("allow_negative")) or _parse_bool_flag(request.args.get("allow_negative"))
+    if material is not None and not allow_negative:
+        qty_on_hand = _material_qty_on_hand(material.id)
+        if int(material.id) == original_material_item_id:
+            qty_on_hand += original_used_qty
+        if qty_on_hand - float(usage.used_qty or 0.0) < -1e-9:
+            return _insufficient_stock_error(
+                material,
+                qty_on_hand=qty_on_hand,
+                requested_qty=float(usage.used_qty or 0.0),
+            )
+
     usage.total_cost = round(float(usage.used_qty or 0.0) * float(usage.unit_cost_snapshot or 0.0), 2)
     _upsert_usage_stock_txn(usage, actor_id=get_current_user_id())
     db.session.commit()
     usage = TaskMaterialUsage.query.options(selectinload(TaskMaterialUsage.material_item)).get(usage.id)
-    return jsonify(usage.to_dict() if usage else {})
+    return jsonify(_serialize_task_usage(usage, include_cost=True) if usage else {})
 
 
 @materials_bp.delete("/tasks/<int:task_id>/usages/<int:usage_id>")
@@ -644,6 +798,13 @@ def delete_task_material_usage(task_id: int, usage_id: int):
     task, task_err = _get_task_or_403(task_id)
     if task_err:
         return task_err
+    role = _current_role()
+    lock_err = _task_material_write_lock_error(task, role)
+    if lock_err:
+        return lock_err
+    manager_err = _manager_only_error()
+    if manager_err:
+        return manager_err
 
     usage = TaskMaterialUsage.query.filter(
         TaskMaterialUsage.id == usage_id,
@@ -800,4 +961,3 @@ def monthly_material_report():
             "purchase_batches": purchase_batches_payload,
         }
     )
-

@@ -1284,7 +1284,11 @@ const TaskDetailPage = () => {
       )}
 
       {activeTab === 'materials' && (
-        <TaskMaterialsPanel taskId={Number(id)} />
+        <TaskMaterialsPanel
+          taskId={Number(id)}
+          taskStatus={task?.status || ''}
+          taskCompletedAt={task?.completed_at || null}
+        />
       )}
 
       {activeTab === 'time' && (
