@@ -8,6 +8,27 @@ const nextLineItemKey = () => `line-${lineItemKeySeed++}`;
 const blankItem = () => ({ _key: nextLineItemKey(), description: '', unit: '式', quantity: 1, unit_price: 0 });
 const withLineItemKey = (item = {}) => ({ _key: nextLineItemKey(), ...item });
 const quoteDisplayAmount = (quote) => Number(quote?.total_amount ?? quote?.subtotal ?? 0).toFixed(2);
+const STATUS_LABELS = {
+  quote: {
+    draft: '草稿',
+    sent: '已送出',
+    accepted: '已接受',
+    rejected: '已拒絕',
+    expired: '已過期',
+  },
+  invoice: {
+    draft: '草稿',
+    issued: '已開立',
+    partially_paid: '部分付款',
+    paid: '已付款',
+    cancelled: '已取消',
+  },
+};
+const crmStatusLabel = (type, status) => {
+  const raw = String(status || '').trim().toLowerCase();
+  if (!raw) return '-';
+  return STATUS_LABELS?.[type]?.[raw] || raw;
+};
 const toDateInputValue = (value) => value.toISOString().slice(0, 10);
 const addDaysToDateInput = (dateInput, days) => {
   if (!dateInput) return '';
@@ -46,6 +67,7 @@ const CrmQuotesPage = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [convertingQuoteId, setConvertingQuoteId] = useState(null);
+  const [cancellingInvoiceId, setCancellingInvoiceId] = useState(null);
   const [error, setError] = useState('');
   const [editingQuoteId, setEditingQuoteId] = useState(null);
   const [versionsForQuoteId, setVersionsForQuoteId] = useState(null);
@@ -366,6 +388,40 @@ const CrmQuotesPage = () => {
     }
   };
 
+  const openInvoicePdf = async (invoiceId) => {
+    try {
+      const response = await api.get(`crm/invoices/${invoiceId}/pdf`, { responseType: 'blob' });
+      const data = response.data;
+      const filenameFromHeader = getFilenameFromDisposition(response.headers?.['content-disposition']);
+      const blobUrl = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }));
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filenameFromHeader || `invoice-${invoiceId}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (err) {
+      const blobPayload = err?.response?.data;
+      if (typeof Blob !== 'undefined' && blobPayload instanceof Blob) {
+        try {
+          const text = await blobPayload.text();
+          const parsed = JSON.parse(text);
+          const fontHealth = parsed?.font_health || {};
+          const fontSummary = [fontHealth?.font_source, fontHealth?.discovered_font_path]
+            .filter(Boolean)
+            .join(' @ ');
+          const detail = [parsed?.msg, parsed?.detail, fontSummary].filter(Boolean).join(' / ');
+          setError(detail || '開啟請款單 PDF 失敗');
+          return;
+        } catch {
+          // Fall through to generic error handling.
+        }
+      }
+      setError(err?.networkMessage || err?.response?.data?.msg || '下載請款單 PDF 失敗');
+    }
+  };
+
   const downloadXlsx = async (quote) => {
     const quoteId = Number(quote?.id || 0);
     if (!quoteId) return;
@@ -400,6 +456,21 @@ const CrmQuotesPage = () => {
       setError(err?.networkMessage || err?.response?.data?.msg || '轉成請款單失敗');
     } finally {
       setConvertingQuoteId(null);
+    }
+  };
+
+  const cancelInvoice = async (invoice) => {
+    const invoiceId = Number(invoice?.id || 0);
+    if (!invoiceId || (invoice?.status || '').toLowerCase() === 'cancelled') return;
+    setCancellingInvoiceId(invoiceId);
+    setError('');
+    try {
+      await api.put(`crm/invoices/${invoiceId}`, { status: 'cancelled' });
+      await loadInvoices();
+    } catch (err) {
+      setError(err?.networkMessage || err?.response?.data?.msg || '取消請款失敗');
+    } finally {
+      setCancellingInvoiceId(null);
     }
   };
 
@@ -676,7 +747,7 @@ const CrmQuotesPage = () => {
               {quotes.map((quote) => (
                 <tr key={quote.id}>
                   <td>{quote.quote_no}</td>
-                  <td>{quote.status}</td>
+                  <td>{crmStatusLabel('quote', quote.status)}</td>
                   <td>{quoteDisplayAmount(quote)}</td>
                   <td className="crm-actions-cell">
                     <button
@@ -735,6 +806,7 @@ const CrmQuotesPage = () => {
                 <th>狀態</th>
                 <th>金額</th>
                 <th>日期</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -743,19 +815,36 @@ const CrmQuotesPage = () => {
                   <td>{invoice.invoice_no || '-'}</td>
                   <td>{invoice.quote_no || '-'}</td>
                   <td>{invoice.customer_name || '-'}</td>
-                  <td>{invoice.status || '-'}</td>
+                  <td>{crmStatusLabel('invoice', invoice.status)}</td>
                   <td>{quoteDisplayAmount(invoice)}</td>
                   <td>{invoice.issue_date || '-'}</td>
+                  <td className="crm-actions-cell">
+                    <button type="button" className="secondary-btn" onClick={() => openInvoicePdf(invoice.id)}>
+                      PDF下載
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      onClick={() => cancelInvoice(invoice)}
+                      disabled={cancellingInvoiceId === invoice.id || String(invoice.status || '').toLowerCase() === 'cancelled'}
+                    >
+                      {String(invoice.status || '').toLowerCase() === 'cancelled'
+                        ? '已取消'
+                        : cancellingInvoiceId === invoice.id
+                          ? '取消中...'
+                          : '取消請款'}
+                    </button>
+                  </td>
                 </tr>
               ))}
               {!loading && invoices.length === 0 ? (
                 <tr>
-                  <td colSpan="6">尚無請款單</td>
+                  <td colSpan="7">尚無請款單</td>
                 </tr>
               ) : null}
               {loading ? (
                 <tr>
-                  <td colSpan="6">載入中...</td>
+                  <td colSpan="7">載入中...</td>
                 </tr>
               ) : null}
             </tbody>

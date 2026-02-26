@@ -8,6 +8,7 @@ import math
 import os
 from pathlib import Path
 import re
+from types import SimpleNamespace
 
 from flask import Blueprint, jsonify, request, send_file
 from flask_jwt_extended import jwt_required
@@ -879,7 +880,14 @@ def _build_pdf_document(title: str, meta_rows: list[list[str]], item_rows: list[
     return buffer
 
 
-def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: Contact | None):
+def _build_quote_template_pdf(
+    quote: Quote,
+    customer: Customer | None,
+    contact: Contact | None,
+    *,
+    document_label: str = "\u5831\u50f9\u55ae",
+    document_title_prefix: str = "quote",
+):
     _require_embedded_pdf_font()
     recipient = _resolve_quote_recipient_display(quote, customer, contact)
 
@@ -959,7 +967,7 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
         rightMargin=12 * mm,
         topMargin=12 * mm,
         bottomMargin=12 * mm,
-        title=f"quote-{quote.quote_no}",
+        title=f"{document_title_prefix}-{quote.quote_no}",
     )
 
     styles = getSampleStyleSheet()
@@ -1001,6 +1009,7 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
         Paragraph(_to_roc_date_text(quote.issue_date), body_style),
         Spacer(1, 4 * mm),
     ]
+    story[1] = Paragraph(document_label, subtitle_style)
 
     table = Table(
         rows,
@@ -1219,6 +1228,27 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
     doc.build(story, canvasmaker=_make_pdf_stamp_canvasmaker(doc, stamp_center))
     buffer.seek(0)
     return buffer
+
+
+def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, contact: Contact | None):
+    quote_like = SimpleNamespace(
+        quote_no=invoice.invoice_no,
+        recipient_name=None,
+        issue_date=invoice.issue_date,
+        tax_rate=invoice.tax_rate,
+        tax_amount=invoice.tax_amount,
+        total_amount=invoice.total_amount,
+        subtotal=invoice.subtotal,
+        note=invoice.note,
+        items=list(invoice.items or []),
+    )
+    return _build_quote_template_pdf(
+        quote_like,
+        customer,
+        contact,
+        document_label="\u8acb\u6b3e\u55ae",
+        document_title_prefix="invoice",
+    )
 
 
 def _trim(value):
@@ -1925,7 +1955,33 @@ def create_invoice():
 @crm_bp.put("/invoices/<int:invoice_id>")
 @role_required(*WRITE_ROLES)
 def update_invoice(invoice_id: int):
-    return _invoice_module_disabled()
+    invoice = Invoice.query.options(selectinload(Invoice.items)).get_or_404(invoice_id)
+    data = request.get_json() or {}
+
+    if "status" in data:
+        status = (data.get("status") or "").strip().lower()
+        if status not in VALID_INVOICE_STATUS:
+            return jsonify({"msg": "Invalid invoice status"}), 400
+        invoice.status = status
+        if status == "paid" and invoice.paid_at is None:
+            invoice.paid_at = datetime.utcnow()
+        elif status != "paid":
+            invoice.paid_at = None
+
+    if "note" in data:
+        invoice.note = (data.get("note") or "").strip() or None
+
+    db.session.commit()
+    invoice = (
+        Invoice.query.options(
+            selectinload(Invoice.items),
+            selectinload(Invoice.customer),
+            selectinload(Invoice.contact),
+            selectinload(Invoice.quote),
+        )
+        .get(invoice.id)
+    )
+    return jsonify(invoice.to_dict() if invoice else {})
 
 
 @crm_bp.get("/quotes/<int:quote_id>/xlsx")
@@ -2038,7 +2094,37 @@ def crm_db_health():
 @crm_bp.get("/invoices/<int:invoice_id>/pdf")
 @role_required(*READ_ROLES)
 def invoice_pdf(invoice_id: int):
-    return _invoice_module_disabled()
+    invoice = Invoice.query.options(selectinload(Invoice.items)).get_or_404(invoice_id)
+    customer = Customer.query.get(invoice.customer_id)
+    contact = Contact.query.get(invoice.contact_id) if invoice.contact_id else None
+
+    try:
+        buffer = _build_invoice_template_pdf(invoice, customer, contact)
+    except RuntimeError as exc:
+        return jsonify(
+            {
+                "msg": "請款單 PDF 產生失敗",
+                "detail": str(exc),
+                "font_health": _pdf_font_health_payload(),
+            }
+        ), 500
+
+    customer_raw = (customer.name if customer else None) or (contact.name if contact else None)
+    customer_part = _safe_download_filename_part(customer_raw, fallback="customer")
+    if invoice.issue_date:
+        date_compact = invoice.issue_date.strftime("%Y%m%d")
+    elif getattr(invoice, "created_at", None):
+        date_compact = invoice.created_at.strftime("%Y%m%d")
+    else:
+        date_compact = datetime.utcnow().strftime("%Y%m%d")
+    date_part = _safe_download_filename_part(date_compact, fallback="date")
+    filename = f"{customer_part}_{date_part}_請款單.pdf"
+    return send_file(
+        buffer,
+        mimetype="application/pdf",
+        as_attachment=False,
+        download_name=filename,
+    )
 
 
 @crm_bp.get("/boot")
