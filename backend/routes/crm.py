@@ -62,6 +62,7 @@ PDF_STAMP_DEFAULT_ROTATE_DEG = 90.0
 PDF_STAMP_WIDTH_MM = 24.0 * 1.35 * 1.30
 PDF_STAMP_Y_OFFSET_ENV = "PDF_STAMP_Y_OFFSET_MM"
 PDF_STAMP_DEFAULT_Y_OFFSET_MM = 10.0
+PDF_COMPANY_TAX_ID_TEXT = "\u7acb\u7fd4\u6c34\u96fb\u7d71\u7de8 14511159"
 FINANCIAL_DIGITS = ("零", "壹", "貳", "參", "肆", "伍", "陸", "柒", "捌", "玖")
 FINANCIAL_SMALL_UNITS = ("", "拾", "佰", "仟")
 FINANCIAL_BIG_UNITS = ("", "萬", "億", "兆")
@@ -1000,6 +1001,12 @@ def _build_quote_template_pdf(
     signer_style.alignment = 2
     signer_style.fontSize = 12
     signer_style.leading = 16
+    company_meta_style = styles["Normal"].clone("QuoteTemplateCompanyMeta")
+    company_meta_style.fontName = PDF_FONT_NAME
+    company_meta_style.alignment = 2
+    company_meta_style.fontSize = 10
+    company_meta_style.leading = 12
+    company_meta_style.textColor = colors.HexColor("#334155")
 
     story = [
         Paragraph("立翔水電工程行", title_style),
@@ -1010,6 +1017,8 @@ def _build_quote_template_pdf(
         Spacer(1, 4 * mm),
     ]
     story[1] = Paragraph(document_label, subtitle_style)
+    story.insert(0, Spacer(1, 1 * mm))
+    story.insert(0, Paragraph(PDF_COMPANY_TAX_ID_TEXT, company_meta_style))
 
     table = Table(
         rows,
@@ -1879,7 +1888,7 @@ def convert_quote_to_invoice(quote_id: int):
 
     invoice = Invoice(
         invoice_no=_next_invoice_no(),
-        status="draft",
+        status="issued",
         customer_id=quote.customer_id,
         contact_id=quote.contact_id,
         quote_id=quote.id,
