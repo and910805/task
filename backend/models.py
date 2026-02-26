@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 from typing import Optional
 
 from flask import current_app
@@ -736,8 +737,17 @@ class Invoice(db.Model):
     contact = db.relationship("Contact", back_populates="invoices")
     quote = db.relationship("Quote", back_populates="invoices")
     items = db.relationship("InvoiceItem", back_populates="invoice", cascade="all, delete-orphan")
+    payment_records = db.relationship(
+        "InvoicePaymentRecord",
+        back_populates="invoice",
+        cascade="all, delete-orphan",
+        order_by="InvoicePaymentRecord.payment_date.desc(), InvoicePaymentRecord.id.desc()",
+    )
 
     def to_dict(self) -> dict:
+        payment_total = round(sum(float(row.amount or 0.0) for row in self.payment_records), 2)
+        total_amount = round(self.total_amount or 0.0, 2)
+        outstanding_amount = round(max(total_amount - payment_total, 0.0), 2)
         return {
             "id": self.id,
             "invoice_no": self.invoice_no,
@@ -754,13 +764,47 @@ class Invoice(db.Model):
             "subtotal": round(self.subtotal or 0.0, 2),
             "tax_rate": round(self.tax_rate or 0.0, 2),
             "tax_amount": round(self.tax_amount or 0.0, 2),
-            "total_amount": round(self.total_amount or 0.0, 2),
+            "total_amount": total_amount,
             "note": self.note,
             "paid_at": self.paid_at.isoformat() if self.paid_at else None,
+            "payment_total": payment_total,
+            "outstanding_amount": outstanding_amount,
             "created_by_id": self.created_by_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "items": [item.to_dict() for item in self.items],
+            "payment_records": [row.to_dict() for row in self.payment_records],
+        }
+
+
+class InvoicePaymentRecord(db.Model):
+    __tablename__ = "invoice_payment_record"
+
+    id = db.Column(db.Integer, primary_key=True)
+    invoice_id = db.Column(db.Integer, db.ForeignKey("invoice.id", ondelete="CASCADE"), nullable=False, index=True)
+    payment_date = db.Column(db.Date, nullable=False, default=lambda: datetime.utcnow().date())
+    amount = db.Column(db.Float, nullable=False, default=0.0)
+    method = db.Column(db.String(64))
+    note = db.Column(db.Text)
+    received_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    invoice = db.relationship("Invoice", back_populates="payment_records")
+    received_by = db.relationship("User", foreign_keys=[received_by_id])
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "invoice_id": self.invoice_id,
+            "payment_date": self.payment_date.isoformat() if self.payment_date else None,
+            "amount": round(self.amount or 0.0, 2),
+            "method": self.method,
+            "note": self.note,
+            "received_by_id": self.received_by_id,
+            "received_by_username": self.received_by.username if self.received_by else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
 
@@ -814,6 +858,46 @@ class ServiceCatalogItem(db.Model):
             "is_active": bool(self.is_active),
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class AuditLog(db.Model):
+    __tablename__ = "audit_log"
+
+    id = db.Column(db.Integer, primary_key=True)
+    module = db.Column(db.String(64), nullable=False, index=True)
+    action = db.Column(db.String(64), nullable=False, index=True)
+    entity_type = db.Column(db.String(64), nullable=False, index=True)
+    entity_id = db.Column(db.String(64), index=True)
+    entity_label = db.Column(db.String(255))
+    details_json = db.Column(db.Text)
+    note = db.Column(db.Text)
+    actor_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    actor = db.relationship("User", foreign_keys=[actor_id])
+
+    def _details(self):
+        if not self.details_json:
+            return None
+        try:
+            return json.loads(self.details_json)
+        except Exception:
+            return self.details_json
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "module": self.module,
+            "action": self.action,
+            "entity_type": self.entity_type,
+            "entity_id": self.entity_id,
+            "entity_label": self.entity_label,
+            "details": self._details(),
+            "note": self.note,
+            "actor_id": self.actor_id,
+            "actor_username": self.actor.username if self.actor else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
 

@@ -43,6 +43,16 @@ const defaultQuoteDateFields = () => {
   const expiry_date = addDaysToDateInput(issue_date, 10);
   return { issue_date, expiry_date };
 };
+const todayDateValue = () => new Date().toISOString().slice(0, 10);
+const defaultInvoicePaymentForm = (invoice) => ({
+  payment_date: todayDateValue(),
+  amount:
+    invoice && Number(invoice.outstanding_amount || 0) > 0
+      ? Number(invoice.outstanding_amount || 0).toFixed(2)
+      : '',
+  method: '',
+  note: '',
+});
 const getFilenameFromDisposition = (contentDisposition) => {
   if (!contentDisposition) return '';
   const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(contentDisposition);
@@ -68,6 +78,9 @@ const CrmQuotesPage = () => {
   const [saving, setSaving] = useState(false);
   const [convertingQuoteId, setConvertingQuoteId] = useState(null);
   const [cancellingInvoiceId, setCancellingInvoiceId] = useState(null);
+  const [paymentPanelInvoiceId, setPaymentPanelInvoiceId] = useState(null);
+  const [savingInvoicePayment, setSavingInvoicePayment] = useState(false);
+  const [deletingInvoicePaymentId, setDeletingInvoicePaymentId] = useState(null);
   const [error, setError] = useState('');
   const [editingQuoteId, setEditingQuoteId] = useState(null);
   const [versionsForQuoteId, setVersionsForQuoteId] = useState(null);
@@ -76,6 +89,7 @@ const CrmQuotesPage = () => {
   const [catalogPick, setCatalogPick] = useState('');
   const [catalogQuery, setCatalogQuery] = useState('');
   const [catalogOpen, setCatalogOpen] = useState(false);
+  const [invoicePaymentForm, setInvoicePaymentForm] = useState(() => defaultInvoicePaymentForm(null));
 
   const [form, setForm] = useState(() => ({
     customer_id: '',
@@ -173,6 +187,10 @@ const CrmQuotesPage = () => {
   const activeInvoices = useMemo(
     () => invoices.filter((invoice) => String(invoice?.status || '').trim().toLowerCase() !== 'cancelled'),
     [invoices],
+  );
+  const paymentPanelInvoice = useMemo(
+    () => activeInvoices.find((invoice) => Number(invoice.id) === Number(paymentPanelInvoiceId)) || null,
+    [activeInvoices, paymentPanelInvoiceId],
   );
 
   const handleChange = (event) => {
@@ -477,6 +495,66 @@ const CrmQuotesPage = () => {
       setError(err?.networkMessage || err?.response?.data?.msg || '取消請款失敗');
     } finally {
       setCancellingInvoiceId(null);
+    }
+  };
+
+  const openInvoicePaymentPanel = (invoice) => {
+    const invoiceId = Number(invoice?.id || 0);
+    if (!invoiceId) return;
+    setPaymentPanelInvoiceId(invoiceId);
+    setInvoicePaymentForm(defaultInvoicePaymentForm(invoice));
+    setError('');
+  };
+
+  const handleInvoicePaymentChange = (event) => {
+    const { name, value } = event.target;
+    setInvoicePaymentForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const submitInvoicePayment = async (event) => {
+    event.preventDefault();
+    const invoiceId = Number(paymentPanelInvoice?.id || 0);
+    if (!invoiceId) {
+      setError('請先選擇請款單');
+      return;
+    }
+    if (!invoicePaymentForm.amount || Number(invoicePaymentForm.amount) <= 0) {
+      setError('請輸入正確收款金額');
+      return;
+    }
+
+    setSavingInvoicePayment(true);
+    setError('');
+    try {
+      const { data } = await api.post(`crm/invoices/${invoiceId}/payments`, {
+        payment_date: invoicePaymentForm.payment_date || null,
+        amount: Number(invoicePaymentForm.amount),
+        method: (invoicePaymentForm.method || '').trim() || null,
+        note: (invoicePaymentForm.note || '').trim() || null,
+      });
+      await loadInvoices();
+      setInvoicePaymentForm(defaultInvoicePaymentForm(data?.invoice || paymentPanelInvoice));
+    } catch (err) {
+      setError(err?.networkMessage || err?.response?.data?.msg || '新增收款紀錄失敗');
+    } finally {
+      setSavingInvoicePayment(false);
+    }
+  };
+
+  const deleteInvoicePayment = async (invoice, payment) => {
+    const invoiceId = Number(invoice?.id || 0);
+    const paymentId = Number(payment?.id || 0);
+    if (!invoiceId || !paymentId) return;
+    if (!window.confirm('確定要刪除這筆收款紀錄嗎？')) return;
+    setDeletingInvoicePaymentId(paymentId);
+    setError('');
+    try {
+      await api.delete(`crm/invoices/${invoiceId}/payments/${paymentId}`);
+      await loadInvoices();
+    } catch (err) {
+      setError(err?.networkMessage || err?.response?.data?.msg || '刪除收款紀錄失敗');
+    } finally {
+      setDeletingInvoicePaymentId(null);
     }
   };
 
@@ -828,6 +906,9 @@ const CrmQuotesPage = () => {
                     <button type="button" className="secondary-btn" onClick={() => openInvoicePdf(invoice.id)}>
                       PDF下載
                     </button>
+                    <button type="button" className="secondary-btn" onClick={() => openInvoicePaymentPanel(invoice)}>
+                      收款
+                    </button>
                     <button
                       type="button"
                       className="secondary-btn"
@@ -857,6 +938,117 @@ const CrmQuotesPage = () => {
           </table>
         </div>
       </section>
+
+      {paymentPanelInvoice ? (
+        <section className="panel panel--table">
+          <div className="panel-header">
+            <h2>收款紀錄</h2>
+            <div className="crm-actions-cell">
+              <span className="panel-tag">{paymentPanelInvoice.invoice_no || '-'}</span>
+              <button type="button" className="secondary-btn" onClick={() => setPaymentPanelInvoiceId(null)}>
+                關閉
+              </button>
+            </div>
+          </div>
+
+          <div className="crm-form-grid" style={{ marginBottom: 12 }}>
+            <div className="panel-tag">應收總額 NT$ {Number(paymentPanelInvoice.total_amount || 0).toFixed(2)}</div>
+            <div className="panel-tag">已收 NT$ {Number(paymentPanelInvoice.payment_total || 0).toFixed(2)}</div>
+            <div className="panel-tag">未收 NT$ {Number(paymentPanelInvoice.outstanding_amount || 0).toFixed(2)}</div>
+            <div className="panel-tag">狀態：{crmStatusLabel('invoice', paymentPanelInvoice.status)}</div>
+          </div>
+
+          <form className="stack" onSubmit={submitInvoicePayment}>
+            <div className="crm-form-grid">
+              <label>
+                收款日期
+                <input
+                  type="date"
+                  name="payment_date"
+                  value={invoicePaymentForm.payment_date}
+                  onChange={handleInvoicePaymentChange}
+                />
+              </label>
+              <label>
+                收款金額
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  name="amount"
+                  value={invoicePaymentForm.amount}
+                  onChange={handleInvoicePaymentChange}
+                  placeholder="請輸入收款金額"
+                />
+              </label>
+              <label>
+                收款方式
+                <input
+                  name="method"
+                  value={invoicePaymentForm.method}
+                  onChange={handleInvoicePaymentChange}
+                  placeholder="現金 / 轉帳 / 支票"
+                />
+              </label>
+              <label>
+                備註
+                <input
+                  name="note"
+                  value={invoicePaymentForm.note}
+                  onChange={handleInvoicePaymentChange}
+                  placeholder="例如：尾款、第一期款"
+                />
+              </label>
+            </div>
+            <div className="crm-form-actions">
+              <button type="submit" disabled={savingInvoicePayment}>
+                {savingInvoicePayment ? '登記中...' : '新增收款紀錄'}
+              </button>
+            </div>
+          </form>
+
+          <div className="table-wrapper" style={{ marginTop: 12 }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>日期</th>
+                  <th>金額</th>
+                  <th>方式</th>
+                  <th>備註</th>
+                  <th>登記人</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(Array.isArray(paymentPanelInvoice.payment_records) ? paymentPanelInvoice.payment_records : []).map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.payment_date || '-'}</td>
+                    <td>{Number(row.amount || 0).toFixed(2)}</td>
+                    <td>{row.method || '-'}</td>
+                    <td>{row.note || '-'}</td>
+                    <td>{row.received_by_username || '-'}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="secondary-btn"
+                        onClick={() => deleteInvoicePayment(paymentPanelInvoice, row)}
+                        disabled={deletingInvoicePaymentId === row.id}
+                      >
+                        {deletingInvoicePaymentId === row.id ? '刪除中...' : '刪除'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {(!Array.isArray(paymentPanelInvoice.payment_records) || paymentPanelInvoice.payment_records.length === 0) ? (
+                  <tr>
+                    <td colSpan="6">尚無收款紀錄</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 };

@@ -17,7 +17,19 @@ from sqlalchemy.orm import selectinload
 
 from decorators import role_required
 from extensions import db
-from models import Contact, Customer, Invoice, InvoiceItem, Quote, QuoteItem, QuoteVersion, ServiceCatalogItem, Task
+from models import (
+    Contact,
+    Customer,
+    AuditLog,
+    Invoice,
+    InvoiceItem,
+    InvoicePaymentRecord,
+    Quote,
+    QuoteItem,
+    QuoteVersion,
+    ServiceCatalogItem,
+    Task,
+)
 from utils import get_current_user_id
 
 from reportlab.lib import colors
@@ -569,6 +581,109 @@ def _invoice_display_total_without_tax(invoice: Invoice) -> float:
     if invoice.subtotal is not None:
         return float(invoice.subtotal)
     return float(invoice.total_amount or 0)
+
+
+def _invoice_payment_total(invoice: Invoice) -> float:
+    return round(sum(float(row.amount or 0.0) for row in (invoice.payment_records or [])), 2)
+
+
+def _recalculate_invoice_payment_status(invoice: Invoice) -> None:
+    if (invoice.status or "").strip().lower() == "cancelled":
+        return
+
+    total_amount = float(invoice.total_amount or 0.0)
+    paid_total = float(_invoice_payment_total(invoice))
+    epsilon = 1e-6
+
+    if paid_total <= epsilon:
+        if (invoice.status or "").strip().lower() in {"paid", "partially_paid"}:
+            invoice.status = "issued"
+        invoice.paid_at = None
+        return
+
+    if total_amount <= epsilon or paid_total + epsilon >= total_amount:
+        invoice.status = "paid"
+        latest_payment_date = None
+        for row in (invoice.payment_records or []):
+            if row.payment_date and (latest_payment_date is None or row.payment_date > latest_payment_date):
+                latest_payment_date = row.payment_date
+        invoice.paid_at = (
+            datetime.combine(latest_payment_date, time.min)
+            if latest_payment_date is not None
+            else datetime.utcnow()
+        )
+        return
+
+    invoice.status = "partially_paid"
+    invoice.paid_at = None
+
+
+def _invoice_payment_payload(invoice: Invoice) -> dict:
+    return {
+        "invoice": invoice.to_dict(),
+        "payment_total": _invoice_payment_total(invoice),
+    }
+
+
+def _invoice_query_with_details():
+    return Invoice.query.options(
+        selectinload(Invoice.items),
+        selectinload(Invoice.customer),
+        selectinload(Invoice.contact),
+        selectinload(Invoice.quote),
+        selectinload(Invoice.payment_records).selectinload(InvoicePaymentRecord.received_by),
+    )
+
+
+def _audit_jsonable(value):
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): _audit_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_audit_jsonable(v) for v in value]
+    if isinstance(value, float):
+        return round(value, 4)
+    return value
+
+
+def _audit_field_changes(before: dict | None, after: dict | None, *, fields: list[str] | None = None) -> dict:
+    before_map = before or {}
+    after_map = after or {}
+    keys = fields or sorted(set(before_map.keys()) | set(after_map.keys()))
+    changes = {}
+    for key in keys:
+        before_value = _audit_jsonable(before_map.get(key))
+        after_value = _audit_jsonable(after_map.get(key))
+        if before_value != after_value:
+            changes[key] = {"from": before_value, "to": after_value}
+    return changes
+
+
+def _append_audit_log(
+    *,
+    action: str,
+    entity_type: str,
+    entity_id=None,
+    entity_label: str | None = None,
+    details: dict | None = None,
+    note: str | None = None,
+    module: str = "crm",
+) -> None:
+    db.session.add(
+        AuditLog(
+            module=module,
+            action=(action or "").strip() or "unknown",
+            entity_type=(entity_type or "").strip() or "unknown",
+            entity_id=str(entity_id) if entity_id not in (None, "") else None,
+            entity_label=(entity_label or "").strip() or None,
+            details_json=json.dumps(_audit_jsonable(details or {}), ensure_ascii=False) if details else None,
+            note=(note or "").strip() or None,
+            actor_id=get_current_user_id(),
+        )
+    )
 
 
 def _to_roc_date_text(value: date | None) -> str:
@@ -1451,6 +1566,14 @@ def create_catalog_item():
         is_active=bool(data.get("is_active", True)),
     )
     db.session.add(item)
+    db.session.flush()
+    _append_audit_log(
+        action="catalog_item_create",
+        entity_type="catalog_item",
+        entity_id=item.id,
+        entity_label=item.name,
+        details={"after": item.to_dict()},
+    )
     db.session.commit()
     return jsonify(item.to_dict()), 201
 
@@ -1459,6 +1582,7 @@ def create_catalog_item():
 @role_required(*WRITE_ROLES)
 def update_catalog_item(item_id: int):
     item = ServiceCatalogItem.query.get_or_404(item_id)
+    before_snapshot = item.to_dict()
     data = request.get_json() or {}
 
     if "name" in data:
@@ -1489,6 +1613,22 @@ def update_catalog_item(item_id: int):
     if "is_active" in data:
         item.is_active = bool(data.get("is_active"))
 
+    after_snapshot = item.to_dict()
+    changes = _audit_field_changes(
+        before_snapshot,
+        after_snapshot,
+        fields=["name", "unit", "unit_price", "category", "note", "is_active"],
+    )
+    if changes:
+        action = "catalog_item_toggle" if set(changes.keys()) == {"is_active"} else "catalog_item_update"
+        _append_audit_log(
+            action=action,
+            entity_type="catalog_item",
+            entity_id=item.id,
+            entity_label=item.name,
+            details={"changes": changes},
+            note="價目品項更新",
+        )
     db.session.commit()
     return jsonify(item.to_dict())
 
@@ -1497,6 +1637,14 @@ def update_catalog_item(item_id: int):
 @role_required(*WRITE_ROLES)
 def delete_catalog_item(item_id: int):
     item = ServiceCatalogItem.query.get_or_404(item_id)
+    snapshot = item.to_dict()
+    _append_audit_log(
+        action="catalog_item_delete",
+        entity_type="catalog_item",
+        entity_id=item.id,
+        entity_label=item.name,
+        details={"before": snapshot},
+    )
     db.session.delete(item)
     db.session.commit()
     return jsonify({"msg": "catalog item deleted", "id": item_id})
@@ -1580,6 +1728,31 @@ def get_customer(customer_id: int):
     payload = customer.to_dict()
     payload["contacts"] = [contact.to_dict() for contact in customer.contacts]
     return jsonify(payload)
+
+
+@crm_bp.get("/audit-logs")
+@role_required(*READ_ROLES)
+def list_audit_logs():
+    query = AuditLog.query.options(selectinload(AuditLog.actor)).order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+
+    module = (request.args.get("module") or "").strip().lower()
+    entity_type = (request.args.get("entity_type") or "").strip().lower()
+    action = (request.args.get("action") or "").strip().lower()
+    entity_id = (request.args.get("entity_id") or "").strip()
+    limit = request.args.get("limit", default=100, type=int) or 100
+    limit = max(1, min(limit, 500))
+
+    if module:
+        query = query.filter(AuditLog.module == module)
+    if entity_type:
+        query = query.filter(AuditLog.entity_type == entity_type)
+    if action:
+        query = query.filter(AuditLog.action == action)
+    if entity_id:
+        query = query.filter(AuditLog.entity_id == entity_id)
+
+    rows = query.limit(limit).all()
+    return jsonify([row.to_dict() for row in rows])
 
 
 @crm_bp.put("/customers/<int:customer_id>")
@@ -1851,12 +2024,7 @@ def convert_quote_to_invoice(quote_id: int):
     ).get_or_404(quote_id)
 
     existing = (
-        Invoice.query.options(
-            selectinload(Invoice.items),
-            selectinload(Invoice.customer),
-            selectinload(Invoice.contact),
-            selectinload(Invoice.quote),
-        )
+        _invoice_query_with_details()
         .filter(Invoice.quote_id == quote.id)
         .filter(Invoice.status != "cancelled")
         .order_by(Invoice.created_at.desc(), Invoice.id.desc())
@@ -1918,16 +2086,30 @@ def convert_quote_to_invoice(quote_id: int):
     for item in items:
         db.session.add(InvoiceItem(invoice_id=invoice.id, **item))
 
-    db.session.commit()
-    invoice = (
-        Invoice.query.options(
-            selectinload(Invoice.items),
-            selectinload(Invoice.customer),
-            selectinload(Invoice.contact),
-            selectinload(Invoice.quote),
-        )
-        .get(invoice.id)
+    _append_audit_log(
+        action="invoice_create_from_quote",
+        entity_type="invoice",
+        entity_id=invoice.id,
+        entity_label=invoice.invoice_no,
+        details={
+            "invoice_no": invoice.invoice_no,
+            "quote_id": quote.id,
+            "quote_no": quote.quote_no,
+            "customer_id": quote.customer_id,
+            "customer_name": quote.customer.name if quote.customer else None,
+            "item_count": len(items),
+            "totals": {
+                "subtotal": round(float(invoice.subtotal or 0.0), 2),
+                "tax_rate": round(float(invoice.tax_rate or 0.0), 2),
+                "tax_amount": round(float(invoice.tax_amount or 0.0), 2),
+                "total_amount": round(float(invoice.total_amount or 0.0), 2),
+            },
+        },
+        note="報價單轉請款單",
     )
+
+    db.session.commit()
+    invoice = _invoice_query_with_details().get(invoice.id)
     return (
         jsonify(
             {
@@ -1943,12 +2125,7 @@ def convert_quote_to_invoice(quote_id: int):
 @crm_bp.get("/invoices")
 @role_required(*READ_ROLES)
 def list_invoices():
-    query = Invoice.query.options(
-        selectinload(Invoice.items),
-        selectinload(Invoice.customer),
-        selectinload(Invoice.contact),
-        selectinload(Invoice.quote),
-    ).order_by(Invoice.updated_at.desc(), Invoice.id.desc())
+    query = _invoice_query_with_details().order_by(Invoice.updated_at.desc(), Invoice.id.desc())
 
     customer_id = request.args.get("customer_id", type=int)
     quote_id = request.args.get("quote_id", type=int)
@@ -1974,7 +2151,12 @@ def create_invoice():
 @crm_bp.put("/invoices/<int:invoice_id>")
 @role_required(*WRITE_ROLES)
 def update_invoice(invoice_id: int):
-    invoice = Invoice.query.options(selectinload(Invoice.items)).get_or_404(invoice_id)
+    invoice = _invoice_query_with_details().get_or_404(invoice_id)
+    before_snapshot = {
+        "status": (invoice.status or "").strip().lower() or None,
+        "note": invoice.note,
+        "paid_at": invoice.paid_at,
+    }
     data = request.get_json() or {}
 
     if "status" in data:
@@ -1990,17 +2172,151 @@ def update_invoice(invoice_id: int):
     if "note" in data:
         invoice.note = (data.get("note") or "").strip() or None
 
-    db.session.commit()
-    invoice = (
-        Invoice.query.options(
-            selectinload(Invoice.items),
-            selectinload(Invoice.customer),
-            selectinload(Invoice.contact),
-            selectinload(Invoice.quote),
+    after_snapshot = {
+        "status": (invoice.status or "").strip().lower() or None,
+        "note": invoice.note,
+        "paid_at": invoice.paid_at,
+    }
+    changes = _audit_field_changes(before_snapshot, after_snapshot, fields=["status", "note", "paid_at"])
+    if changes:
+        status_to = (after_snapshot.get("status") or "").strip().lower()
+        action = "invoice_update"
+        if "status" in changes and set(changes.keys()) == {"status"}:
+            action = "invoice_cancel" if status_to == "cancelled" else "invoice_status_update"
+        elif "status" in changes and status_to == "cancelled":
+            action = "invoice_cancel"
+        _append_audit_log(
+            action=action,
+            entity_type="invoice",
+            entity_id=invoice.id,
+            entity_label=invoice.invoice_no,
+            details={
+                "invoice_no": invoice.invoice_no,
+                "quote_no": invoice.quote.quote_no if invoice.quote else None,
+                "changes": changes,
+            },
+            note="請款單更新",
         )
-        .get(invoice.id)
-    )
+
+    db.session.commit()
+    invoice = _invoice_query_with_details().get(invoice.id)
     return jsonify(invoice.to_dict() if invoice else {})
+
+
+@crm_bp.post("/invoices/<int:invoice_id>/payments")
+@role_required(*WRITE_ROLES)
+def create_invoice_payment_record(invoice_id: int):
+    invoice = _invoice_query_with_details().get_or_404(invoice_id)
+    if (invoice.status or "").strip().lower() == "cancelled":
+        return jsonify({"msg": "Cancelled invoices cannot receive payments"}), 400
+    before_status = (invoice.status or "").strip().lower() or None
+    before_payment_total = _invoice_payment_total(invoice)
+    before_outstanding = round(max(float(invoice.total_amount or 0.0) - float(before_payment_total or 0.0), 0.0), 2)
+
+    data = request.get_json() or {}
+    payment_date, payment_date_err = _parse_date(data.get("payment_date"), "payment_date")
+    if payment_date_err:
+        return payment_date_err
+    payment_date = payment_date or date.today()
+
+    amount, amount_err = _parse_float(data.get("amount"), "amount", minimum=0)
+    if amount_err:
+        return amount_err
+    if amount is None or float(amount) <= 0:
+        return jsonify({"msg": "amount must be > 0"}), 400
+
+    payment = InvoicePaymentRecord(
+        invoice=invoice,
+        payment_date=payment_date,
+        amount=round(float(amount), 2),
+        method=(data.get("method") or data.get("payment_method") or "").strip() or None,
+        note=(data.get("note") or "").strip() or None,
+        received_by_id=get_current_user_id(),
+    )
+    db.session.add(payment)
+    db.session.flush()
+    _recalculate_invoice_payment_status(invoice)
+    after_status = (invoice.status or "").strip().lower() or None
+    after_payment_total = _invoice_payment_total(invoice)
+    after_outstanding = round(max(float(invoice.total_amount or 0.0) - float(after_payment_total or 0.0), 0.0), 2)
+    _append_audit_log(
+        action="invoice_payment_create",
+        entity_type="invoice_payment",
+        entity_id=payment.id,
+        entity_label=invoice.invoice_no,
+        details={
+            "invoice_id": invoice.id,
+            "invoice_no": invoice.invoice_no,
+            "payment": {
+                "id": payment.id,
+                "payment_date": payment.payment_date,
+                "amount": payment.amount,
+                "method": payment.method,
+                "note": payment.note,
+            },
+            "invoice_status": {"from": before_status, "to": after_status},
+            "payment_total": {"from": before_payment_total, "to": after_payment_total},
+            "outstanding_amount": {"from": before_outstanding, "to": after_outstanding},
+        },
+        note="新增收款紀錄",
+    )
+    db.session.commit()
+
+    invoice = _invoice_query_with_details().get(invoice.id)
+    return (
+        jsonify(
+            {
+                "msg": "Invoice payment recorded",
+                **(_invoice_payment_payload(invoice) if invoice else {"invoice": None, "payment_total": 0.0}),
+            }
+        ),
+        201,
+    )
+
+
+@crm_bp.delete("/invoices/<int:invoice_id>/payments/<int:payment_id>")
+@role_required(*WRITE_ROLES)
+def delete_invoice_payment_record(invoice_id: int, payment_id: int):
+    invoice = _invoice_query_with_details().get_or_404(invoice_id)
+    payment = next((row for row in (invoice.payment_records or []) if int(row.id) == int(payment_id)), None)
+    if payment is None:
+        return jsonify({"msg": "Invoice payment record not found"}), 404
+    before_status = (invoice.status or "").strip().lower() or None
+    before_payment_total = _invoice_payment_total(invoice)
+    before_outstanding = round(max(float(invoice.total_amount or 0.0) - float(before_payment_total or 0.0), 0.0), 2)
+    payment_snapshot = payment.to_dict()
+
+    db.session.delete(payment)
+    db.session.flush()
+    db.session.expire(invoice, ["payment_records"])
+    _recalculate_invoice_payment_status(invoice)
+    after_status = (invoice.status or "").strip().lower() or None
+    after_payment_total = _invoice_payment_total(invoice)
+    after_outstanding = round(max(float(invoice.total_amount or 0.0) - float(after_payment_total or 0.0), 0.0), 2)
+    _append_audit_log(
+        action="invoice_payment_delete",
+        entity_type="invoice_payment",
+        entity_id=payment_snapshot.get("id"),
+        entity_label=invoice.invoice_no,
+        details={
+            "invoice_id": invoice.id,
+            "invoice_no": invoice.invoice_no,
+            "payment": payment_snapshot,
+            "invoice_status": {"from": before_status, "to": after_status},
+            "payment_total": {"from": before_payment_total, "to": after_payment_total},
+            "outstanding_amount": {"from": before_outstanding, "to": after_outstanding},
+        },
+        note="刪除收款紀錄",
+    )
+    db.session.commit()
+
+    invoice = _invoice_query_with_details().get(invoice.id)
+    return jsonify(
+        {
+            "msg": "Invoice payment deleted",
+            **(_invoice_payment_payload(invoice) if invoice else {"invoice": None, "payment_total": 0.0}),
+        }
+    )
 
 
 @crm_bp.get("/quotes/<int:quote_id>/xlsx")

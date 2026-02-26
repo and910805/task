@@ -228,7 +228,9 @@ def create_app() -> Flask:
 
     with app.app_context():
         from models import (
+            AuditLog,
             Attachment,
+            InvoicePaymentRecord,
             MaterialItem,
             MaterialPurchaseBatch,
             MaterialPurchaseItem,

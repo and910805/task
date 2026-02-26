@@ -13,34 +13,105 @@ const formatAmount = (value) =>
     maximumFractionDigits: 0,
   });
 
+const formatDateTime = (value) => {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleString('zh-TW', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+const auditActionLabel = (action) => {
+  const key = String(action || '').trim().toLowerCase();
+  const map = {
+    catalog_item_create: '新增價目品項',
+    catalog_item_update: '修改價目品項',
+    catalog_item_toggle: '切換品項啟用',
+    catalog_item_delete: '刪除價目品項',
+    invoice_create_from_quote: '報價轉請款',
+    invoice_update: '更新請款單',
+    invoice_status_update: '變更請款狀態',
+    invoice_cancel: '取消請款',
+    invoice_payment_create: '新增收款紀錄',
+    invoice_payment_delete: '刪除收款紀錄',
+  };
+  return map[key] || key || '-';
+};
+
+const auditSummaryText = (row) => {
+  const details = row?.details && typeof row.details === 'object' ? row.details : null;
+  const changes = details?.changes && typeof details.changes === 'object' ? Object.keys(details.changes) : [];
+  if (changes.length > 0) {
+    return `欄位變更：${changes.join('、')}`;
+  }
+  const paymentAmount = details?.payment?.amount;
+  if (paymentAmount !== undefined && paymentAmount !== null) {
+    return `收款金額 NT$ ${Number(paymentAmount || 0).toFixed(2)}`;
+  }
+  const totalAmount = details?.totals?.total_amount;
+  if (totalAmount !== undefined && totalAmount !== null) {
+    return `總額 NT$ ${Number(totalAmount || 0).toFixed(2)}`;
+  }
+  return row?.note || '-';
+};
+
 const CrmDashboardPage = () => {
   const { user } = useAuth();
   const isManager = managerRoles.has(user?.role);
   const [data, setData] = useState({ customers: [], contacts: [], quotes: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState('');
 
   const loadData = async () => {
     setLoading(true);
     setError('');
+    if (isManager) {
+      setAuditLoading(true);
+      setAuditError('');
+    } else {
+      setAuditLogs([]);
+      setAuditLoading(false);
+      setAuditError('');
+    }
     try {
-      const { data: payload } = await api.get('crm/boot');
+      const bootResp = await api.get('crm/boot');
+      const payload = bootResp?.data;
       setData({
         customers: payload?.customers ?? [],
         contacts: payload?.contacts ?? [],
         quotes: payload?.quotes ?? [],
       });
+      if (isManager) {
+        try {
+          const auditResp = await api.get('crm/audit-logs', { params: { module: 'crm', limit: 20 } });
+          const rows = auditResp?.data;
+          setAuditLogs(Array.isArray(rows) ? rows : []);
+          setAuditError('');
+        } catch (auditErr) {
+          setAuditLogs([]);
+          setAuditError(auditErr?.networkMessage || auditErr?.response?.data?.msg || '操作紀錄載入失敗');
+        }
+      }
     } catch (err) {
       const message = err?.networkMessage || err?.response?.data?.msg || 'CRM 資料載入失敗';
       setError(message);
     } finally {
       setLoading(false);
+      if (isManager) setAuditLoading(false);
     }
   };
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [isManager]);
 
   const metrics = useMemo(() => {
     const quoteTotal = data.quotes.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
@@ -126,6 +197,50 @@ const CrmDashboardPage = () => {
           ))}
         </div>
       </section>
+
+      {isManager ? (
+        <section className="panel panel--table">
+          <div className="panel-header">
+            <h2>最近操作紀錄</h2>
+            <span className="panel-tag">Audit</span>
+          </div>
+          {auditError ? <p className="error-text">{auditError}</p> : null}
+          <div className="table-wrapper">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>時間</th>
+                  <th>人員</th>
+                  <th>動作</th>
+                  <th>對象</th>
+                  <th>內容</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auditLogs.map((row) => (
+                  <tr key={`${row.id}-${row.created_at || ''}`}>
+                    <td>{formatDateTime(row.created_at)}</td>
+                    <td>{row.actor_username || '-'}</td>
+                    <td>{auditActionLabel(row.action)}</td>
+                    <td>{row.entity_label || row.entity_type || '-'}</td>
+                    <td>{auditSummaryText(row)}</td>
+                  </tr>
+                ))}
+                {!auditLoading && auditLogs.length === 0 ? (
+                  <tr>
+                    <td colSpan="5">尚無操作紀錄</td>
+                  </tr>
+                ) : null}
+                {auditLoading ? (
+                  <tr>
+                    <td colSpan="5">載入中...</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
 
       <section className="panel panel--table">
         <div className="panel-header">
