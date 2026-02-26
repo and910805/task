@@ -924,9 +924,9 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
             "新台幣",
             total_amount_upper,
             "",
+            "",
             "NT$",
             total_amount_numeric,
-            "",
         ]
     )
 
@@ -1004,10 +1004,16 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
                 ("FONTNAME", (0, -1), (-1, -1), PDF_FONT_NAME),
                 ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#eef2ff")),
                 ("LINEABOVE", (0, -1), (-1, -1), 1.0, colors.HexColor("#4b5563")),
-                ("SPAN", (3, -1), (4, -1)),
-                ("ALIGN", (3, -1), (4, -1), "LEFT"),
-                ("FONTSIZE", (3, -1), (4, -1), 13),
-                ("FONTSIZE", (6, -1), (6, -1), 13),
+                ("SPAN", (0, -1), (1, -1)),
+                ("ALIGN", (0, -1), (1, -1), "CENTER"),
+                ("SPAN", (3, -1), (5, -1)),
+                ("ALIGN", (3, -1), (5, -1), "LEFT"),
+                ("ALIGN", (7, -1), (7, -1), "RIGHT"),
+                ("LEFTPADDING", (3, -1), (5, -1), 4),
+                ("RIGHTPADDING", (3, -1), (5, -1), 2),
+                ("FONTSIZE", (3, -1), (5, -1), 10),
+                ("FONTSIZE", (6, -1), (6, -1), 12),
+                ("FONTSIZE", (7, -1), (7, -1), 13),
             ]
         )
     )
