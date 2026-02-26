@@ -57,7 +57,7 @@ PDF_STAMP_ENV = "PDF_STAMP_IMAGE_PATH"
 PDF_STAMP_DEFAULT_FILENAME = "S__5505135-removebg-preview.png"
 PDF_STAMP_ROTATE_ENV = "PDF_STAMP_ROTATE_DEG"
 PDF_STAMP_DEFAULT_ROTATE_DEG = 90.0
-PDF_STAMP_WIDTH_MM = 24.0 * 1.35
+PDF_STAMP_WIDTH_MM = 24.0 * 1.35 * 1.30
 PDF_STAMP_Y_OFFSET_ENV = "PDF_STAMP_Y_OFFSET_MM"
 PDF_STAMP_DEFAULT_Y_OFFSET_MM = 10.0
 FINANCIAL_DIGITS = ("零", "壹", "貳", "參", "肆", "伍", "陸", "柒", "捌", "玖")
@@ -840,22 +840,47 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
             item.id if item.id is not None else 10**9,
         ),
     )
+    display_items: list[object] = list(ordered_items)
+    tax_amount_value = float(quote.tax_amount or 0)
+    tax_rate_value = float(quote.tax_rate or 0)
+    if tax_rate_value > 0 and abs(tax_amount_value) > 0.0001:
+        display_items.append(
+            {
+                "description": "稅金",
+                "unit": "式",
+                "quantity": 1.0,
+                "unit_price": tax_amount_value,
+                "amount": tax_amount_value,
+            }
+        )
 
     rows = [["項目", "項目名稱", "規格內容", "單位", "數量", "單價", "總額", "備註"]]
     for idx in range(20):
-        item = ordered_items[idx] if idx < len(ordered_items) else None
+        item = display_items[idx] if idx < len(display_items) else None
         if item is None:
             rows.append([str(idx + 1), "", "", "", "", "", "", ""])
             continue
+        if isinstance(item, dict):
+            item_description = item.get("description") or ""
+            item_unit = item.get("unit") or "式"
+            item_quantity = float(item.get("quantity") or 0)
+            item_unit_price = float(item.get("unit_price") or 0)
+            item_amount = float(item.get("amount") or 0)
+        else:
+            item_description = item.description or ""
+            item_unit = item.unit or "式"
+            item_quantity = float(item.quantity or 0)
+            item_unit_price = float(item.unit_price or 0)
+            item_amount = float(item.amount or 0)
         rows.append(
             [
                 str(idx + 1),
-                item.description or "",
+                item_description,
                 "",
-                item.unit or "式",
-                f"{float(item.quantity or 0):.2f}",
-                f"{float(item.unit_price or 0):.2f}",
-                f"{float(item.amount or 0):.2f}",
+                item_unit,
+                f"{item_quantity:.2f}",
+                f"{item_unit_price:.2f}",
+                f"{item_amount:.2f}",
                 "",
             ]
         )
@@ -863,23 +888,6 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
     total_amount = _quote_display_total_without_tax(quote)
     total_amount_numeric = _format_amount_number(total_amount)
     total_amount_upper = _format_financial_amount_text(total_amount)
-    tax_row_index = None
-    tax_amount_value = float(quote.tax_amount or 0)
-    tax_rate_value = float(quote.tax_rate or 0)
-    if abs(tax_amount_value) > 0.0001:
-        tax_row_index = len(rows)
-        rows.append(
-            [
-                "",
-                "",
-                f"稅金 ({tax_rate_value:.2f}%)",
-                "",
-                "",
-                "NT$",
-                _format_amount_number(tax_amount_value),
-                "",
-            ]
-        )
     rows.append(
         [
             "合計",
@@ -924,57 +932,22 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
     body_style.fontSize = 10.5
     body_style.leading = 15
     body_style.textColor = colors.HexColor("#1f2937")
-    meta_label_style = styles["Normal"].clone("QuoteTemplateMetaLabel")
-    meta_label_style.fontName = PDF_FONT_NAME
-    meta_label_style.fontSize = 11.5
-    meta_label_style.leading = 15
-    meta_label_style.textColor = colors.HexColor("#111827")
-    meta_value_style = styles["Normal"].clone("QuoteTemplateMetaValue")
-    meta_value_style.fontName = PDF_FONT_NAME
-    meta_value_style.fontSize = 11
-    meta_value_style.leading = 15
-    meta_value_style.textColor = colors.HexColor("#0f172a")
+    recipient_style = styles["Normal"].clone("QuoteTemplateRecipient")
+    recipient_style.fontName = PDF_FONT_NAME
+    recipient_style.fontSize = 16
+    recipient_style.leading = 20
+    recipient_style.textColor = colors.HexColor("#0f172a")
     signer_style = styles["Normal"].clone("QuoteTemplateSigner")
     signer_style.fontName = PDF_FONT_NAME
     signer_style.alignment = 2
     signer_style.fontSize = 12
     signer_style.leading = 16
 
-    issue_date_text = quote.issue_date.isoformat() if quote.issue_date else "-"
-    tax_rate_text = f"{float(quote.tax_rate or 0):.2f}%"
-    tax_amount_text = f"NT$ {float(quote.tax_amount or 0):,.2f}"
-    total_amount_text = f"NT$ {float(quote.total_amount or 0):,.2f}"
-    meta_rows = [
-        [Paragraph("客戶", meta_label_style), Paragraph(recipient or "-", meta_value_style)],
-        [Paragraph("報價日期", meta_label_style), Paragraph(issue_date_text, meta_value_style)],
-        [Paragraph("稅率", meta_label_style), Paragraph(tax_rate_text, meta_value_style)],
-        [Paragraph("稅額", meta_label_style), Paragraph(tax_amount_text, meta_value_style)],
-        [Paragraph("含稅總額", meta_label_style), Paragraph(total_amount_text, meta_value_style)],
-    ]
-    meta_table = Table(meta_rows, colWidths=[28 * mm, 102 * mm], hAlign="LEFT")
-    meta_table.setStyle(
-        TableStyle(
-            [
-                ("FONTNAME", (0, 0), (-1, -1), PDF_FONT_NAME),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#e5e7eb")),
-                ("ROWBACKGROUNDS", (1, 0), (1, -1), [colors.HexColor("#f8fafc"), colors.white]),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d1d5db")),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                ("LINEBELOW", (0, 4), (-1, 4), 1.0, colors.HexColor("#334155")),
-            ]
-        )
-    )
-
     story = [
         Paragraph("立翔水電工程行", title_style),
         Paragraph("估價單", subtitle_style),
         Spacer(1, 3 * mm),
-        meta_table,
-        Spacer(1, 2 * mm),
+        Paragraph(f"{recipient} 台照", recipient_style),
         Paragraph(_to_roc_date_text(quote.issue_date), body_style),
         Spacer(1, 4 * mm),
     ]
@@ -1009,18 +982,6 @@ def _build_quote_template_pdf(quote: Quote, customer: Customer | None, contact: 
             ]
         )
     )
-    if tax_row_index is not None:
-        table.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, tax_row_index), (-1, tax_row_index), colors.HexColor("#f1f5f9")),
-                    ("LINEABOVE", (0, tax_row_index), (-1, tax_row_index), 0.8, colors.HexColor("#64748b")),
-                    ("SPAN", (2, tax_row_index), (4, tax_row_index)),
-                    ("ALIGN", (2, tax_row_index), (4, tax_row_index), "LEFT"),
-                    ("FONTSIZE", (2, tax_row_index), (6, tax_row_index), 10),
-                ]
-            )
-        )
     totals_row_index = len(rows) - 1 if rows else 0
     stamp_center = _estimate_table_cell_center(
         doc,
