@@ -24,6 +24,8 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
     { to: '/calendar', label: '行事曆' },
     { to: '/crm', label: '營運中台' },
     { to: '/crm/catalog', label: '價目資料庫' },
+    { to: '/materials/purchases', label: '耗材入庫' },
+    { to: '/materials/reports', label: '耗材月結' },
     { to: '/reports', label: '報表' },
     { to: '/profile', label: '個人設定' },
     { to: '/admin', label: '管理後台', adminOnly: true },

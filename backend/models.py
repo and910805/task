@@ -109,6 +109,12 @@ class Task(db.Model):
     )
     assigner = db.relationship("User", foreign_keys=[assigned_by_id], back_populates="created_tasks")
     attachments = db.relationship("Attachment", back_populates="task", cascade="all, delete-orphan")
+    material_usages = db.relationship(
+        "TaskMaterialUsage",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="TaskMaterialUsage.created_at.desc()",
+    )
     updates = db.relationship(
         "TaskUpdate",
         back_populates="task",
@@ -311,6 +317,210 @@ class Attachment(db.Model):
             "transcript": self.transcript,
             "uploaded_by": self.uploader.username if self.uploader else None,
             "uploaded_by_id": self.uploaded_by_id,
+        }
+
+
+class MaterialItem(db.Model):
+    __tablename__ = "material_item"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255), nullable=False)
+    spec = db.Column(db.String(255))
+    unit = db.Column(db.String(32), nullable=False, default="個")
+    reference_cost = db.Column(db.Float, nullable=False, default=0.0)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    purchase_items = db.relationship("MaterialPurchaseItem", back_populates="material_item")
+    task_usages = db.relationship("TaskMaterialUsage", back_populates="material_item")
+    stock_transactions = db.relationship("MaterialStockTransaction", back_populates="material_item")
+
+    __table_args__ = (
+        UniqueConstraint("name", "spec", name="uq_material_item_name_spec"),
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "spec": self.spec,
+            "unit": self.unit,
+            "reference_cost": round(self.reference_cost or 0.0, 4),
+            "is_active": bool(self.is_active),
+            "created_by_id": self.created_by_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class MaterialPurchaseBatch(db.Model):
+    __tablename__ = "material_purchase_batch"
+
+    id = db.Column(db.Integer, primary_key=True)
+    supplier_name = db.Column(db.String(255), nullable=False)
+    purchase_date = db.Column(db.Date, nullable=False)
+    statement_month = db.Column(db.String(7), nullable=False)
+    note = db.Column(db.Text)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    items = db.relationship(
+        "MaterialPurchaseItem",
+        back_populates="batch",
+        cascade="all, delete-orphan",
+        order_by="MaterialPurchaseItem.sort_order.asc(), MaterialPurchaseItem.id.asc()",
+    )
+
+    def total_amount(self) -> float:
+        return round(sum(float(item.amount or 0.0) for item in self.items), 2)
+
+    def total_quantity(self) -> float:
+        return round(sum(float(item.quantity or 0.0) for item in self.items), 4)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "supplier_name": self.supplier_name,
+            "purchase_date": self.purchase_date.isoformat() if self.purchase_date else None,
+            "statement_month": self.statement_month,
+            "note": self.note,
+            "created_by_id": self.created_by_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "total_amount": self.total_amount(),
+            "total_quantity": self.total_quantity(),
+            "items": [item.to_dict() for item in self.items],
+        }
+
+
+class MaterialPurchaseItem(db.Model):
+    __tablename__ = "material_purchase_item"
+
+    id = db.Column(db.Integer, primary_key=True)
+    batch_id = db.Column(db.Integer, db.ForeignKey("material_purchase_batch.id", ondelete="CASCADE"), nullable=False)
+    material_item_id = db.Column(db.Integer, db.ForeignKey("material_item.id"), nullable=False)
+    quantity = db.Column(db.Float, nullable=False, default=0.0)
+    unit_cost = db.Column(db.Float, nullable=False, default=0.0)
+    amount = db.Column(db.Float, nullable=False, default=0.0)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    batch = db.relationship("MaterialPurchaseBatch", back_populates="items")
+    material_item = db.relationship("MaterialItem", back_populates="purchase_items")
+    stock_txn = db.relationship(
+        "MaterialStockTransaction",
+        back_populates="purchase_item",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "batch_id": self.batch_id,
+            "material_item_id": self.material_item_id,
+            "material_name": self.material_item.name if self.material_item else None,
+            "material_spec": self.material_item.spec if self.material_item else None,
+            "unit": self.material_item.unit if self.material_item else None,
+            "quantity": round(self.quantity or 0.0, 4),
+            "unit_cost": round(self.unit_cost or 0.0, 4),
+            "amount": round(self.amount or 0.0, 2),
+            "sort_order": self.sort_order,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class TaskMaterialUsage(db.Model):
+    __tablename__ = "task_material_usage"
+
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(db.Integer, db.ForeignKey("task.id", ondelete="CASCADE"), nullable=False, index=True)
+    material_item_id = db.Column(db.Integer, db.ForeignKey("material_item.id"), nullable=False, index=True)
+    used_qty = db.Column(db.Float, nullable=False, default=0.0)
+    unit_cost_snapshot = db.Column(db.Float, nullable=False, default=0.0)
+    total_cost = db.Column(db.Float, nullable=False, default=0.0)
+    used_date = db.Column(db.Date, nullable=False, default=lambda: datetime.utcnow().date())
+    note = db.Column(db.Text)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    task = db.relationship("Task", back_populates="material_usages")
+    material_item = db.relationship("MaterialItem", back_populates="task_usages")
+    stock_txn = db.relationship(
+        "MaterialStockTransaction",
+        back_populates="task_material_usage",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "material_item_id": self.material_item_id,
+            "material_name": self.material_item.name if self.material_item else None,
+            "material_spec": self.material_item.spec if self.material_item else None,
+            "unit": self.material_item.unit if self.material_item else None,
+            "used_qty": round(self.used_qty or 0.0, 4),
+            "unit_cost_snapshot": round(self.unit_cost_snapshot or 0.0, 4),
+            "total_cost": round(self.total_cost or 0.0, 2),
+            "used_date": self.used_date.isoformat() if self.used_date else None,
+            "note": self.note,
+            "created_by_id": self.created_by_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class MaterialStockTransaction(db.Model):
+    __tablename__ = "material_stock_txn"
+
+    id = db.Column(db.Integer, primary_key=True)
+    material_item_id = db.Column(db.Integer, db.ForeignKey("material_item.id"), nullable=False, index=True)
+    txn_type = db.Column(db.String(32), nullable=False)  # purchase / task_use / adjustment
+    qty_delta = db.Column(db.Float, nullable=False, default=0.0)
+    unit_cost = db.Column(db.Float, nullable=False, default=0.0)
+    amount_delta = db.Column(db.Float, nullable=False, default=0.0)
+    txn_date = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    note = db.Column(db.Text)
+    task_id = db.Column(db.Integer, db.ForeignKey("task.id"), nullable=True, index=True)
+    purchase_item_id = db.Column(db.Integer, db.ForeignKey("material_purchase_item.id", ondelete="CASCADE"), nullable=True)
+    task_material_usage_id = db.Column(db.Integer, db.ForeignKey("task_material_usage.id", ondelete="CASCADE"), nullable=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    material_item = db.relationship("MaterialItem", back_populates="stock_transactions")
+    task = db.relationship("Task")
+    purchase_item = db.relationship("MaterialPurchaseItem", back_populates="stock_txn")
+    task_material_usage = db.relationship("TaskMaterialUsage", back_populates="stock_txn")
+
+    __table_args__ = (
+        UniqueConstraint("purchase_item_id", name="uq_material_stock_txn_purchase_item"),
+        UniqueConstraint("task_material_usage_id", name="uq_material_stock_txn_task_usage"),
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "material_item_id": self.material_item_id,
+            "material_name": self.material_item.name if self.material_item else None,
+            "material_spec": self.material_item.spec if self.material_item else None,
+            "unit": self.material_item.unit if self.material_item else None,
+            "txn_type": self.txn_type,
+            "qty_delta": round(self.qty_delta or 0.0, 4),
+            "unit_cost": round(self.unit_cost or 0.0, 4),
+            "amount_delta": round(self.amount_delta or 0.0, 2),
+            "txn_date": self.txn_date.isoformat() if self.txn_date else None,
+            "note": self.note,
+            "task_id": self.task_id,
+            "purchase_item_id": self.purchase_item_id,
+            "task_material_usage_id": self.task_material_usage_id,
+            "created_by_id": self.created_by_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
 

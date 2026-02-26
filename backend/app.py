@@ -155,6 +155,7 @@ def create_app() -> Flask:
     from routes.uploads import upload_bp
     from routes.line import line_bp
     from routes.crm import crm_bp
+    from routes.materials import materials_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(tasks_bp, url_prefix="/api/tasks")
@@ -164,6 +165,7 @@ def create_app() -> Flask:
     app.register_blueprint(line_bp, url_prefix="/api/line")
     app.register_blueprint(site_locations_bp, url_prefix="/api/site-locations")
     app.register_blueprint(crm_bp, url_prefix="/api/crm")
+    app.register_blueprint(materials_bp, url_prefix="/api/materials")
 
     @app.route("/api/health")
     def health_check():
@@ -225,7 +227,21 @@ def create_app() -> Flask:
         return send_from_directory(dist_dir, "index.html")
 
     with app.app_context():
-        from models import Attachment, RoleLabel, ServiceCatalogItem, SiteLocation, SiteSetting, Task, TaskUpdate, User
+        from models import (
+            Attachment,
+            MaterialItem,
+            MaterialPurchaseBatch,
+            MaterialPurchaseItem,
+            MaterialStockTransaction,
+            RoleLabel,
+            ServiceCatalogItem,
+            SiteLocation,
+            SiteSetting,
+            Task,
+            TaskMaterialUsage,
+            TaskUpdate,
+            User,
+        )
         if _should_init_db_on_startup(database_url):
             _wait_for_database_ready(app)
             db.create_all()

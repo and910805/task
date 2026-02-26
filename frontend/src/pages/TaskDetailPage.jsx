@@ -6,6 +6,7 @@ import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
 import AudioRecorder from '../components/task/AudioRecorder.jsx';
 import SignaturePad from '../components/task/SignaturePad.jsx';
+import TaskMaterialsPanel from '../components/task/TaskMaterialsPanel.jsx';
 import { managerRoles } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useRoleLabels } from '../context/RoleLabelContext.jsx';
@@ -41,6 +42,7 @@ const detailTabs = [
   { key: 'photos', label: '📷 照片' },
   { key: 'audio', label: '🎤 語音' },
   { key: 'signature', label: '✍️ 簽名' },
+  { key: 'materials', label: '🧰 耗材' },
   { key: 'time', label: '⏱ 工時' },
 ];
 
@@ -1279,6 +1281,10 @@ const TaskDetailPage = () => {
           <SignaturePad onSubmit={handleSignatureSubmit} disabled={uploadingSignature} />
           {uploadingSignature && <p className="hint-text">簽名上傳中…</p>}
         </section>
+      )}
+
+      {activeTab === 'materials' && (
+        <TaskMaterialsPanel taskId={Number(id)} />
       )}
 
       {activeTab === 'time' && (

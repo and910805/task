@@ -19,6 +19,8 @@ import CrmQuotesPage from './pages/CrmQuotesPage.jsx';
 import CrmCatalogPage from './pages/CrmCatalogPage.jsx';
 import AttendancePage from './pages/AttendancePage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
+import MaterialsPurchasesPage from './pages/MaterialsPurchasesPage.jsx';
+import MaterialsMonthlyReportPage from './pages/MaterialsMonthlyReportPage.jsx';
 import LandingPage from './pages/LandingPage.jsx';
 import './App.css';
 
@@ -128,6 +130,22 @@ const AppRoutes = () => (
       element={(
         <PrivateRoute>
           <ReportsPage />
+        </PrivateRoute>
+      )}
+    />
+    <Route
+      path="/materials/purchases"
+      element={(
+        <PrivateRoute>
+          <MaterialsPurchasesPage />
+        </PrivateRoute>
+      )}
+    />
+    <Route
+      path="/materials/reports"
+      element={(
+        <PrivateRoute>
+          <MaterialsMonthlyReportPage />
         </PrivateRoute>
       )}
     />
