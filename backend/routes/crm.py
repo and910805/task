@@ -1077,8 +1077,8 @@ def _build_quote_template_pdf(
             "新台幣",
             total_amount_upper,
             "",
-            "NT$",
-            total_amount_numeric,
+            "",
+            f"NT$ {total_amount_numeric}",
             "",
         ]
     )
@@ -1170,14 +1170,13 @@ def _build_quote_template_pdf(
                 ("LINEABOVE", (0, -1), (-1, -1), 1.0, colors.HexColor("#4b5563")),
                 ("SPAN", (0, -1), (1, -1)),
                 ("ALIGN", (0, -1), (1, -1), "CENTER"),
-                ("SPAN", (3, -1), (4, -1)),
-                ("ALIGN", (3, -1), (4, -1), "LEFT"),
-                ("ALIGN", (5, -1), (5, -1), "RIGHT"),
+                ("SPAN", (3, -1), (5, -1)),
+                ("ALIGN", (3, -1), (5, -1), "LEFT"),
                 ("ALIGN", (6, -1), (6, -1), "RIGHT"),
-                ("LEFTPADDING", (3, -1), (4, -1), 4),
-                ("RIGHTPADDING", (3, -1), (4, -1), 2),
-                ("FONTSIZE", (3, -1), (4, -1), 10),
-                ("FONTSIZE", (5, -1), (6, -1), 10),
+                ("LEFTPADDING", (3, -1), (5, -1), 4),
+                ("RIGHTPADDING", (3, -1), (5, -1), 2),
+                ("FONTSIZE", (3, -1), (5, -1), 9),
+                ("FONTSIZE", (6, -1), (6, -1), 10),
             ]
         )
     )
