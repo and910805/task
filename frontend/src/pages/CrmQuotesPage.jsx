@@ -6,8 +6,14 @@ import AppHeader from '../components/AppHeader.jsx';
 let lineItemKeySeed = 1;
 const nextLineItemKey = () => `line-${lineItemKeySeed++}`;
 const blankItem = () => ({ _key: nextLineItemKey(), description: '', unit: '式', quantity: 1, unit_price: 0 });
+const blankMarkerItem = () => ({ _key: nextLineItemKey(), description: '以下空白', unit: '', quantity: 0, unit_price: 0 });
 const withLineItemKey = (item = {}) => ({ _key: nextLineItemKey(), ...item });
 const quoteDisplayAmount = (quote) => Number(quote?.total_amount ?? quote?.subtotal ?? 0).toFixed(2);
+const toNumber = (value) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
+};
+const round2 = (value) => Math.round(toNumber(value) * 100) / 100;
 const STATUS_LABELS = {
   quote: {
     draft: '尚未送出',
@@ -89,6 +95,7 @@ const CrmQuotesPage = () => {
   const [catalogPick, setCatalogPick] = useState('');
   const [catalogQuery, setCatalogQuery] = useState('');
   const [catalogOpen, setCatalogOpen] = useState(false);
+  const [specialItemType, setSpecialItemType] = useState('blank');
   const [invoicePaymentForm, setInvoicePaymentForm] = useState(() => defaultInvoicePaymentForm(null));
 
   const [form, setForm] = useState(() => ({
@@ -249,6 +256,7 @@ const CrmQuotesPage = () => {
     setCatalogPick('');
     setCatalogQuery('');
     setCatalogOpen(false);
+    setSpecialItemType('blank');
     setEditingQuoteId(null);
     setVersionsForQuoteId(null);
     setQuoteVersions([]);
@@ -285,6 +293,38 @@ const CrmQuotesPage = () => {
     setCatalogPick(String(item.id));
     setCatalogQuery(item.name || '');
     setCatalogOpen(true);
+  };
+
+  const addSpecialItem = () => {
+    if (specialItemType === 'blank') {
+      setItems((prev) => [...prev, blankMarkerItem()]);
+      return;
+    }
+    if (specialItemType === 'tax') {
+      const taxRate = toNumber(form.tax_rate);
+      if (taxRate > 0) {
+        setError('已設定稅率，PDF 會自動產生稅金列，不需手動加入。');
+        return;
+      }
+      const subtotal = items.reduce((sum, row) => {
+        const name = String(row?.description || '').trim();
+        if (!name || name === '以下空白') return sum;
+        const quantity = toNumber(row?.quantity);
+        const unitPrice = toNumber(row?.unit_price);
+        return sum + quantity * unitPrice;
+      }, 0);
+      setItems((prev) => [
+        ...prev,
+        {
+          _key: nextLineItemKey(),
+          description: '稅金',
+          unit: '式',
+          quantity: 1,
+          unit_price: round2(subtotal * 0.05),
+        },
+      ]);
+      return;
+    }
   };
 
   const loadQuoteVersions = async (quoteId) => {
@@ -684,6 +724,13 @@ const CrmQuotesPage = () => {
                 </button>
                 <button type="button" className="secondary-btn" onClick={addItem}>
                   新增一列
+                </button>
+                <select value={specialItemType} onChange={(event) => setSpecialItemType(event.target.value)}>
+                  <option value="blank">空白行</option>
+                  <option value="tax">稅金（5%預設）</option>
+                </select>
+                <button type="button" className="secondary-btn" onClick={addSpecialItem}>
+                  加入特殊項
                 </button>
               </div>
             </div>

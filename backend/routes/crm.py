@@ -692,6 +692,11 @@ def _to_roc_date_text(value: date | None) -> str:
     return f"中華民國  {roc_year} 年 {value.month} 月 {value.day} 日"
 
 
+def _to_month_day_text(value: date | None) -> str:
+    value = value or date.today()
+    return f"{value.month} 月 {value.day} 日"
+
+
 def _format_amount_number(amount: float) -> str:
     safe_amount = round(float(amount or 0), 2)
     if safe_amount.is_integer():
@@ -874,7 +879,7 @@ def _apply_quote_to_template_sheet(ws, quote: Quote, customer: Customer | None, 
         ws[f"I{row}"] = float(item.amount or 0)
 
     total_amount = _quote_display_total_without_tax(quote)
-    ws["C27"] = "合計"
+    ws["C27"] = "總計"
     ws["E27"] = "新台幣"
     ws["F27"] = total_amount
     ws["H27"] = "NT$"
@@ -1028,11 +1033,14 @@ def _build_quote_template_pdf(
             }
         )
 
-    rows = [["項目", "項目名稱", "規格內容", "單位", "數量", "單價", "總額", "備註"]]
+    rows = [["項目", "項目名稱", "規格內容", "單位", "數量", "單價", "合計", "備註"]]
+    first_blank_row_written = False
     for idx in range(20):
         item = display_items[idx] if idx < len(display_items) else None
         if item is None:
-            rows.append([str(idx + 1), "", "", "", "", "", "", ""])
+            blank_description = "以下空白" if not first_blank_row_written and len(display_items) > 0 else ""
+            first_blank_row_written = True if blank_description else first_blank_row_written
+            rows.append([str(idx + 1), blank_description, "", "", "", "", "", ""])
             continue
         if isinstance(item, dict):
             item_description = item.get("description") or ""
@@ -1064,14 +1072,14 @@ def _build_quote_template_pdf(
     total_amount_upper = _format_financial_amount_text(total_amount)
     rows.append(
         [
-            "合計",
+            "總計",
             "",
             "新台幣",
             total_amount_upper,
             "",
-            "",
             "NT$",
             total_amount_numeric,
+            "",
         ]
     )
 
@@ -1129,6 +1137,7 @@ def _build_quote_template_pdf(
         Spacer(1, 3 * mm),
         Paragraph(f"{recipient} 台照", recipient_style),
         Paragraph(_to_roc_date_text(quote.issue_date), body_style),
+        Paragraph("施工地點：__________________________", body_style),
         Spacer(1, 4 * mm),
     ]
     story[1] = Paragraph(document_label, subtitle_style)
@@ -1148,26 +1157,27 @@ def _build_quote_template_pdf(
                 ("FONTSIZE", (0, 0), (-1, -1), 10),
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f3f4f6")),
                 ("ALIGN", (0, 0), (0, -1), "CENTER"),
-                ("ALIGN", (3, 0), (5, -1), "CENTER"),
-                ("ALIGN", (6, 0), (6, -1), "RIGHT"),
+                ("ALIGN", (3, 0), (4, -1), "CENTER"),
+                ("ALIGN", (5, 0), (6, 0), "CENTER"),
+                ("ALIGN", (5, 1), (6, -1), "RIGHT"),
                 ("ALIGN", (7, 0), (7, -1), "LEFT"),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#9ca3af")),
                 ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#fafafa")]),
-                ("BACKGROUND", (6, 1), (6, -1), colors.HexColor("#fff3a3")),
+                ("BACKGROUND", (5, 1), (6, -1), colors.HexColor("#fff3a3")),
                 ("FONTNAME", (0, -1), (-1, -1), PDF_FONT_NAME),
                 ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#eef2ff")),
                 ("LINEABOVE", (0, -1), (-1, -1), 1.0, colors.HexColor("#4b5563")),
                 ("SPAN", (0, -1), (1, -1)),
                 ("ALIGN", (0, -1), (1, -1), "CENTER"),
-                ("SPAN", (3, -1), (5, -1)),
-                ("ALIGN", (3, -1), (5, -1), "LEFT"),
-                ("ALIGN", (7, -1), (7, -1), "RIGHT"),
-                ("LEFTPADDING", (3, -1), (5, -1), 4),
-                ("RIGHTPADDING", (3, -1), (5, -1), 2),
-                ("FONTSIZE", (3, -1), (5, -1), 10),
-                ("FONTSIZE", (6, -1), (6, -1), 10),
-                ("FONTSIZE", (7, -1), (7, -1), 10),
+                ("SPAN", (3, -1), (4, -1)),
+                ("ALIGN", (3, -1), (4, -1), "LEFT"),
+                ("ALIGN", (5, -1), (5, -1), "RIGHT"),
+                ("ALIGN", (6, -1), (6, -1), "RIGHT"),
+                ("LEFTPADDING", (3, -1), (4, -1), 4),
+                ("RIGHTPADDING", (3, -1), (4, -1), 2),
+                ("FONTSIZE", (3, -1), (4, -1), 10),
+                ("FONTSIZE", (5, -1), (6, -1), 10),
             ]
         )
     )
@@ -1209,6 +1219,15 @@ def _build_quote_template_pdf(
             h_align="LEFT",
         )
     story.append(table)
+
+    expiry_value = getattr(quote, "expiry_date", None) or quote.issue_date
+    validity_date_label = "請款日期" if document_label == "請款單" else "報價日期"
+    story.extend(
+        [
+            Spacer(1, 2 * mm),
+            Paragraph(f"{validity_date_label}有效期限至 {_to_month_day_text(expiry_value)}", body_style),
+        ]
+    )
 
     if quote.note:
         story.extend([Spacer(1, 4 * mm), Paragraph(f"備註：{quote.note}", body_style)])
@@ -1359,6 +1378,7 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
         quote_no=invoice.invoice_no,
         recipient_name=None,
         issue_date=invoice.issue_date,
+        expiry_date=invoice.due_date,
         tax_rate=invoice.tax_rate,
         tax_amount=invoice.tax_amount,
         total_amount=invoice.total_amount,
