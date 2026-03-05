@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { Fragment, useEffect, useMemo, useState } from 'react';
 
 import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
@@ -23,6 +23,7 @@ const CrmPublicBookingsPage = () => {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [convertingId, setConvertingId] = useState(null);
+  const [expandedRows, setExpandedRows] = useState(() => new Set());
 
   const loadRows = async () => {
     setLoading(true);
@@ -60,6 +61,15 @@ const CrmPublicBookingsPage = () => {
     } finally {
       setConvertingId(null);
     }
+  };
+
+  const toggleHiddenMeta = (id) => {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
 
   return (
@@ -109,42 +119,64 @@ const CrmPublicBookingsPage = () => {
             </thead>
             <tbody>
               {rows.map((row) => (
-                <tr key={row.id}>
-                  <td>{formatDateTime(row.created_at)}</td>
-                  <td>
-                    <div>{row.name || '-'}</div>
-                    <div>{row.phone || '-'}</div>
-                    <div>{row.email || '-'}</div>
-                  </td>
-                  <td>
-                    <div>{row.service || '-'}</div>
-                    <div>{row.address || '-'}</div>
-                  </td>
-                  <td>{row.message || '-'}</td>
-                  <td>
-                    {row.status === 'converted' ? (
-                      <span>已轉換（客戶 #{row.converted_customer_id || '-'}）</span>
-                    ) : (
-                      <span>待轉換</span>
-                    )}
-                  </td>
-                  <td>
-                    {row.status === 'converted' ? (
-                      <button type="button" className="secondary-btn" disabled>
-                        已完成
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="secondary-btn"
-                        onClick={() => handleConvert(row.id)}
-                        disabled={convertingId === row.id}
-                      >
-                        {convertingId === row.id ? '轉換中...' : '轉成客戶'}
-                      </button>
-                    )}
-                  </td>
-                </tr>
+                <Fragment key={row.id}>
+                  <tr>
+                    <td>{formatDateTime(row.created_at)}</td>
+                    <td>
+                      <div>{row.name || '-'}</div>
+                      <div>{row.phone || '-'}</div>
+                      <div>{row.email || '-'}</div>
+                    </td>
+                    <td>
+                      <div>{row.service || '-'}</div>
+                      <div>{row.address || '-'}</div>
+                    </td>
+                    <td>{row.message || '-'}</td>
+                    <td>
+                      {row.status === 'converted' ? (
+                        <span>已轉換（客戶 #{row.converted_customer_id || '-'}）</span>
+                      ) : (
+                        <span>待轉換</span>
+                      )}
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {row.status === 'converted' ? (
+                          <button type="button" className="secondary-btn" disabled>
+                            已完成
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="secondary-btn"
+                            onClick={() => handleConvert(row.id)}
+                            disabled={convertingId === row.id}
+                          >
+                            {convertingId === row.id ? '轉換中...' : '轉成客戶'}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="secondary-btn"
+                          onClick={() => toggleHiddenMeta(row.id)}
+                        >
+                          {expandedRows.has(row.id) ? '隱藏資訊 ▲' : '隱藏資訊 ▼'}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  {expandedRows.has(row.id) ? (
+                    <tr>
+                      <td colSpan="6" style={{ background: '#f8fafc' }}>
+                        <div style={{ fontSize: 13, color: '#475569', lineHeight: 1.7 }}>
+                          <div><b>Source URL:</b> {row.source_url || '-'}</div>
+                          <div><b>Client IP:</b> {row.client_ip || '-'}</div>
+                          <div><b>User Agent:</b> {row.user_agent || '-'}</div>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
               ))}
               {!loading && rows.length === 0 ? (
                 <tr>
