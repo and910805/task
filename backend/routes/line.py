@@ -19,6 +19,7 @@ from services.line_messaging import (
     create_rich_menu,
     delete_rich_menu,
     has_line_bot_config,
+    line_channel_secret,
     list_rich_menus,
     reply_messages,
     reply_text,
@@ -272,7 +273,7 @@ def _help_text() -> str:
     )
 
 
-def _verify_request() -> bool:
+def _verify_request(channel: str = "worker") -> bool:
     """
     Verify LINE webhook signature.
 
@@ -281,7 +282,7 @@ def _verify_request() -> bool:
     - Fallback to env
     - If secret is empty -> skip verification (useful for local dev)
     """
-    secret = (_cfg("LINE_CHANNEL_SECRET") or "").strip()
+    secret = (line_channel_secret(channel=channel) or "").strip()
     if not secret:
         # local dev / intentionally disabled
         return True
@@ -289,6 +290,75 @@ def _verify_request() -> bool:
     signature = request.headers.get("X-Line-Signature", "")
     body = request.get_data() or b""
     return verify_signature(body, signature, secret)
+
+
+def _public_booking_url() -> str:
+    return (_cfg("LINE_PUBLIC_BOOKING_URL") or _cfg("PUBLIC_BOOKING_URL") or "").strip()
+
+
+def _public_services_text() -> str:
+    custom = (_cfg("LINE_PUBLIC_SERVICES_TEXT") or "").strip()
+    if custom:
+        return custom
+    return (
+        "服務項目一覽\n"
+        "1. 水電維修\n"
+        "2. 漏水檢修\n"
+        "3. 衛浴設備安裝\n"
+        "4. 配線與電力改善\n"
+        "5. 老屋水電翻修"
+    )
+
+
+def _public_help_text() -> str:
+    booking = _public_booking_url()
+    booking_line = f"預約連結：{booking}\n" if booking else "預約：請輸入「預約」取得連結\n"
+    return (
+        "立翔水電行 民眾服務機器人\n"
+        "可輸入：\n"
+        "- 服務項目\n"
+        "- 預約\n"
+        "- 聯絡\n\n"
+        f"{booking_line}"
+        "若要真人客服，請輸入「聯絡」。"
+    )
+
+
+def _handle_public_text(reply_token: str, text: str) -> None:
+    normalized = (text or "").strip().lower()
+    if not normalized:
+        reply_text(reply_token, _public_help_text(), channel="public")
+        return
+
+    if normalized in {"help", "menu", "?", "服務", "服務項目", "services"}:
+        reply_text(reply_token, _public_services_text(), channel="public")
+        return
+
+    if normalized in {"預約", "booking", "reserve", "appointment"}:
+        booking = _public_booking_url()
+        if booking:
+            reply_text(
+                reply_token,
+                f"線上預約請點這裡：\n{booking}\n\n送出後我們會盡快與你聯繫。",
+                channel="public",
+            )
+        else:
+            reply_text(
+                reply_token,
+                "目前尚未設定預約連結，請直接輸入「聯絡」由客服協助。",
+                channel="public",
+            )
+        return
+
+    if normalized in {"聯絡", "contact", "客服"}:
+        reply_text(
+            reply_token,
+            "客服時間：週一至週六 08:00-18:00\n請留下：姓名 / 地區 / 問題描述 / 可聯絡時段。",
+            channel="public",
+        )
+        return
+
+    reply_text(reply_token, _public_help_text(), channel="public")
 
 
 def _pending_key(line_user_id: str) -> str:
@@ -1043,5 +1113,44 @@ def webhook():
 
         except Exception as exc:  # pragma: no cover
             current_app.logger.warning("LINE webhook error: %s", exc)
+
+    return jsonify({"ok": True})
+
+
+@line_bp.post("/webhook/public")
+def public_webhook():
+    if not _verify_request(channel="public"):
+        return jsonify({"msg": "invalid signature"}), 400
+
+    payload = request.get_json(silent=True) or {}
+    events = payload.get("events") or []
+
+    for event in events:
+        try:
+            reply_token = event.get("replyToken")
+            if not reply_token:
+                continue
+
+            etype = event.get("type")
+            if etype == "follow":
+                reply_text(reply_token, _public_help_text(), channel="public")
+                continue
+
+            if etype != "message":
+                continue
+
+            message = event.get("message") or {}
+            if message.get("type") != "text":
+                reply_text(
+                    reply_token,
+                    "目前支援文字指令：服務項目、預約、聯絡。",
+                    channel="public",
+                )
+                continue
+
+            text = (message.get("text") or "").strip()
+            _handle_public_text(reply_token, text)
+        except Exception as exc:  # pragma: no cover
+            current_app.logger.warning("LINE public webhook error: %s", exc)
 
     return jsonify({"ok": True})

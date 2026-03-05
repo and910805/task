@@ -34,21 +34,36 @@ def _cfg(key: str, app=None) -> Optional[str]:
     return os.getenv(key)
 
 
-def has_line_config(app=None) -> bool:
+def _channel_keys(channel: str = "worker") -> tuple[str, str]:
+    key = (channel or "worker").strip().lower()
+    if key == "public":
+        return "LINE_PUBLIC_CHANNEL_ACCESS_TOKEN", "LINE_PUBLIC_CHANNEL_SECRET"
+    return "LINE_CHANNEL_ACCESS_TOKEN", "LINE_CHANNEL_SECRET"
+
+
+def line_channel_secret(*, app=None, channel: str = "worker") -> str:
+    _, secret_key = _channel_keys(channel)
+    return (_cfg(secret_key, app=app) or "").strip()
+
+
+def has_line_config(app=None, *, channel: str = "worker") -> bool:
     """True if both LINE token & secret exist."""
-    token = (_cfg("LINE_CHANNEL_ACCESS_TOKEN", app=app) or "").strip()
-    secret = (_cfg("LINE_CHANNEL_SECRET", app=app) or "").strip()
+    token_key, secret_key = _channel_keys(channel)
+    token = (_cfg(token_key, app=app) or "").strip()
+    secret = (_cfg(secret_key, app=app) or "").strip()
     return bool(token and secret)
 
 
-def has_line_bot_config(app=None) -> bool:
+def has_line_bot_config(app=None, *, channel: str = "worker") -> bool:
     """True if LINE Messaging API access token exists."""
-    token = (_cfg("LINE_CHANNEL_ACCESS_TOKEN", app=app) or "").strip()
+    token_key, _ = _channel_keys(channel)
+    token = (_cfg(token_key, app=app) or "").strip()
     return bool(token)
 
 
-def _headers(app=None, *, json_content: bool = True) -> dict[str, str]:
-    token = (_cfg("LINE_CHANNEL_ACCESS_TOKEN", app=app) or "").strip()
+def _headers(app=None, *, json_content: bool = True, channel: str = "worker") -> dict[str, str]:
+    token_key, _ = _channel_keys(channel)
+    token = (_cfg(token_key, app=app) or "").strip()
     headers = {"Authorization": f"Bearer {token}"}
     if json_content:
         headers["Content-Type"] = "application/json"
@@ -71,9 +86,9 @@ def _truncate_text(text: str) -> str:
     return text[: _MAX_TEXT_LEN - 1] + "…"
 
 
-def reply_text(reply_token: str, text: str, app=None) -> bool:
+def reply_text(reply_token: str, text: str, app=None, *, channel: str = "worker") -> bool:
     """Reply to a webhook event. Return True if 2xx."""
-    if not has_line_bot_config(app=app) or not reply_token:
+    if not has_line_bot_config(app=app, channel=channel) or not reply_token:
         return False
 
     url = f"{LINE_API_BASE}/reply"
@@ -83,7 +98,7 @@ def reply_text(reply_token: str, text: str, app=None) -> bool:
     }
 
     try:
-        r = requests.post(url, headers=_headers(app=app), json=payload, timeout=10)
+        r = requests.post(url, headers=_headers(app=app, channel=channel), json=payload, timeout=10)
         if r.status_code >= 400 and current_app is not None:
             current_app.logger.warning("LINE reply failed: %s %s", r.status_code, r.text)
         return r.status_code // 100 == 2
@@ -93,9 +108,11 @@ def reply_text(reply_token: str, text: str, app=None) -> bool:
         return False
 
 
-def reply_messages(reply_token: str, messages: Sequence[dict[str, Any]], app=None) -> bool:
+def reply_messages(
+    reply_token: str, messages: Sequence[dict[str, Any]], app=None, *, channel: str = "worker"
+) -> bool:
     """Reply with arbitrary LINE message payloads. Return True if 2xx."""
-    if not has_line_bot_config(app=app) or not reply_token or not messages:
+    if not has_line_bot_config(app=app, channel=channel) or not reply_token or not messages:
         return False
 
     url = f"{LINE_API_BASE}/reply"
@@ -105,7 +122,7 @@ def reply_messages(reply_token: str, messages: Sequence[dict[str, Any]], app=Non
     }
 
     try:
-        r = requests.post(url, headers=_headers(app=app), json=payload, timeout=10)
+        r = requests.post(url, headers=_headers(app=app, channel=channel), json=payload, timeout=10)
         if r.status_code >= 400 and current_app is not None:
             current_app.logger.warning("LINE reply failed: %s %s", r.status_code, r.text)
         return r.status_code // 100 == 2
@@ -115,9 +132,9 @@ def reply_messages(reply_token: str, messages: Sequence[dict[str, Any]], app=Non
         return False
 
 
-def push_text(to_user_id: str, text: str, app=None) -> bool:
+def push_text(to_user_id: str, text: str, app=None, *, channel: str = "worker") -> bool:
     """Push a text message to a LINE userId (starts with 'U'). Return True if 2xx."""
-    if not has_line_bot_config(app=app) or not to_user_id:
+    if not has_line_bot_config(app=app, channel=channel) or not to_user_id:
         return False
 
     url = f"{LINE_API_BASE}/push"
@@ -127,7 +144,7 @@ def push_text(to_user_id: str, text: str, app=None) -> bool:
     }
 
     try:
-        r = requests.post(url, headers=_headers(app=app), json=payload, timeout=10)
+        r = requests.post(url, headers=_headers(app=app, channel=channel), json=payload, timeout=10)
         if r.status_code >= 400 and current_app is not None:
             current_app.logger.warning("LINE push failed: %s %s", r.status_code, r.text)
         return r.status_code // 100 == 2
@@ -137,9 +154,11 @@ def push_text(to_user_id: str, text: str, app=None) -> bool:
         return False
 
 
-def push_messages(to_user_id: str, messages: Sequence[dict[str, Any]], app=None) -> bool:
+def push_messages(
+    to_user_id: str, messages: Sequence[dict[str, Any]], app=None, *, channel: str = "worker"
+) -> bool:
     """Push arbitrary LINE messages to a LINE userId (starts with 'U')."""
-    if not has_line_bot_config(app=app) or not to_user_id or not messages:
+    if not has_line_bot_config(app=app, channel=channel) or not to_user_id or not messages:
         return False
 
     url = f"{LINE_API_BASE}/push"
@@ -149,7 +168,7 @@ def push_messages(to_user_id: str, messages: Sequence[dict[str, Any]], app=None)
     }
 
     try:
-        r = requests.post(url, headers=_headers(app=app), json=payload, timeout=10)
+        r = requests.post(url, headers=_headers(app=app, channel=channel), json=payload, timeout=10)
         if r.status_code >= 400 and current_app is not None:
             current_app.logger.warning("LINE push failed: %s %s", r.status_code, r.text)
         return r.status_code // 100 == 2
@@ -413,12 +432,13 @@ def _line_http(
     url: str,
     *,
     app=None,
+    channel: str = "worker",
     timeout: int = 20,
     **kwargs,
 ) -> requests.Response:
     headers = kwargs.pop("headers", None)
     if headers is None:
-        headers = _headers(app=app)
+        headers = _headers(app=app, channel=channel)
     resp = requests.request(method, url, headers=headers, timeout=timeout, **kwargs)
     if resp.status_code >= 400:
         detail = ""

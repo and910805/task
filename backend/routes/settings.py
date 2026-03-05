@@ -353,6 +353,7 @@ def get_line_notification_settings():
             "settings": _get(),
             "status_options": _task_status_options(),
             "has_line_bot": bool((os.getenv("LINE_CHANNEL_ACCESS_TOKEN") or "").strip()),
+            "has_public_line_bot": bool((os.getenv("LINE_PUBLIC_CHANNEL_ACCESS_TOKEN") or "").strip()),
         }
     )
 
