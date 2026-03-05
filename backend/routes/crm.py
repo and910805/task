@@ -1586,6 +1586,11 @@ def convert_public_booking_to_customer(booking_id: int):
     if booking.user_agent:
         note_parts.append(f"UA: {booking.user_agent}")
     note_line = "\n".join(note_parts)
+    # Keep customer/contact notes concise; technical metadata stays in booking record.
+    note_parts = [f"網站預約轉入（#{booking.id}）"]
+    if booking.message:
+        note_parts.append(booking.message)
+    note_line = "\n".join(note_parts)
 
     customer = _find_or_create_customer(
         name=booking.name,
