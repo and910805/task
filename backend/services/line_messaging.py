@@ -34,6 +34,49 @@ def _cfg(key: str, app=None) -> Optional[str]:
     return os.getenv(key)
 
 
+def _looks_like_line_secret(value: str | None) -> bool:
+    raw = (value or "").strip()
+    return len(raw) == 32 and all(ch in "0123456789abcdefABCDEF" for ch in raw)
+
+
+def _channel_token(channel: str = "worker", app=None) -> str:
+    key = (channel or "worker").strip().lower()
+    if key != "public":
+        return (_cfg("LINE_CHANNEL_ACCESS_TOKEN", app=app) or "").strip()
+
+    # Preferred key for public Messaging API token.
+    token = (_cfg("LINE_PUBLIC_CHANNEL_ACCESS_TOKEN", app=app) or "").strip()
+    if token:
+        return token
+
+    # Compatibility fallback:
+    # Some deployments accidentally put long-lived token into SECRET key.
+    legacy = (_cfg("LINE_PUBLIC_CHANNEL_SECRET", app=app) or "").strip()
+    if legacy and not _looks_like_line_secret(legacy):
+        return legacy
+    return ""
+
+
+def _channel_secret(channel: str = "worker", app=None) -> str:
+    key = (channel or "worker").strip().lower()
+    if key != "public":
+        return (_cfg("LINE_CHANNEL_SECRET", app=app) or "").strip()
+
+    # Preferred key for public webhook secret.
+    secret = (_cfg("LINE_PUBLIC_CHANNEL_SECRET", app=app) or "").strip()
+    if _looks_like_line_secret(secret):
+        return secret
+
+    # Compatibility fallback: allow alternate key if provided.
+    alt = (_cfg("LINE_PUBLIC_WEBHOOK_SECRET", app=app) or "").strip()
+    if _looks_like_line_secret(alt):
+        return alt
+
+    # If secret is misconfigured (e.g., token pasted in secret field),
+    # return empty so webhook verification is skipped (same behavior as local dev).
+    return ""
+
+
 def _channel_keys(channel: str = "worker") -> tuple[str, str]:
     key = (channel or "worker").strip().lower()
     if key == "public":
@@ -42,28 +85,24 @@ def _channel_keys(channel: str = "worker") -> tuple[str, str]:
 
 
 def line_channel_secret(*, app=None, channel: str = "worker") -> str:
-    _, secret_key = _channel_keys(channel)
-    return (_cfg(secret_key, app=app) or "").strip()
+    return _channel_secret(channel=channel, app=app)
 
 
 def has_line_config(app=None, *, channel: str = "worker") -> bool:
     """True if both LINE token & secret exist."""
-    token_key, secret_key = _channel_keys(channel)
-    token = (_cfg(token_key, app=app) or "").strip()
-    secret = (_cfg(secret_key, app=app) or "").strip()
+    token = _channel_token(channel=channel, app=app)
+    secret = _channel_secret(channel=channel, app=app)
     return bool(token and secret)
 
 
 def has_line_bot_config(app=None, *, channel: str = "worker") -> bool:
     """True if LINE Messaging API access token exists."""
-    token_key, _ = _channel_keys(channel)
-    token = (_cfg(token_key, app=app) or "").strip()
+    token = _channel_token(channel=channel, app=app)
     return bool(token)
 
 
 def _headers(app=None, *, json_content: bool = True, channel: str = "worker") -> dict[str, str]:
-    token_key, _ = _channel_keys(channel)
-    token = (_cfg(token_key, app=app) or "").strip()
+    token = _channel_token(channel=channel, app=app)
     headers = {"Authorization": f"Bearer {token}"}
     if json_content:
         headers["Content-Type"] = "application/json"

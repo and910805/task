@@ -348,12 +348,13 @@ def update_email_notification_settings():
 def get_line_notification_settings():
     """Admin: read LINE (Bot) notification rules."""
     from services.notifications import get_line_notification_settings as _get
+    from services.line_messaging import has_line_bot_config as _has_line_bot
     return jsonify(
         {
             "settings": _get(),
             "status_options": _task_status_options(),
-            "has_line_bot": bool((os.getenv("LINE_CHANNEL_ACCESS_TOKEN") or "").strip()),
-            "has_public_line_bot": bool((os.getenv("LINE_PUBLIC_CHANNEL_ACCESS_TOKEN") or "").strip()),
+            "has_line_bot": _has_line_bot(),
+            "has_public_line_bot": _has_line_bot(channel="public"),
         }
     )
 
