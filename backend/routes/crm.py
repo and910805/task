@@ -1506,6 +1506,8 @@ def create_public_booking():
         return jsonify({"msg": "name is required"}), 400
     if not phone:
         return jsonify({"msg": "phone is required"}), 400
+    if not address:
+        return jsonify({"msg": "address is required"}), 400
     merged_message = message
     if preferred_time:
         merged_message = f"聯絡時段: {preferred_time}" + (f"\n{message}" if message else "")

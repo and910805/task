@@ -240,7 +240,7 @@
         </div>
         <div class="form-grid" style="margin-top:12px">
           <input name="email" type="email" placeholder="Email（選填）" />
-          <input name="address" placeholder="地址（選填）" />
+          <input name="address" placeholder="地址" required />
         </div>
         <div class="form-grid" style="margin-top:12px">
           <select name="preferred_time">
@@ -294,8 +294,8 @@
           source_url: window.location.href,
         };
 
-        if (!payload.name || !payload.phone) {
-          setHint('請填寫姓名與電話。', false);
+        if (!payload.name || !payload.phone || !payload.address) {
+          setHint('請填寫姓名、電話與地址。', false);
           return;
         }
 
