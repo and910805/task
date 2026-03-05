@@ -82,6 +82,8 @@
     }
     .card h3 { margin: 0 0 8px; font-size: 22px; }
     .price { color: var(--accent); font-weight: 800; }
+    .service-list { margin: 0; padding-left: 20px; color: var(--muted); }
+    .service-list li { margin: 6px 0; }
 
     .strip {
       margin: 54px 0;
@@ -177,11 +179,33 @@
 
     <section id="services">
       <h2 class="sec-title">服務項目</h2>
-      <p class="sec-sub">一般住家、店面、工地維修與安裝</p>
+      <p class="sec-sub">住宅、店面與工程案件的一站式服務</p>
       <div class="cards">
-        <article class="card"><h3>水電維修</h3><p>漏水、堵塞、管線更換、器具故障排除。</p></article>
-        <article class="card"><h3>電路檢修</h3><p>跳電、短路、配電盤檢查、老舊線路更新。</p></article>
-        <article class="card"><h3>衛浴廚具安裝</h3><p>馬桶、熱水器、水龍頭、廚衛設備安裝。</p></article>
+        <article class="card">
+          <h3>全屋服務</h3>
+          <ul class="service-list">
+            <li>住宅全面修繕</li>
+            <li>土水泥作施工</li>
+            <li>居家水電維修</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>管線與維護</h3>
+          <ul class="service-list">
+            <li>老舊電線更新</li>
+            <li>水電管線工程</li>
+            <li>水電急修服務</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>規劃與更新</h3>
+          <ul class="service-list">
+            <li>衛浴翻新工程</li>
+            <li>室內管線配置</li>
+            <li>代辦水電申請</li>
+            <li>電力系統更新</li>
+          </ul>
+        </article>
       </div>
     </section>
 
@@ -216,14 +240,7 @@
         </div>
         <div class="form-grid" style="margin-top:12px">
           <input name="email" type="email" placeholder="Email（選填）" />
-          <select name="service" required>
-            <option value="">請選擇服務項目</option>
-            <option>水電維修</option>
-            <option>電路檢修</option>
-            <option>衛浴廚具安裝</option>
-            <option>漏水處理</option>
-            <option>其他</option>
-          </select>
+          <input name="address" placeholder="地址（選填）" />
         </div>
         <textarea name="message" placeholder="需求描述（地點、狀況、可聯絡時間）" style="margin-top:12px"></textarea>
         <button class="submit" type="submit">送出預約</button>
@@ -254,13 +271,13 @@
           name: (form.name.value || '').trim(),
           phone: (form.phone.value || '').trim(),
           email: (form.email.value || '').trim(),
-          service: (form.service.value || '').trim(),
+          address: (form.address.value || '').trim(),
           message: (form.message.value || '').trim(),
           source_url: window.location.href,
         };
 
-        if (!payload.name || !payload.phone || !payload.service) {
-          setHint('請填寫姓名、電話與服務項目。', false);
+        if (!payload.name || !payload.phone) {
+          setHint('請填寫姓名與電話。', false);
           return;
         }
 

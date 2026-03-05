@@ -1494,7 +1494,7 @@ def create_public_booking():
     name = _trim(data.get("name"))
     phone = _trim(data.get("phone"))
     email = _trim(data.get("email"))
-    service = _trim(data.get("service"))
+    service = _trim(data.get("service")) or "未填寫"
     message = _trim(data.get("message"))
     address = _trim(data.get("address"))
     source_url = _trim(data.get("source_url")) or _trim(request.referrer)
@@ -1505,9 +1505,6 @@ def create_public_booking():
         return jsonify({"msg": "name is required"}), 400
     if not phone:
         return jsonify({"msg": "phone is required"}), 400
-    if not service:
-        return jsonify({"msg": "service is required"}), 400
-
     booking = WebsiteBooking(
         name=name,
         phone=phone,
@@ -1572,8 +1569,9 @@ def convert_public_booking_to_customer(booking_id: int):
     note_parts = [
         "Source: website booking",
         f"Booking ID: {booking.id}",
-        f"Service: {booking.service}",
     ]
+    if booking.service and booking.service != "未填寫":
+        note_parts.append(f"Service: {booking.service}")
     if booking.message:
         note_parts.append(f"Message: {booking.message}")
     if booking.source_url:
