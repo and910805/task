@@ -216,8 +216,9 @@ def create_app() -> Flask:
         sale_dir = os.path.join(dist_dir, "salesite")
         sale_entry = os.path.join(sale_dir, "sale.html")
 
-        # Keep static sale page available at "/sale".
-        if path == "sale":
+        # Make public marketing site the root entry.
+        # Keep aliases: "/", "/salesite", "/salesite/", "/sale".
+        if path in {"", "sale", "salesite", "salesite/"}:
             if os.path.exists(sale_entry):
                 return send_from_directory(sale_dir, "sale.html")
 
