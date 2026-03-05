@@ -19,14 +19,14 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
   const logoSrc = branding.logoUrl || brandFallback;
   const roleLabel = labels[user?.role] || user?.role || '';
   const navItems = [
-    { to: '/app', label: '任務清單' },
-    { to: '/attendance', label: '出勤' },
-    { to: '/calendar', label: '行事曆' },
-    { to: '/crm', label: '經營管理' },
-    { to: '/crm/bookings', label: '網站預約' },
-    { to: '/reports', label: '報表' },
-    { to: '/profile', label: '個人設定' },
-    { to: '/admin', label: '管理後台', adminOnly: true },
+    { to: '/app', label: '任務清單', exact: true },
+    { to: '/attendance', label: '出勤', exact: true },
+    { to: '/calendar', label: '行事曆', exact: true },
+    { to: '/crm', label: '經營管理', exact: true },
+    { to: '/crm/bookings', label: '網站預約', exact: true },
+    { to: '/reports', label: '報表', exact: true },
+    { to: '/profile', label: '個人設定', exact: true },
+    { to: '/admin', label: '管理後台', adminOnly: true, exact: true },
   ];
   const visibleNavItems = navItems.filter((item) => {
     if (item.adminOnly && !isAdmin) return false;
@@ -53,7 +53,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
             <NavLink
               key={item.to}
               to={item.to}
-              end={item.to === '/app'}
+              end={Boolean(item.exact)}
               className={({ isActive }) => `app-sidebar__link${isActive ? ' is-active' : ''}`}
             >
               {item.label}
