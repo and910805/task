@@ -1495,6 +1495,7 @@ def create_public_booking():
     phone = _trim(data.get("phone"))
     email = _trim(data.get("email"))
     service = _trim(data.get("service")) or "未填寫"
+    preferred_time = _trim(data.get("preferred_time"))
     message = _trim(data.get("message"))
     address = _trim(data.get("address"))
     source_url = _trim(data.get("source_url")) or _trim(request.referrer)
@@ -1505,12 +1506,16 @@ def create_public_booking():
         return jsonify({"msg": "name is required"}), 400
     if not phone:
         return jsonify({"msg": "phone is required"}), 400
+    merged_message = message
+    if preferred_time:
+        merged_message = f"方便服務時段: {preferred_time}" + (f"\n{message}" if message else "")
+
     booking = WebsiteBooking(
         name=name,
         phone=phone,
         email=email,
         service=service,
-        message=message,
+        message=merged_message,
         address=address,
         source_url=source_url,
         user_agent=user_agent,

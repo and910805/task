@@ -242,6 +242,23 @@
           <input name="email" type="email" placeholder="Email（選填）" />
           <input name="address" placeholder="地址（選填）" />
         </div>
+        <div class="form-grid" style="margin-top:12px">
+          <select name="preferred_time">
+            <option value="">方便服務時段（選填）</option>
+            <option>8:30-9:00</option>
+            <option>9:30-10:00</option>
+            <option>10:00-10:30</option>
+            <option>10:30-11:00</option>
+            <option>11:00-11:30</option>
+            <option>13:30-14:00</option>
+            <option>14:00-14:30</option>
+            <option>14:30-15:00</option>
+            <option>15:30-16:00</option>
+            <option>16:00-16:30</option>
+            <option>其他時段（請備註）</option>
+          </select>
+          <div></div>
+        </div>
         <textarea name="message" placeholder="需求描述（地點、狀況、可聯絡時間）" style="margin-top:12px"></textarea>
         <button class="submit" type="submit">送出預約</button>
         <p id="booking-hint" class="hint"></p>
@@ -272,6 +289,7 @@
           phone: (form.phone.value || '').trim(),
           email: (form.email.value || '').trim(),
           address: (form.address.value || '').trim(),
+          preferred_time: (form.preferred_time.value || '').trim(),
           message: (form.message.value || '').trim(),
           source_url: window.location.href,
         };
