@@ -1508,7 +1508,7 @@ def create_public_booking():
         return jsonify({"msg": "phone is required"}), 400
     merged_message = message
     if preferred_time:
-        merged_message = f"方便服務時段: {preferred_time}" + (f"\n{message}" if message else "")
+        merged_message = f"聯絡時段: {preferred_time}" + (f"\n{message}" if message else "")
 
     booking = WebsiteBooking(
         name=name,
