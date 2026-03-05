@@ -17,6 +17,7 @@ import CrmCustomersPage from './pages/CrmCustomersPage.jsx';
 import CrmContactsPage from './pages/CrmContactsPage.jsx';
 import CrmQuotesPage from './pages/CrmQuotesPage.jsx';
 import CrmCatalogPage from './pages/CrmCatalogPage.jsx';
+import CrmPublicBookingsPage from './pages/CrmPublicBookingsPage.jsx';
 import AttendancePage from './pages/AttendancePage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
 import MaterialsPurchasesPage from './pages/MaterialsPurchasesPage.jsx';
@@ -116,6 +117,14 @@ const AppRoutes = () => (
       element={(
         <PrivateRoute>
           <CrmCatalogPage />
+        </PrivateRoute>
+      )}
+    />
+    <Route
+      path="/crm/bookings"
+      element={(
+        <PrivateRoute>
+          <CrmPublicBookingsPage />
         </PrivateRoute>
       )}
     />

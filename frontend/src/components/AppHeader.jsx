@@ -23,6 +23,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
     { to: '/attendance', label: '出勤' },
     { to: '/calendar', label: '行事曆' },
     { to: '/crm', label: '經營管理' },
+    { to: '/crm/bookings', label: '網站預約' },
     { to: '/reports', label: '報表' },
     { to: '/profile', label: '個人設定' },
     { to: '/admin', label: '管理後台', adminOnly: true },

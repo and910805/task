@@ -244,6 +244,7 @@ def create_app() -> Flask:
             TaskMaterialUsage,
             TaskUpdate,
             User,
+            WebsiteBooking,
         )
         if _should_init_db_on_startup(database_url):
             _wait_for_database_ready(app)

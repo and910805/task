@@ -595,6 +595,54 @@ class Contact(db.Model):
         }
 
 
+class WebsiteBooking(db.Model):
+    __tablename__ = "website_booking"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255), nullable=False)
+    phone = db.Column(db.String(64), nullable=False)
+    email = db.Column(db.String(255))
+    service = db.Column(db.String(255), nullable=False)
+    message = db.Column(db.Text)
+    address = db.Column(db.Text)
+    source_url = db.Column(db.Text)
+    user_agent = db.Column(db.Text)
+    client_ip = db.Column(db.String(64))
+    status = db.Column(db.String(32), nullable=False, default="pending")
+    converted_customer_id = db.Column(db.Integer, db.ForeignKey("customer.id"), nullable=True)
+    converted_contact_id = db.Column(db.Integer, db.ForeignKey("contact.id"), nullable=True)
+    converted_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    converted_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    converted_customer = db.relationship("Customer", foreign_keys=[converted_customer_id])
+    converted_contact = db.relationship("Contact", foreign_keys=[converted_contact_id])
+    converted_by = db.relationship("User", foreign_keys=[converted_by_id])
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "phone": self.phone,
+            "email": self.email,
+            "service": self.service,
+            "message": self.message,
+            "address": self.address,
+            "source_url": self.source_url,
+            "user_agent": self.user_agent,
+            "client_ip": self.client_ip,
+            "status": self.status,
+            "converted_customer_id": self.converted_customer_id,
+            "converted_contact_id": self.converted_contact_id,
+            "converted_by_id": self.converted_by_id,
+            "converted_by_username": self.converted_by.username if self.converted_by else None,
+            "converted_at": self.converted_at.isoformat() if self.converted_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 class Quote(db.Model):
     __tablename__ = "quote"
 

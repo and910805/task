@@ -127,6 +127,7 @@ const CrmDashboardPage = () => {
     () => [
       { title: '客戶管理', desc: '維護客戶主檔與基本聯絡資訊。', to: '/crm/customers', tag: 'Master Data' },
       { title: '聯絡人管理', desc: '管理客戶聯絡窗口與聯繫方式。', to: '/crm/contacts', tag: 'Master Data' },
+      { title: '網站預約', desc: '檢視官網預約資料並轉成客戶與聯絡人。', to: '/crm/bookings', tag: 'Leads' },
       { title: '價目資料庫', desc: '維護常用服務品項、單位與預設價格。', to: '/crm/catalog', tag: 'Pricing' },
       { title: '報價與請款', desc: '建立報價單、轉請款單並下載 PDF。', to: '/crm/quotes', tag: 'Sales' },
       { title: '考勤管理', desc: '查看人員出勤與現場打卡記錄。', to: '/attendance', tag: 'Field Ops' },

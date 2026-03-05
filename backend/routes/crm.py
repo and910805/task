@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from flask import Blueprint, jsonify, request, send_file
 from flask_jwt_extended import jwt_required
 from openpyxl import load_workbook
+from sqlalchemy import inspect
 from sqlalchemy.orm import selectinload
 
 from decorators import role_required
@@ -29,6 +30,7 @@ from models import (
     QuoteVersion,
     ServiceCatalogItem,
     Task,
+    WebsiteBooking,
 )
 from utils import get_current_user_id
 
@@ -1478,8 +1480,16 @@ def _find_or_create_contact(customer: Customer, name: str, phone: str, email: st
     return contact
 
 
+def _ensure_website_booking_table() -> None:
+    inspector = inspect(db.engine)
+    if "website_booking" in inspector.get_table_names():
+        return
+    WebsiteBooking.__table__.create(bind=db.engine, checkfirst=True)
+
+
 @crm_bp.post("/public/bookings")
 def create_public_booking():
+    _ensure_website_booking_table()
     data = request.get_json(silent=True) or {}
     name = _trim(data.get("name"))
     phone = _trim(data.get("phone"))
@@ -1498,45 +1508,111 @@ def create_public_booking():
     if not service:
         return jsonify({"msg": "service is required"}), 400
 
-    booking_note_parts = [
-        "Source: website booking",
-        f"Service: {service}",
-    ]
-    if message:
-        booking_note_parts.append(f"Message: {message}")
-    if source_url:
-        booking_note_parts.append(f"Source URL: {source_url}")
-    if client_ip:
-        booking_note_parts.append(f"IP: {client_ip}")
-    if user_agent:
-        booking_note_parts.append(f"UA: {user_agent}")
-    booking_note = "\n".join(booking_note_parts)
-
-    customer = _find_or_create_customer(
+    booking = WebsiteBooking(
         name=name,
         phone=phone,
         email=email,
+        service=service,
+        message=message,
         address=address,
-        note_line=booking_note,
+        source_url=source_url,
+        user_agent=user_agent,
+        client_ip=client_ip,
+        status="pending",
     )
-    contact = _find_or_create_contact(
-        customer=customer,
-        name=name,
-        phone=phone,
-        email=email,
-        note_line=booking_note,
-    )
+    db.session.add(booking)
     db.session.commit()
 
     return (
         jsonify(
             {
                 "msg": "booking received",
-                "customer_id": customer.id,
-                "contact_id": contact.id,
+                "booking_id": booking.id,
             }
         ),
         201,
+    )
+
+
+@crm_bp.get("/public-bookings")
+@role_required(*READ_ROLES)
+def list_public_bookings():
+    _ensure_website_booking_table()
+    status = _trim(request.args.get("status"))
+    q = _trim(request.args.get("q"))
+
+    query = WebsiteBooking.query.order_by(WebsiteBooking.created_at.desc(), WebsiteBooking.id.desc())
+    if status in {"pending", "converted"}:
+        query = query.filter(WebsiteBooking.status == status)
+    if q:
+        pattern = f"%{q}%"
+        query = query.filter(
+            (WebsiteBooking.name.ilike(pattern))
+            | (WebsiteBooking.phone.ilike(pattern))
+            | (WebsiteBooking.email.ilike(pattern))
+            | (WebsiteBooking.service.ilike(pattern))
+        )
+    rows = query.limit(500).all()
+    return jsonify([row.to_dict() for row in rows])
+
+
+@crm_bp.post("/public-bookings/<int:booking_id>/convert")
+@role_required(*WRITE_ROLES)
+def convert_public_booking_to_customer(booking_id: int):
+    _ensure_website_booking_table()
+    booking = WebsiteBooking.query.get_or_404(booking_id)
+    if booking.status == "converted" and booking.converted_customer_id:
+        return jsonify(
+            {
+                "msg": "already converted",
+                "booking": booking.to_dict(),
+            }
+        )
+
+    note_parts = [
+        "Source: website booking",
+        f"Booking ID: {booking.id}",
+        f"Service: {booking.service}",
+    ]
+    if booking.message:
+        note_parts.append(f"Message: {booking.message}")
+    if booking.source_url:
+        note_parts.append(f"Source URL: {booking.source_url}")
+    if booking.client_ip:
+        note_parts.append(f"IP: {booking.client_ip}")
+    if booking.user_agent:
+        note_parts.append(f"UA: {booking.user_agent}")
+    note_line = "\n".join(note_parts)
+
+    customer = _find_or_create_customer(
+        name=booking.name,
+        phone=booking.phone,
+        email=booking.email or "",
+        address=booking.address or "",
+        note_line=note_line,
+    )
+    contact = _find_or_create_contact(
+        customer=customer,
+        name=booking.name,
+        phone=booking.phone,
+        email=booking.email or "",
+        note_line=note_line,
+    )
+
+    booking.status = "converted"
+    booking.converted_customer_id = customer.id
+    booking.converted_contact_id = contact.id
+    booking.converted_by_id = get_current_user_id()
+    booking.converted_at = datetime.utcnow()
+    db.session.commit()
+
+    return jsonify(
+        {
+            "msg": "booking converted",
+            "booking": booking.to_dict(),
+            "customer": customer.to_dict(),
+            "contact": contact.to_dict(),
+        }
     )
 
 
