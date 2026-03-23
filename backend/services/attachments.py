@@ -122,3 +122,11 @@ def create_signature_attachment(
     db.session.commit()
     return attachment
 
+
+def replace_signature_file(*, existing_path: Optional[str], data_url: str) -> str:
+    payload = _clean_base64(data_url)
+    storage = _storage()
+    if existing_path:
+        storage.delete(existing_path)
+    return _save_binary("signature", payload, original_name="signature.png")
+

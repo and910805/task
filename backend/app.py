@@ -254,6 +254,7 @@ def create_app() -> Flask:
             _ensure_quote_recipient_name_column()
             _ensure_quote_item_unit_column()
             _ensure_invoice_item_unit_column()
+            _ensure_invoice_signature_columns()
         else:
             app.logger.info("Skip startup DB schema init (INIT_DB_ON_STARTUP is disabled).")
 
@@ -276,6 +277,7 @@ def create_app() -> Flask:
         _ensure_quote_recipient_name_column()
         _ensure_quote_item_unit_column()
         _ensure_invoice_item_unit_column()
+        _ensure_invoice_signature_columns()
         click.echo("Database schema initialized.")
 
     return app
@@ -371,6 +373,27 @@ def _ensure_invoice_item_unit_column() -> None:
     if db.engine.dialect.name != "sqlite":
         return
     db.session.execute(text("ALTER TABLE invoice_item ADD COLUMN unit VARCHAR(32)"))
+    db.session.commit()
+
+
+def _ensure_invoice_signature_columns() -> None:
+    inspector = inspect(db.engine)
+    if "invoice" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("invoice")}
+    if db.engine.dialect.name not in {"sqlite", "postgresql"}:
+        return
+    statements = []
+    if "customer_signature_path" not in columns:
+        statements.append("ALTER TABLE invoice ADD COLUMN customer_signature_path VARCHAR(255)")
+    if "customer_signature_name" not in columns:
+        statements.append("ALTER TABLE invoice ADD COLUMN customer_signature_name VARCHAR(255)")
+    if "customer_signed_at" not in columns:
+        statements.append("ALTER TABLE invoice ADD COLUMN customer_signed_at TIMESTAMP")
+    if not statements:
+        return
+    for statement in statements:
+        db.session.execute(text(statement))
     db.session.commit()
 
 

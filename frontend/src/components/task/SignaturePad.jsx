@@ -99,10 +99,10 @@ const SignaturePad = ({ onSubmit, disabled }) => {
         className="signature-canvas"
       />
       <div className="signature-actions">
-        <button type="button" onClick={clear}>
+        <button type="button" onClick={clear} disabled={disabled}>
           清除
         </button>
-        <button type="button" onClick={handleSubmit} disabled={!hasStroke}>
+        <button type="button" onClick={handleSubmit} disabled={!hasStroke || disabled}>
           送出簽名
         </button>
       </div>

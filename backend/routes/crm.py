@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 from types import SimpleNamespace
 
-from flask import Blueprint, jsonify, request, send_file
+from flask import Blueprint, current_app, jsonify, request, send_file
 from flask_jwt_extended import jwt_required
 from openpyxl import load_workbook
 from sqlalchemy import inspect
@@ -33,6 +33,7 @@ from models import (
     WebsiteBooking,
 )
 from utils import get_current_user_id
+from services.attachments import replace_signature_file
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -627,6 +628,23 @@ def _invoice_payment_payload(invoice: Invoice) -> dict:
     }
 
 
+def _invoice_signature_image_reader(invoice: Invoice) -> ImageReader | None:
+    signature_path = (invoice.customer_signature_path or "").strip()
+    if not signature_path:
+        return None
+    storage = current_app.extensions.get("storage")
+    if not storage:
+        return None
+    try:
+        local_path = storage.local_path(signature_path)
+    except Exception:
+        return None
+    try:
+        return ImageReader(str(local_path))
+    except Exception:
+        return None
+
+
 def _invoice_query_with_details():
     return Invoice.query.options(
         selectinload(Invoice.items),
@@ -1013,6 +1031,9 @@ def _build_quote_template_pdf(
 ):
     _require_embedded_pdf_font()
     recipient = _resolve_quote_recipient_display(quote, customer, contact)
+    customer_signature_name = (getattr(quote, "customer_signature_name", None) or "").strip()
+    customer_signed_at = getattr(quote, "customer_signed_at", None)
+    signature_image = _invoice_signature_image_reader(quote) if getattr(quote, "customer_signature_path", None) else None
 
     ordered_items = sorted(
         quote.items,
@@ -1232,6 +1253,29 @@ def _build_quote_template_pdf(
 
     if quote.note:
         story.extend([Spacer(1, 4 * mm), Paragraph(f"備註：{quote.note}", body_style)])
+    if signature_image is not None:
+        signed_date_text = customer_signed_at.strftime("%Y-%m-%d %H:%M") if customer_signed_at else "-"
+        signature_meta = f"客戶簽名：{customer_signature_name or recipient or '-'}　簽名時間：{signed_date_text}"
+        story.extend([Spacer(1, 4 * mm), Paragraph(signature_meta, body_style)])
+        try:
+            signature_table = Table(
+                [[signature_image]],
+                colWidths=[55 * mm],
+                rowHeights=[24 * mm],
+                hAlign="LEFT",
+            )
+            signature_table.setStyle(
+                TableStyle(
+                    [
+                        ("BOX", (0, 0), (0, 0), 0.8, colors.HexColor("#94a3b8")),
+                        ("VALIGN", (0, 0), (0, 0), "MIDDLE"),
+                        ("ALIGN", (0, 0), (0, 0), "CENTER"),
+                    ]
+                )
+            )
+            story.extend([Spacer(1, 2 * mm), signature_table])
+        except Exception:
+            pass
     story.extend([Spacer(1, 4 * mm), Paragraph("經手人：莊全立", signer_style)])
 
     doc.build(story, canvasmaker=_make_pdf_stamp_canvasmaker(doc, stamp_center))
@@ -1385,6 +1429,9 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
         total_amount=invoice.total_amount,
         subtotal=invoice.subtotal,
         note=invoice.note,
+        customer_signature_path=invoice.customer_signature_path,
+        customer_signature_name=invoice.customer_signature_name,
+        customer_signed_at=invoice.customer_signed_at,
         items=list(invoice.items or []),
     )
     return _build_quote_template_pdf(
@@ -2304,6 +2351,53 @@ def update_invoice(invoice_id: int):
         )
 
     db.session.commit()
+    invoice = _invoice_query_with_details().get(invoice.id)
+    return jsonify(invoice.to_dict() if invoice else {})
+
+
+@crm_bp.post("/invoices/<int:invoice_id>/signature")
+@role_required(*WRITE_ROLES)
+def upload_invoice_signature(invoice_id: int):
+    invoice = _invoice_query_with_details().get_or_404(invoice_id)
+    data = request.get_json(silent=True) or {}
+    data_url = (data.get("data_url") or "").strip()
+    if not data_url:
+        return jsonify({"msg": "Missing signature data"}), 400
+
+    signature_name = (
+        (
+            data.get("signature_name")
+            or data.get("customer_name")
+            or (invoice.contact.name if invoice.contact else None)
+            or (invoice.customer.name if invoice.customer else None)
+            or ""
+        ).strip()
+    )
+    try:
+        invoice.customer_signature_path = replace_signature_file(
+            existing_path=invoice.customer_signature_path,
+            data_url=data_url,
+        )
+    except Exception as exc:
+        current_app.logger.error("Invoice signature upload failed: %s", exc)
+        return jsonify({"msg": "Signature upload failed"}), 500
+
+    invoice.customer_signature_name = signature_name or None
+    invoice.customer_signed_at = datetime.utcnow()
+    _append_audit_log(
+        action="invoice_signature_upload",
+        entity_type="invoice",
+        entity_id=invoice.id,
+        entity_label=invoice.invoice_no,
+        details={
+            "invoice_no": invoice.invoice_no,
+            "customer_signature_name": invoice.customer_signature_name,
+            "customer_signed_at": invoice.customer_signed_at,
+        },
+        note="客戶簽名已更新",
+    )
+    db.session.commit()
+
     invoice = _invoice_query_with_details().get(invoice.id)
     return jsonify(invoice.to_dict() if invoice else {})
 

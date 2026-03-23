@@ -2,6 +2,7 @@
 
 import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
+import SignaturePad from '../components/task/SignaturePad.jsx';
 
 let lineItemKeySeed = 1;
 const nextLineItemKey = () => `line-${lineItemKeySeed++}`;
@@ -87,6 +88,8 @@ const CrmQuotesPage = () => {
   const [paymentPanelInvoiceId, setPaymentPanelInvoiceId] = useState(null);
   const [savingInvoicePayment, setSavingInvoicePayment] = useState(false);
   const [deletingInvoicePaymentId, setDeletingInvoicePaymentId] = useState(null);
+  const [invoiceSignatureName, setInvoiceSignatureName] = useState('');
+  const [uploadingInvoiceSignature, setUploadingInvoiceSignature] = useState(false);
   const [error, setError] = useState('');
   const [editingQuoteId, setEditingQuoteId] = useState(null);
   const [versionsForQuoteId, setVersionsForQuoteId] = useState(null);
@@ -543,6 +546,7 @@ const CrmQuotesPage = () => {
     if (!invoiceId) return;
     setPaymentPanelInvoiceId(invoiceId);
     setInvoicePaymentForm(defaultInvoicePaymentForm(invoice));
+    setInvoiceSignatureName(invoice?.customer_signature_name || invoice?.contact_name || invoice?.customer_name || '');
     setError('');
   };
 
@@ -595,6 +599,29 @@ const CrmQuotesPage = () => {
       setError(err?.networkMessage || err?.response?.data?.msg || '刪除收款紀錄失敗');
     } finally {
       setDeletingInvoicePaymentId(null);
+    }
+  };
+
+  const submitInvoiceSignature = async (dataUrl) => {
+    const invoiceId = Number(paymentPanelInvoice?.id || 0);
+    if (!invoiceId) {
+      setError('請先選擇請款單');
+      return;
+    }
+    if (!dataUrl) return;
+
+    setUploadingInvoiceSignature(true);
+    setError('');
+    try {
+      await api.post(`crm/invoices/${invoiceId}/signature`, {
+        data_url: dataUrl,
+        signature_name: (invoiceSignatureName || '').trim() || null,
+      });
+      await loadInvoices();
+    } catch (err) {
+      setError(err?.networkMessage || err?.response?.data?.msg || '客戶簽名儲存失敗');
+    } finally {
+      setUploadingInvoiceSignature(false);
     }
   };
 
@@ -954,6 +981,9 @@ const CrmQuotesPage = () => {
                       PDF下載
                     </button>
                     <button type="button" className="secondary-btn" onClick={() => openInvoicePaymentPanel(invoice)}>
+                      客戶簽名
+                    </button>
+                    <button type="button" className="secondary-btn" onClick={() => openInvoicePaymentPanel(invoice)}>
                       收款
                     </button>
                     <button
@@ -1004,6 +1034,35 @@ const CrmQuotesPage = () => {
             <div className="panel-tag">未收 NT$ {Number(paymentPanelInvoice.outstanding_amount || 0).toFixed(2)}</div>
             <div className="panel-tag">狀態：{crmStatusLabel('invoice', paymentPanelInvoice.status)}</div>
           </div>
+
+          <section className="invoice-signature-card">
+            <div className="panel-header">
+              <h3>客戶簽名</h3>
+              <span className="panel-tag">
+                {paymentPanelInvoice.customer_signed_at
+                  ? `已簽名：${String(paymentPanelInvoice.customer_signed_at).replace('T', ' ').slice(0, 16)}`
+                  : '尚未簽名'}
+              </span>
+            </div>
+            <div className="crm-form-grid" style={{ marginBottom: 12 }}>
+              <label>
+                簽名人
+                <input
+                  name="invoice_signature_name"
+                  value={invoiceSignatureName}
+                  onChange={(event) => setInvoiceSignatureName(event.target.value)}
+                  placeholder="例如：王小明"
+                />
+              </label>
+            </div>
+            {paymentPanelInvoice.customer_signature_url ? (
+              <div className="invoice-signature-preview">
+                <img src={paymentPanelInvoice.customer_signature_url} alt="客戶簽名" />
+              </div>
+            ) : null}
+            <SignaturePad onSubmit={submitInvoiceSignature} disabled={uploadingInvoiceSignature} />
+            {uploadingInvoiceSignature ? <p className="hint-text">簽名上傳中…</p> : null}
+          </section>
 
           <form className="stack" onSubmit={submitInvoicePayment}>
             <div className="crm-form-grid">

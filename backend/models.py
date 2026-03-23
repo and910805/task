@@ -776,6 +776,9 @@ class Invoice(db.Model):
     tax_amount = db.Column(db.Float, nullable=False, default=0.0)
     total_amount = db.Column(db.Float, nullable=False, default=0.0)
     note = db.Column(db.Text)
+    customer_signature_path = db.Column(db.String(255))
+    customer_signature_name = db.Column(db.String(255))
+    customer_signed_at = db.Column(db.DateTime)
     paid_at = db.Column(db.DateTime)
     created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -796,6 +799,21 @@ class Invoice(db.Model):
         payment_total = round(sum(float(row.amount or 0.0) for row in self.payment_records), 2)
         total_amount = round(self.total_amount or 0.0, 2)
         outstanding_amount = round(max(total_amount - payment_total, 0.0), 2)
+        signature_url = None
+        try:
+            storage = current_app.extensions.get("storage")  # type: ignore[attr-defined]
+        except RuntimeError:
+            storage = None
+        if self.customer_signature_path and storage:
+            try:
+                if getattr(storage, "use_s3", False):
+                    signature_url = storage.url_for(self.customer_signature_path, expires_in=3600)
+                else:
+                    signature_url = storage.url_for(self.customer_signature_path)
+            except Exception:
+                signature_url = None
+        if self.customer_signature_path and not signature_url:
+            signature_url = f"/api/upload/files/{self.customer_signature_path}"
         return {
             "id": self.id,
             "invoice_no": self.invoice_no,
@@ -814,6 +832,9 @@ class Invoice(db.Model):
             "tax_amount": round(self.tax_amount or 0.0, 2),
             "total_amount": total_amount,
             "note": self.note,
+            "customer_signature_name": self.customer_signature_name,
+            "customer_signature_url": signature_url,
+            "customer_signed_at": self.customer_signed_at.isoformat() if self.customer_signed_at else None,
             "paid_at": self.paid_at.isoformat() if self.paid_at else None,
             "payment_total": payment_total,
             "outstanding_amount": outstanding_amount,
