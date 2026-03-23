@@ -74,6 +74,15 @@ const getFilenameFromDisposition = (contentDisposition) => {
   const basicMatch = /filename=\"?([^\";]+)\"?/i.exec(contentDisposition);
   return basicMatch?.[1] || '';
 };
+const withAuthToken = (rawUrl) => {
+  const url = String(rawUrl || '').trim();
+  if (!url) return '';
+  if (!url.startsWith('/api/upload/files/')) return url;
+  const token = localStorage.getItem('auth_token');
+  if (!token) return url;
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}token=${encodeURIComponent(token)}`;
+};
 
 const CrmQuotesPage = () => {
   const [customers, setCustomers] = useState([]);
@@ -1071,7 +1080,7 @@ const CrmQuotesPage = () => {
             </div>
             {paymentPanelInvoice.customer_signature_url ? (
               <div className="invoice-signature-preview">
-                <img src={paymentPanelInvoice.customer_signature_url} alt="客戶簽名" />
+                <img src={withAuthToken(paymentPanelInvoice.customer_signature_url)} alt="客戶簽名" />
               </div>
             ) : null}
             <SignaturePad onSubmit={submitInvoiceSignature} disabled={uploadingInvoiceSignature} />
