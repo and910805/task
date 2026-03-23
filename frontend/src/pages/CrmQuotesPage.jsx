@@ -980,7 +980,14 @@ const CrmQuotesPage = () => {
                   <td>{invoice.invoice_no || '-'}</td>
                   <td>{invoice.quote_no || '-'}</td>
                   <td>{invoice.customer_name || '-'}</td>
-                  <td>{crmStatusLabel('invoice', invoice.status)}</td>
+                  <td>
+                    <div className="crm-status-stack">
+                      <span>{crmStatusLabel('invoice', invoice.status)}</span>
+                      <span className={`signature-status-chip ${invoice.customer_signed_at ? 'is-signed' : 'is-pending'}`}>
+                        {invoice.customer_signed_at ? '已簽名' : '未簽名'}
+                      </span>
+                    </div>
+                  </td>
                   <td>{quoteDisplayAmount(invoice)}</td>
                   <td>{invoice.issue_date || '-'}</td>
                   <td className="crm-actions-cell">
@@ -988,7 +995,7 @@ const CrmQuotesPage = () => {
                       PDF下載
                     </button>
                     <button type="button" className="secondary-btn" onClick={() => openInvoicePaymentPanel(invoice)}>
-                      客戶簽名
+                      {invoice.customer_signed_at ? '查看簽名' : '客戶簽名'}
                     </button>
                     <button type="button" className="secondary-btn" onClick={() => openInvoicePaymentPanel(invoice)}>
                       收款
