@@ -1,6 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 
 import api from '../api/client.js';
+import { useRef } from 'react';
 import AppHeader from '../components/AppHeader.jsx';
 import SignaturePad from '../components/task/SignaturePad.jsx';
 
@@ -100,6 +101,7 @@ const CrmQuotesPage = () => {
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [specialItemType, setSpecialItemType] = useState('blank');
   const [invoicePaymentForm, setInvoicePaymentForm] = useState(() => defaultInvoicePaymentForm(null));
+  const invoiceSignatureSectionRef = useRef(null);
 
   const [form, setForm] = useState(() => ({
     customer_id: '',
@@ -166,6 +168,11 @@ const CrmQuotesPage = () => {
       setHistory({ quotes: [] });
     }
   }, [form.customer_id]);
+
+  useEffect(() => {
+    if (!paymentPanelInvoiceId || !invoiceSignatureSectionRef.current) return;
+    invoiceSignatureSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [paymentPanelInvoiceId]);
 
   const contactOptions = useMemo(
     () => contacts.filter((contact) => String(contact.customer_id) === String(form.customer_id)),
@@ -1035,7 +1042,7 @@ const CrmQuotesPage = () => {
             <div className="panel-tag">狀態：{crmStatusLabel('invoice', paymentPanelInvoice.status)}</div>
           </div>
 
-          <section className="invoice-signature-card">
+          <section ref={invoiceSignatureSectionRef} className="invoice-signature-card">
             <div className="panel-header">
               <h3>客戶簽名</h3>
               <span className="panel-tag">

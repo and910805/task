@@ -44,7 +44,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as pdf_canvas
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import Image, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 crm_bp = Blueprint("crm", __name__)
 
@@ -1258,8 +1258,9 @@ def _build_quote_template_pdf(
         signature_meta = f"客戶簽名：{customer_signature_name or recipient or '-'}　簽名時間：{signed_date_text}"
         story.extend([Spacer(1, 4 * mm), Paragraph(signature_meta, body_style)])
         try:
+            signature_flowable = Image(signature_image, width=50 * mm, height=20 * mm, kind="proportional")
             signature_table = Table(
-                [[signature_image]],
+                [[signature_flowable]],
                 colWidths=[55 * mm],
                 rowHeights=[24 * mm],
                 hAlign="LEFT",
