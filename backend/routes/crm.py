@@ -628,7 +628,7 @@ def _invoice_payment_payload(invoice: Invoice) -> dict:
     }
 
 
-def _invoice_signature_image_reader(invoice: Invoice) -> ImageReader | None:
+def _invoice_signature_image_path(invoice: Invoice) -> str | None:
     signature_path = (invoice.customer_signature_path or "").strip()
     if not signature_path:
         return None
@@ -639,10 +639,7 @@ def _invoice_signature_image_reader(invoice: Invoice) -> ImageReader | None:
         local_path = storage.local_path(signature_path)
     except Exception:
         return None
-    try:
-        return ImageReader(str(local_path))
-    except Exception:
-        return None
+    return str(local_path)
 
 
 def _invoice_query_with_details():
@@ -1033,7 +1030,7 @@ def _build_quote_template_pdf(
     recipient = _resolve_quote_recipient_display(quote, customer, contact)
     customer_signature_name = (getattr(quote, "customer_signature_name", None) or "").strip()
     customer_signed_at = getattr(quote, "customer_signed_at", None)
-    signature_image = _invoice_signature_image_reader(quote) if getattr(quote, "customer_signature_path", None) else None
+    signature_image_path = _invoice_signature_image_path(quote) if getattr(quote, "customer_signature_path", None) else None
 
     ordered_items = sorted(
         quote.items,
@@ -1253,12 +1250,12 @@ def _build_quote_template_pdf(
 
     if quote.note:
         story.extend([Spacer(1, 4 * mm), Paragraph(f"備註：{quote.note}", body_style)])
-    if signature_image is not None:
+    if signature_image_path is not None:
         signed_date_text = customer_signed_at.strftime("%Y-%m-%d %H:%M") if customer_signed_at else "-"
         signature_meta = f"客戶簽名：{customer_signature_name or recipient or '-'}　簽名時間：{signed_date_text}"
         story.extend([Spacer(1, 4 * mm), Paragraph(signature_meta, body_style)])
         try:
-            signature_flowable = Image(signature_image, width=50 * mm, height=20 * mm, kind="proportional")
+            signature_flowable = Image(signature_image_path, width=50 * mm, height=20 * mm, kind="proportional")
             signature_table = Table(
                 [[signature_flowable]],
                 colWidths=[55 * mm],
