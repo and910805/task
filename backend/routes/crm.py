@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 from types import SimpleNamespace
+from xml.sax.saxutils import escape
 
 from flask import Blueprint, current_app, jsonify, request, send_file
 from flask_jwt_extended import jwt_required
@@ -1184,6 +1185,20 @@ def _build_quote_template_pdf(
     company_meta_style.fontSize = 10
     company_meta_style.leading = 12
     company_meta_style.textColor = colors.HexColor("#334155")
+    item_cell_style = styles["Normal"].clone("QuoteTemplateItemCell")
+    item_cell_style.fontName = PDF_FONT_NAME
+    item_cell_style.fontSize = 9.5
+    item_cell_style.leading = 11
+    item_cell_style.textColor = colors.HexColor("#111827")
+    item_cell_style.wordWrap = "CJK"
+
+    def _table_paragraph(value: object, *, alignment: int = 0):
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        cell_style = item_cell_style.clone(f"QuoteTemplateItemCell-{alignment}")
+        cell_style.alignment = alignment
+        return Paragraph(escape(text).replace("\n", "<br />"), cell_style)
 
     story = [
         Paragraph("立翔水電工程行", title_style),
@@ -1197,6 +1212,10 @@ def _build_quote_template_pdf(
     story[1] = Paragraph(document_label, subtitle_style)
     story.insert(0, Spacer(1, 1 * mm))
     story.insert(0, Paragraph(PDF_COMPANY_TAX_ID_TEXT, company_meta_style))
+    for row_index in range(1, len(rows) - 1):
+        rows[row_index][1] = _table_paragraph(rows[row_index][1], alignment=0)
+        rows[row_index][2] = _table_paragraph(rows[row_index][2], alignment=0)
+        rows[row_index][7] = _table_paragraph(rows[row_index][7], alignment=0)
 
     table = Table(
         rows,
@@ -1219,6 +1238,8 @@ def _build_quote_template_pdf(
                 ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#9ca3af")),
                 ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#fafafa")]),
                 ("BACKGROUND", (5, 1), (6, -1), colors.HexColor("#fff3a3")),
+                ("TOPPADDING", (1, 1), (7, -2), 4),
+                ("BOTTOMPADDING", (1, 1), (7, -2), 4),
                 ("FONTNAME", (0, -1), (-1, -1), PDF_FONT_NAME),
                 ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#eef2ff")),
                 ("LINEABOVE", (0, -1), (-1, -1), 1.0, colors.HexColor("#4b5563")),
