@@ -1,6 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-
 import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
 import { managerRoles } from '../constants/roles.js';
@@ -123,39 +121,6 @@ const CrmDashboardPage = () => {
     ];
   }, [data]);
 
-  const baseModuleCards = useMemo(
-    () => [
-      { title: '客戶管理', desc: '維護客戶主檔與基本聯絡資訊。', to: '/crm/customers', tag: 'Master Data' },
-      { title: '聯絡人管理', desc: '管理客戶聯絡窗口與聯繫方式。', to: '/crm/contacts', tag: 'Master Data' },
-      { title: '網站預約', desc: '檢視官網預約資料並轉成客戶與聯絡人。', to: '/crm/bookings', tag: 'Leads' },
-      { title: '價目資料庫', desc: '維護常用服務品項、單位與預設價格。', to: '/crm/catalog', tag: 'Pricing' },
-      { title: '報價與請款', desc: '建立報價單、轉請款單並下載 PDF。', to: '/crm/quotes', tag: 'Sales' },
-      { title: '考勤管理', desc: '查看人員出勤與現場打卡記錄。', to: '/attendance', tag: 'Field Ops' },
-      { title: '報表中心', desc: '檢視營運數據與任務統計報表。', to: '/reports', tag: 'Analytics' },
-    ],
-    [],
-  );
-
-  const moduleCards = useMemo(() => {
-    if (!isManager) return baseModuleCards;
-    return [
-      ...baseModuleCards.slice(0, 4),
-      {
-        title: '耗材入庫',
-        desc: '建立耗材主檔、記錄進貨與入庫成本。',
-        to: '/materials/purchases',
-        tag: 'Materials',
-      },
-      {
-        title: '耗材月結',
-        desc: '查看每月進貨、耗用、庫存與異動帳。',
-        to: '/materials/reports',
-        tag: 'Materials',
-      },
-      ...baseModuleCards.slice(4),
-    ];
-  }, [baseModuleCards, isManager]);
-
   return (
     <div className="page">
       <AppHeader
@@ -178,23 +143,6 @@ const CrmDashboardPage = () => {
               <p className="metric-card__value">{item.value}</p>
               <p className="metric-card__hint">{item.hint}</p>
             </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-header">
-          <h2>功能入口</h2>
-          <span className="panel-tag">Professional Suite</span>
-        </div>
-        <div className="crm-hub-grid">
-          {moduleCards.map((card) => (
-            <Link key={card.to} className="crm-module-card" to={card.to}>
-              <span className="crm-module-card__tag">{card.tag}</span>
-              <h3>{card.title}</h3>
-              <p>{card.desc}</p>
-              <span className="crm-module-card__cta">前往功能</span>
-            </Link>
           ))}
         </div>
       </section>
