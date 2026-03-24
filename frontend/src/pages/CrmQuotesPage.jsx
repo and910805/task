@@ -108,6 +108,7 @@ const CrmQuotesPage = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [convertingQuoteId, setConvertingQuoteId] = useState(null);
+  const [deletingQuoteId, setDeletingQuoteId] = useState(null);
   const [cancellingInvoiceId, setCancellingInvoiceId] = useState(null);
   const [paymentPanelInvoiceId, setPaymentPanelInvoiceId] = useState(null);
   const [savingInvoicePayment, setSavingInvoicePayment] = useState(false);
@@ -591,6 +592,27 @@ const CrmQuotesPage = () => {
     }
   };
 
+  const deleteQuote = async (quote) => {
+    const quoteId = Number(quote?.id || 0);
+    if (!quoteId) return;
+    const quoteLabel = quote?.quote_no || `#${quoteId}`;
+    const confirmed = window.confirm(`確定要刪除報價單 ${quoteLabel} 嗎？此操作無法復原。`);
+    if (!confirmed) return;
+    setDeletingQuoteId(quoteId);
+    setError('');
+    try {
+      await api.delete(`crm/quotes/${quoteId}`);
+      if (editingQuoteId === quoteId) {
+        resetForm();
+      }
+      await loadQuotes();
+    } catch (err) {
+      setError(err?.networkMessage || err?.response?.data?.msg || '刪除報價單失敗');
+    } finally {
+      setDeletingQuoteId(null);
+    }
+  };
+
   const cancelInvoice = async (invoice) => {
     const invoiceId = Number(invoice?.id || 0);
     if (!invoiceId || (invoice?.status || '').toLowerCase() === 'cancelled') return;
@@ -1024,6 +1046,14 @@ const CrmQuotesPage = () => {
                     </button>
                     <button type="button" className="secondary-btn" onClick={() => startEditQuote(quote)}>
                       編輯
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      onClick={() => deleteQuote(quote)}
+                      disabled={deletingQuoteId === quote.id}
+                    >
+                      {deletingQuoteId === quote.id ? '刪除中...' : '刪除'}
                     </button>
                     <button type="button" className="secondary-btn" onClick={() => loadQuoteVersions(quote.id)}>
                       版本

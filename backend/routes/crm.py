@@ -2203,6 +2203,58 @@ def update_quote(quote_id: int):
     return jsonify(quote.to_dict())
 
 
+@crm_bp.delete("/quotes/<int:quote_id>")
+@role_required(*WRITE_ROLES)
+def delete_quote(quote_id: int):
+    quote = Quote.query.options(
+        selectinload(Quote.items),
+        selectinload(Quote.customer),
+        selectinload(Quote.contact),
+        selectinload(Quote.invoices),
+    ).get_or_404(quote_id)
+
+    related_invoice = (
+        Invoice.query.filter(Invoice.quote_id == quote.id)
+        .order_by(Invoice.created_at.desc(), Invoice.id.desc())
+        .first()
+    )
+    if related_invoice is not None:
+        return (
+            jsonify(
+                {
+                    "msg": "此報價單已建立請款單，無法刪除",
+                    "invoice_id": related_invoice.id,
+                    "invoice_no": related_invoice.invoice_no,
+                }
+            ),
+            400,
+        )
+
+    quote_snapshot = quote.to_dict()
+    customer = quote.customer
+    contact = quote.contact
+    quote_label = quote.quote_no
+    db.session.delete(quote)
+    _append_audit_log(
+        action="quote_delete",
+        entity_type="quote",
+        entity_id=quote_id,
+        entity_label=quote_label,
+        details=quote_snapshot,
+        note=f"Deleted quote {quote_label}",
+    )
+    db.session.commit()
+    return jsonify(
+        {
+            "msg": "Quote deleted",
+            "quote_id": quote_id,
+            "quote_no": quote_label,
+            "customer_name": customer.name if customer else None,
+            "contact_name": contact.name if contact else None,
+        }
+    )
+
+
 @crm_bp.get("/quotes/<int:quote_id>/versions")
 @role_required(*READ_ROLES)
 def quote_versions(quote_id: int):
