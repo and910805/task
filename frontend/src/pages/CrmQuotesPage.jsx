@@ -11,6 +11,7 @@ const blankItem = () => ({ _key: nextLineItemKey(), description: '', unit: '式'
 const blankMarkerItem = () => ({ _key: nextLineItemKey(), description: '以下空白', unit: '', quantity: 0, unit_price: 0 });
 const withLineItemKey = (item = {}) => ({ _key: nextLineItemKey(), ...item });
 const quoteDisplayAmount = (quote) => Number(quote?.total_amount ?? quote?.subtotal ?? 0).toFixed(2);
+const DEFAULT_QUOTE_VALID_DAYS = 10;
 const toNumber = (value) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : 0;
@@ -37,6 +38,11 @@ const crmStatusLabel = (type, status) => {
   if (!raw) return '-';
   return STATUS_LABELS?.[type]?.[raw] || raw;
 };
+const formatListDate = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '-';
+  return raw.includes('T') ? raw.slice(0, 10) : raw;
+};
 const toDateInputValue = (value) => value.toISOString().slice(0, 10);
 const addDaysToDateInput = (dateInput, days) => {
   if (!dateInput) return '';
@@ -45,11 +51,19 @@ const addDaysToDateInput = (dateInput, days) => {
   dateValue.setDate(dateValue.getDate() + days);
   return toDateInputValue(dateValue);
 };
+const getDateDiffDays = (startDateInput, endDateInput) => {
+  if (!startDateInput || !endDateInput) return '';
+  const startDate = new Date(`${startDateInput}T00:00:00`);
+  const endDate = new Date(`${endDateInput}T00:00:00`);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return '';
+  return Math.max(0, Math.round((endDate.getTime() - startDate.getTime()) / 86400000));
+};
 const defaultQuoteDateFields = () => {
   const today = new Date();
   const issue_date = toDateInputValue(today);
-  const expiry_date = addDaysToDateInput(issue_date, 10);
-  return { issue_date, expiry_date };
+  const quote_valid_days = DEFAULT_QUOTE_VALID_DAYS;
+  const expiry_date = addDaysToDateInput(issue_date, quote_valid_days);
+  return { issue_date, expiry_date, quote_valid_days };
 };
 const todayDateValue = () => new Date().toISOString().slice(0, 10);
 const defaultInvoicePaymentForm = (invoice) => ({
@@ -218,6 +232,10 @@ const CrmQuotesPage = () => {
     () => activeInvoices.find((invoice) => Number(invoice.id) === Number(paymentPanelInvoiceId)) || null,
     [activeInvoices, paymentPanelInvoiceId],
   );
+  const customerMap = useMemo(
+    () => new Map(customers.map((customer) => [String(customer.id), customer])),
+    [customers],
+  );
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -242,8 +260,9 @@ const CrmQuotesPage = () => {
     }
     if (name === 'issue_date') {
       setForm((prev) => {
-        const previousAutoExpiry = addDaysToDateInput(prev.issue_date, 10);
-        const nextAutoExpiry = addDaysToDateInput(value, 10);
+        const validDays = Math.max(0, Number(prev.quote_valid_days || 0));
+        const previousAutoExpiry = addDaysToDateInput(prev.issue_date, validDays);
+        const nextAutoExpiry = addDaysToDateInput(value, validDays);
         const shouldSyncExpiry = !prev.expiry_date || prev.expiry_date === previousAutoExpiry;
         return {
           ...prev,
@@ -251,6 +270,25 @@ const CrmQuotesPage = () => {
           expiry_date: shouldSyncExpiry ? nextAutoExpiry : prev.expiry_date,
         };
       });
+      return;
+    }
+    if (name === 'quote_valid_days') {
+      setForm((prev) => {
+        const validDays = Math.max(0, Number(value || 0));
+        return {
+          ...prev,
+          quote_valid_days: value,
+          expiry_date: prev.issue_date ? addDaysToDateInput(prev.issue_date, validDays) : prev.expiry_date,
+        };
+      });
+      return;
+    }
+    if (name === 'expiry_date') {
+      setForm((prev) => ({
+        ...prev,
+        expiry_date: value,
+        quote_valid_days: prev.issue_date && value ? String(getDateDiffDays(prev.issue_date, value)) : prev.quote_valid_days,
+      }));
       return;
     }
     setForm((prev) => ({ ...prev, [name]: value }));
@@ -287,6 +325,15 @@ const CrmQuotesPage = () => {
     setItems((prev) => {
       const next = prev.filter((_, idx) => idx !== index);
       return next.length ? next : [blankItem()];
+    });
+  };
+  const moveItem = (index, direction) => {
+    setItems((prev) => {
+      const targetIndex = index + direction;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+      return next;
     });
   };
 
@@ -370,6 +417,7 @@ const CrmQuotesPage = () => {
       recipient_name: quote.recipient_name || '',
       issue_date: quote.issue_date || '',
       expiry_date: quote.expiry_date || '',
+      quote_valid_days: String(getDateDiffDays(quote.issue_date || '', quote.expiry_date || '') || DEFAULT_QUOTE_VALID_DAYS),
       currency: quote.currency || 'TWD',
       tax_rate: Number(quote.tax_rate || 0),
       note: quote.note || '',
@@ -409,8 +457,9 @@ const CrmQuotesPage = () => {
     setSaving(true);
     setError('');
     try {
+      const { quote_valid_days, ...payloadForm } = form;
       const payload = {
-        ...form,
+        ...payloadForm,
         customer_id: Number(form.customer_id),
         contact_id: form.contact_id ? Number(form.contact_id) : null,
         recipient_name: (form.recipient_name || '').trim() || null,
@@ -697,6 +746,16 @@ const CrmQuotesPage = () => {
               <input type="date" name="issue_date" value={form.issue_date} onChange={handleChange} />
             </label>
             <label>
+              有效天數
+              <input
+                type="number"
+                min="0"
+                name="quote_valid_days"
+                value={form.quote_valid_days}
+                onChange={handleChange}
+              />
+            </label>
+            <label>
               有效日期
               <input type="date" name="expiry_date" value={form.expiry_date} onChange={handleChange} />
             </label>
@@ -804,6 +863,17 @@ const CrmQuotesPage = () => {
                   placeholder="單價"
                   step="0.1"
                 />
+                <button type="button" className="secondary-btn" onClick={() => moveItem(idx, -1)} disabled={idx === 0}>
+                  上移
+                </button>
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  onClick={() => moveItem(idx, 1)}
+                  disabled={idx === items.length - 1}
+                >
+                  下移
+                </button>
                 <button type="button" className="secondary-btn" onClick={() => removeItem(idx)}>
                   刪除
                 </button>
@@ -920,7 +990,17 @@ const CrmQuotesPage = () => {
             <tbody>
               {quotes.map((quote) => (
                 <tr key={quote.id}>
-                  <td>{quote.quote_no}</td>
+                  <td>
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      <strong>{quote.quote_no || '-'}</strong>
+                      <span style={{ fontSize: '0.92rem', color: '#5f6b7a' }}>
+                        {(quote.customer_name || customerMap.get(String(quote.customer_id || ''))?.name || '-')}
+                      </span>
+                      <span style={{ fontSize: '0.86rem', color: '#7a8797' }}>
+                        {formatListDate(quote.issue_date || quote.created_at)}
+                      </span>
+                    </div>
+                  </td>
                   <td>{crmStatusLabel('quote', quote.status)}</td>
                   <td>{quoteDisplayAmount(quote)}</td>
                   <td className="crm-actions-cell">
