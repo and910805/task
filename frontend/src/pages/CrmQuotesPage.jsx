@@ -429,7 +429,7 @@ const CrmQuotesPage = () => {
       }
 
       resetForm();
-      await loadQuotes();
+      await Promise.all([loadQuotes(), loadBase()]);
     } catch (err) {
       setError(err?.response?.data?.msg || (editingQuoteId ? '更新報價失敗' : '新增報價失敗'));
     } finally {

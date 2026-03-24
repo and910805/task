@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from flask import Blueprint, current_app, jsonify, request, send_file
 from flask_jwt_extended import jwt_required
 from openpyxl import load_workbook
-from sqlalchemy import inspect
+from sqlalchemy import func, inspect
 from sqlalchemy.orm import selectinload
 
 from decorators import role_required
@@ -483,6 +483,40 @@ def _normalize_items(raw_items):
         )
 
     return normalized, None
+
+
+def _sync_quote_items_to_catalog(items: list[dict]) -> None:
+    ignored_names = {"以下空白", "稅金"}
+    seen_names: set[str] = set()
+
+    for item in items or []:
+        name = str(item.get("description") or "").strip()
+        if not name or name in ignored_names:
+            continue
+
+        normalized_name = name.casefold()
+        if normalized_name in seen_names:
+            continue
+        seen_names.add(normalized_name)
+
+        existing = ServiceCatalogItem.query.filter(func.lower(ServiceCatalogItem.name) == normalized_name).first()
+        if existing is None:
+            db.session.add(
+                ServiceCatalogItem(
+                    name=name,
+                    unit=(item.get("unit") or "").strip() or "式",
+                    unit_price=round(float(item.get("unit_price") or 0.0), 2),
+                    is_active=True,
+                )
+            )
+            continue
+
+        if not existing.is_active:
+            existing.is_active = True
+        if not (existing.unit or "").strip():
+            existing.unit = (item.get("unit") or "").strip() or "式"
+        if float(existing.unit_price or 0.0) <= 0 and float(item.get("unit_price") or 0.0) > 0:
+            existing.unit_price = round(float(item.get("unit_price") or 0.0), 2)
 
 
 def _apply_totals(entity, items: list[dict], tax_rate_raw):
@@ -2067,6 +2101,8 @@ def create_quote():
     for item in items:
         db.session.add(QuoteItem(quote_id=quote.id, **item))
 
+    _sync_quote_items_to_catalog(items)
+
     db.session.flush()
     quote = Quote.query.options(selectinload(Quote.items)).get(quote.id)
     if quote:
@@ -2125,6 +2161,7 @@ def update_quote(quote_id: int):
         db.session.flush()
         for item in items:
             db.session.add(QuoteItem(quote_id=quote.id, **item))
+        _sync_quote_items_to_catalog(items)
         total_err = _apply_totals(quote, items, data.get("tax_rate", quote.tax_rate))
     elif "tax_rate" in data:
         items = [item.to_dict() for item in quote.items]

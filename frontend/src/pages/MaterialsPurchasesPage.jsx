@@ -145,14 +145,26 @@ const MaterialsPurchasesPage = () => {
     [purchaseItems],
   );
 
+  const validPurchaseItems = useMemo(
+    () => purchaseItems.filter((row) => row.material_item_id && Number(row.quantity) > 0),
+    [purchaseItems],
+  );
+
+  const hasActiveMaterials = materials.some((item) => item.is_active !== false);
+  const canSubmitPurchase =
+    !savingPurchase &&
+    !loading &&
+    hasActiveMaterials &&
+    Boolean(purchaseForm.supplier_name.trim()) &&
+    validPurchaseItems.length > 0;
+
   const handleCreatePurchase = async (event) => {
-    event.preventDefault();
+    event?.preventDefault?.();
     if (!purchaseForm.supplier_name.trim()) {
       setError('請輸入材料行名稱');
       return;
     }
-    const validItems = purchaseItems.filter((row) => row.material_item_id && Number(row.quantity) > 0);
-    if (validItems.length === 0) {
+    if (validPurchaseItems.length === 0) {
       setError('請至少輸入一筆進貨明細');
       return;
     }
@@ -166,7 +178,7 @@ const MaterialsPurchasesPage = () => {
         purchase_date: purchaseForm.purchase_date || null,
         statement_month: purchaseForm.statement_month || null,
         note: purchaseForm.note.trim() || null,
-        items: validItems.map((row) => ({
+        items: validPurchaseItems.map((row) => ({
           material_item_id: Number(row.material_item_id),
           quantity: Number(row.quantity || 0),
           unit_cost: Number(row.unit_cost || 0),
@@ -365,10 +377,19 @@ const MaterialsPurchasesPage = () => {
             <button type="button" className="secondary-button" onClick={addPurchaseLine}>
               新增一列
             </button>
-            <button type="submit" disabled={savingPurchase}>
+            <button type="submit" onClick={handleCreatePurchase} disabled={!canSubmitPurchase}>
               {savingPurchase ? '儲存中...' : '建立進貨入庫'}
             </button>
           </div>
+          {!hasActiveMaterials ? (
+            <p className="panel-hint">請先建立至少一個耗材主檔，才能建立進貨入庫。</p>
+          ) : null}
+          {hasActiveMaterials && !purchaseForm.supplier_name.trim() ? (
+            <p className="panel-hint">先輸入材料行名稱，再送出進貨入庫。</p>
+          ) : null}
+          {hasActiveMaterials && purchaseForm.supplier_name.trim() && validPurchaseItems.length === 0 ? (
+            <p className="panel-hint">請選擇耗材並填寫數量大於 0 的進貨明細。</p>
+          ) : null}
         </form>
       </section>
 
@@ -418,4 +439,3 @@ const MaterialsPurchasesPage = () => {
 };
 
 export default MaterialsPurchasesPage;
-
