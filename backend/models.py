@@ -363,6 +363,8 @@ class MaterialPurchaseBatch(db.Model):
     supplier_name = db.Column(db.String(255), nullable=False)
     purchase_date = db.Column(db.Date, nullable=False)
     statement_month = db.Column(db.String(7), nullable=False)
+    status = db.Column(db.String(32), nullable=False, default="draft")
+    confirmed_at = db.Column(db.DateTime, nullable=True)
     note = db.Column(db.Text)
     created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -382,17 +384,24 @@ class MaterialPurchaseBatch(db.Model):
         return round(sum(float(item.quantity or 0.0) for item in self.items), 4)
 
     def to_dict(self) -> dict:
+        unpriced_item_count = sum(1 for item in self.items if float(item.unit_cost or 0.0) <= 0)
+        priced_item_count = sum(1 for item in self.items if float(item.unit_cost or 0.0) > 0)
         return {
             "id": self.id,
             "supplier_name": self.supplier_name,
             "purchase_date": self.purchase_date.isoformat() if self.purchase_date else None,
             "statement_month": self.statement_month,
+            "status": self.status or "draft",
+            "confirmed_at": self.confirmed_at.isoformat() if self.confirmed_at else None,
             "note": self.note,
             "created_by_id": self.created_by_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "total_amount": self.total_amount(),
             "total_quantity": self.total_quantity(),
+            "unpriced_item_count": unpriced_item_count,
+            "priced_item_count": priced_item_count,
+            "can_confirm": (self.status or "draft") == "draft" and unpriced_item_count == 0 and len(self.items or []) > 0,
             "items": [item.to_dict() for item in self.items],
         }
 
@@ -430,6 +439,7 @@ class MaterialPurchaseItem(db.Model):
             "unit_cost": round(self.unit_cost or 0.0, 4),
             "amount": round(self.amount or 0.0, 2),
             "sort_order": self.sort_order,
+            "pricing_pending": float(self.unit_cost or 0.0) <= 0,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

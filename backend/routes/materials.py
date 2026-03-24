@@ -27,6 +27,7 @@ materials_bp = Blueprint("materials", __name__)
 ALL_ROLES = ("worker", "site_supervisor", "hq_staff", "admin")
 MANAGER_ROLES = ("site_supervisor", "hq_staff", "admin")
 VALID_TXN_TYPES = {"purchase", "task_use", "adjustment"}
+VALID_PURCHASE_BATCH_STATUS = {"draft", "confirmed"}
 
 
 def _now_utc() -> datetime:
@@ -41,8 +42,10 @@ def _round_money(value: float | None) -> float:
     return round(float(value or 0.0), 2)
 
 
-def _parse_float(value, field: str, *, minimum: float | None = None) -> tuple[float | None, tuple | None]:
+def _parse_float(value, field: str, *, minimum: float | None = None, required: bool = True) -> tuple[float | None, tuple | None]:
     if value is None or value == "":
+        if not required:
+            return None, None
         return None, (jsonify({"msg": f"{field} is required"}), 400)
     try:
         parsed = float(value)
@@ -96,6 +99,15 @@ def _parse_month(value: str | None, *, default_today: bool = True) -> tuple[str 
 
 def _statement_month_from_date(purchase_date: date) -> str:
     return f"{purchase_date.year:04d}-{purchase_date.month:02d}"
+
+
+def _normalize_purchase_batch_status(value) -> str:
+    status = str(value or "").strip().lower() or "draft"
+    return status if status in VALID_PURCHASE_BATCH_STATUS else ""
+
+
+def _purchase_batch_is_confirmed(batch: MaterialPurchaseBatch | None) -> bool:
+    return str(getattr(batch, "status", "") or "").strip().lower() == "confirmed"
 
 
 def _to_txn_datetime(day: date, *, hour: int = 12) -> datetime:
@@ -217,11 +229,28 @@ def _material_stock_snapshot_map(*, as_of: datetime | None = None, material_item
         query = query.filter(MaterialStockTransaction.material_item_id.in_(material_item_ids))
     query = query.group_by(MaterialStockTransaction.material_item_id)
 
+    pending_query = (
+        db.session.query(
+            MaterialPurchaseItem.material_item_id,
+            func.sum(MaterialPurchaseItem.quantity),
+        )
+        .join(MaterialPurchaseBatch, MaterialPurchaseBatch.id == MaterialPurchaseItem.batch_id)
+        .filter(MaterialPurchaseBatch.status == "draft")
+    )
+    if material_item_ids:
+        pending_query = pending_query.filter(MaterialPurchaseItem.material_item_id.in_(material_item_ids))
+    if as_of is not None:
+        pending_query = pending_query.filter(MaterialPurchaseBatch.purchase_date <= as_of.date())
+    pending_query = pending_query.group_by(MaterialPurchaseItem.material_item_id)
+    pending_qty_map = {int(material_item_id): float(qty_sum or 0.0) for material_item_id, qty_sum in pending_query.all()}
+
     result: dict[int, dict] = {}
     for material_item_id, qty_sum, amount_sum, last_txn_at in query.all():
         qty = float(qty_sum or 0.0)
         amount = float(amount_sum or 0.0)
-        average_cost = (amount / qty) if abs(qty) > 1e-9 else 0.0
+        pending_qty = float(pending_qty_map.get(int(material_item_id), 0.0))
+        priced_qty = qty - pending_qty
+        average_cost = (amount / priced_qty) if abs(priced_qty) > 1e-9 else 0.0
         result[int(material_item_id)] = {
             "qty_on_hand": _round_qty(qty),
             "stock_amount": _round_money(amount),
@@ -305,17 +334,77 @@ def _serialize_stock_summary_rows(items: list[MaterialItem], *, as_of: datetime 
 
 
 def _create_purchase_stock_txn(batch: MaterialPurchaseBatch, purchase_item: MaterialPurchaseItem, *, actor_id: int | None) -> MaterialStockTransaction:
+    is_confirmed = _purchase_batch_is_confirmed(batch)
+    unit_cost = float(purchase_item.unit_cost or 0.0) if is_confirmed else 0.0
+    amount_delta = float(purchase_item.amount or 0.0) if is_confirmed else 0.0
     return MaterialStockTransaction(
         material_item_id=purchase_item.material_item_id,
         txn_type="purchase",
         qty_delta=float(purchase_item.quantity or 0.0),
-        unit_cost=float(purchase_item.unit_cost or 0.0),
-        amount_delta=float(purchase_item.amount or 0.0),
+        unit_cost=unit_cost,
+        amount_delta=amount_delta,
         txn_date=_to_txn_datetime(batch.purchase_date, hour=12),
         note=f"Purchase batch #{batch.id}",
         purchase_item_id=purchase_item.id,
         created_by_id=actor_id,
     )
+
+
+def _sync_purchase_stock_txn(batch: MaterialPurchaseBatch, purchase_item: MaterialPurchaseItem, *, actor_id: int | None) -> None:
+    txn = purchase_item.stock_txn
+    if txn is None:
+        txn = MaterialStockTransaction(purchase_item_id=purchase_item.id)
+        db.session.add(txn)
+    is_confirmed = _purchase_batch_is_confirmed(batch)
+    txn.material_item_id = purchase_item.material_item_id
+    txn.txn_type = "purchase"
+    txn.qty_delta = float(purchase_item.quantity or 0.0)
+    txn.unit_cost = float(purchase_item.unit_cost or 0.0) if is_confirmed else 0.0
+    txn.amount_delta = float(purchase_item.amount or 0.0) if is_confirmed else 0.0
+    txn.txn_date = _to_txn_datetime(batch.purchase_date, hour=12)
+    txn.note = f"Purchase batch #{batch.id}"
+    txn.created_by_id = actor_id
+
+
+def _apply_purchase_item_pricing(batch: MaterialPurchaseBatch, purchase_item: MaterialPurchaseItem) -> None:
+    is_confirmed = _purchase_batch_is_confirmed(batch)
+    if not is_confirmed:
+        purchase_item.amount = 0.0
+        return
+    purchase_item.amount = round(float(purchase_item.quantity or 0.0) * float(purchase_item.unit_cost or 0.0), 2)
+
+
+def _update_material_reference_costs_from_batch(batch: MaterialPurchaseBatch, material_map: dict[int, MaterialItem]) -> None:
+    if not _purchase_batch_is_confirmed(batch):
+        return
+    for purchase_item in batch.items or []:
+        material = material_map.get(int(purchase_item.material_item_id or 0))
+        if material is None:
+            continue
+        if float(purchase_item.unit_cost or 0.0) > 0:
+            material.reference_cost = round(float(purchase_item.unit_cost or 0.0), 4)
+
+
+def _validate_purchase_batch_stock_after_update(
+    batch: MaterialPurchaseBatch,
+    next_items: list[dict],
+    *,
+    material_map: dict[int, MaterialItem],
+) -> tuple | None:
+    current_qty_by_material = defaultdict(float)
+    for row in _serialize_stock_summary_rows(list(material_map.values())):
+        current_qty_by_material[int(row["id"])] = float(row.get("qty_on_hand") or 0.0)
+    for old_item in batch.items or []:
+        current_qty_by_material[int(old_item.material_item_id)] -= float(old_item.quantity or 0.0)
+    for next_item in next_items:
+        current_qty_by_material[int(next_item["material_item_id"])] += float(next_item.get("quantity") or 0.0)
+    for material_id, qty_on_hand in current_qty_by_material.items():
+        if qty_on_hand < -1e-9:
+            material = material_map.get(material_id)
+            if material is None:
+                continue
+            return _insufficient_stock_error(material, qty_on_hand=0.0, requested_qty=abs(qty_on_hand))
+    return None
 
 
 def _upsert_usage_stock_txn(usage: TaskMaterialUsage, *, actor_id: int | None) -> None:
@@ -334,7 +423,7 @@ def _upsert_usage_stock_txn(usage: TaskMaterialUsage, *, actor_id: int | None) -
     txn.created_by_id = actor_id
 
 
-def _normalize_purchase_items(raw_items) -> tuple[list[dict] | None, tuple | None]:
+def _normalize_purchase_items(raw_items, *, allow_unpriced: bool = True) -> tuple[list[dict] | None, tuple | None]:
     if not isinstance(raw_items, list) or not raw_items:
         return None, (jsonify({"msg": "items is required and must be a non-empty array"}), 400)
 
@@ -352,7 +441,12 @@ def _normalize_purchase_items(raw_items) -> tuple[list[dict] | None, tuple | Non
         qty, qty_err = _parse_float(raw.get("quantity"), f"items[{idx}].quantity", minimum=0)
         if qty_err:
             return None, qty_err
-        unit_cost, cost_err = _parse_float(raw.get("unit_cost"), f"items[{idx}].unit_cost", minimum=0)
+        unit_cost, cost_err = _parse_float(
+            raw.get("unit_cost"),
+            f"items[{idx}].unit_cost",
+            minimum=0,
+            required=not allow_unpriced,
+        )
         if cost_err:
             return None, cost_err
 
@@ -569,10 +663,16 @@ def create_purchase_batch():
     else:
         statement_month = _statement_month_from_date(purchase_date)
 
-    items_payload, items_err = _normalize_purchase_items(data.get("items"))
+    status = _normalize_purchase_batch_status(data.get("status") or "draft")
+    if not status:
+        return jsonify({"msg": "status must be draft or confirmed"}), 400
+
+    items_payload, items_err = _normalize_purchase_items(data.get("items"), allow_unpriced=True)
     if items_err:
         return items_err
     assert items_payload is not None
+    if status == "confirmed" and any(float(item.get("unit_cost") or 0.0) <= 0 for item in items_payload):
+        return jsonify({"msg": "All items must have unit_cost > 0 before confirmation"}), 400
 
     material_ids = [item["material_item_id"] for item in items_payload]
     materials = MaterialItem.query.filter(MaterialItem.id.in_(material_ids)).all()
@@ -586,6 +686,8 @@ def create_purchase_batch():
         supplier_name=supplier_name,
         purchase_date=purchase_date,
         statement_month=statement_month or _statement_month_from_date(purchase_date),
+        status=status,
+        confirmed_at=_now_utc() if status == "confirmed" else None,
         note=(data.get("note") or "").strip() or None,
         created_by_id=actor_id,
     )
@@ -594,18 +696,142 @@ def create_purchase_batch():
 
     for item_data in items_payload:
         purchase_item = MaterialPurchaseItem(batch_id=batch.id, **item_data)
+        _apply_purchase_item_pricing(batch, purchase_item)
         db.session.add(purchase_item)
         db.session.flush()
-        material = material_map.get(purchase_item.material_item_id)
-        if material is not None:
-            material.reference_cost = round(float(purchase_item.unit_cost or material.reference_cost or 0.0), 4)
         db.session.add(_create_purchase_stock_txn(batch, purchase_item, actor_id=actor_id))
+
+    batch = MaterialPurchaseBatch.query.options(
+        selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
+    ).get(batch.id)
+    if batch is not None:
+        _update_material_reference_costs_from_batch(batch, material_map)
 
     db.session.commit()
     batch = MaterialPurchaseBatch.query.options(
         selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
     ).get(batch.id)
     return jsonify(batch.to_dict() if batch else {}), 201
+
+
+@materials_bp.put("/purchases/<int:batch_id>")
+@role_required(*MANAGER_ROLES)
+def update_purchase_batch(batch_id: int):
+    batch = MaterialPurchaseBatch.query.options(
+        selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
+    ).get_or_404(batch_id)
+    data = request.get_json() or {}
+
+    if _purchase_batch_is_confirmed(batch):
+        immutable_keys = {"items", "status"}
+        if any(key in data for key in immutable_keys):
+            return jsonify({"msg": "Confirmed purchase batches cannot modify items or status"}), 400
+
+    if "supplier_name" in data:
+        supplier_name = (data.get("supplier_name") or "").strip()
+        if not supplier_name:
+            return jsonify({"msg": "supplier_name is required"}), 400
+        batch.supplier_name = supplier_name
+    if "purchase_date" in data:
+        purchase_date, date_err = _parse_date(data.get("purchase_date"), "purchase_date", default=batch.purchase_date or date.today())
+        if date_err:
+            return date_err
+        batch.purchase_date = purchase_date or batch.purchase_date
+    if "statement_month" in data:
+        statement_month_raw = (data.get("statement_month") or "").strip()
+        if statement_month_raw:
+            month_text, _, _, month_err = _parse_month(statement_month_raw, default_today=False)
+            if month_err:
+                return month_err
+            batch.statement_month = month_text or batch.statement_month
+        elif batch.purchase_date:
+            batch.statement_month = _statement_month_from_date(batch.purchase_date)
+    if "note" in data:
+        batch.note = (data.get("note") or "").strip() or None
+
+    material_map = {}
+    if "items" in data:
+        if _purchase_batch_is_confirmed(batch):
+            return jsonify({"msg": "Confirmed purchase batches cannot modify items"}), 400
+        items_payload, items_err = _normalize_purchase_items(data.get("items"), allow_unpriced=True)
+        if items_err:
+            return items_err
+        assert items_payload is not None
+        material_ids = sorted(
+            {
+                *[int(item["material_item_id"]) for item in items_payload],
+                *[int(row.material_item_id) for row in (batch.items or []) if row.material_item_id],
+            }
+        )
+        materials = MaterialItem.query.filter(MaterialItem.id.in_(material_ids)).all()
+        material_map = {row.id: row for row in materials}
+        missing_ids = [item_id for item_id in material_ids if item_id not in material_map]
+        if missing_ids:
+            return jsonify({"msg": f"Material item not found: {missing_ids[0]}"}), 400
+        stock_err = _validate_purchase_batch_stock_after_update(batch, items_payload, material_map=material_map)
+        if stock_err:
+            return stock_err
+        existing_items = list(batch.items or [])
+        existing_txns = [row.stock_txn for row in existing_items if row.stock_txn is not None]
+        for txn in existing_txns:
+            db.session.delete(txn)
+        for purchase_item in existing_items:
+            db.session.delete(purchase_item)
+        db.session.flush()
+        for item_data in items_payload:
+            purchase_item = MaterialPurchaseItem(batch_id=batch.id, **item_data)
+            _apply_purchase_item_pricing(batch, purchase_item)
+            db.session.add(purchase_item)
+            db.session.flush()
+            _sync_purchase_stock_txn(batch, purchase_item, actor_id=get_current_user_id())
+        batch = MaterialPurchaseBatch.query.options(
+            selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
+        ).get(batch.id) or batch
+
+    if not material_map:
+        material_ids = [int(row.material_item_id) for row in (batch.items or []) if row.material_item_id]
+        materials = MaterialItem.query.filter(MaterialItem.id.in_(material_ids)).all() if material_ids else []
+        material_map = {row.id: row for row in materials}
+
+    for purchase_item in batch.items or []:
+        _apply_purchase_item_pricing(batch, purchase_item)
+        _sync_purchase_stock_txn(batch, purchase_item, actor_id=get_current_user_id())
+    _update_material_reference_costs_from_batch(batch, material_map)
+
+    db.session.commit()
+    batch = MaterialPurchaseBatch.query.options(
+        selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
+    ).get(batch.id)
+    return jsonify(batch.to_dict() if batch else {})
+
+
+@materials_bp.post("/purchases/<int:batch_id>/confirm")
+@role_required(*MANAGER_ROLES)
+def confirm_purchase_batch(batch_id: int):
+    batch = MaterialPurchaseBatch.query.options(
+        selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
+    ).get_or_404(batch_id)
+    if _purchase_batch_is_confirmed(batch):
+        return jsonify(batch.to_dict()), 200
+    if not batch.items:
+        return jsonify({"msg": "Purchase batch has no items"}), 400
+    if any(float(item.unit_cost or 0.0) <= 0 for item in batch.items):
+        return jsonify({"msg": "All items must have unit_cost > 0 before confirmation"}), 400
+
+    batch.status = "confirmed"
+    batch.confirmed_at = _now_utc()
+    material_ids = [int(row.material_item_id) for row in (batch.items or []) if row.material_item_id]
+    materials = MaterialItem.query.filter(MaterialItem.id.in_(material_ids)).all() if material_ids else []
+    material_map = {row.id: row for row in materials}
+    for purchase_item in batch.items or []:
+        _apply_purchase_item_pricing(batch, purchase_item)
+        _sync_purchase_stock_txn(batch, purchase_item, actor_id=get_current_user_id())
+    _update_material_reference_costs_from_batch(batch, material_map)
+    db.session.commit()
+    batch = MaterialPurchaseBatch.query.options(
+        selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
+    ).get(batch.id)
+    return jsonify(batch.to_dict() if batch else {})
 
 
 @materials_bp.get("/tasks/<int:task_id>/usages")
@@ -844,11 +1070,12 @@ def monthly_material_report():
     opening_qty = defaultdict(float)
     opening_amount = defaultdict(float)
     purchased_qty = defaultdict(float)
-    purchased_amount = defaultdict(float)
+    confirmed_purchase_qty = defaultdict(float)
+    confirmed_purchase_amount = defaultdict(float)
+    estimated_purchase_amount = defaultdict(float)
     used_qty = defaultdict(float)
-    used_amount = defaultdict(float)
+    estimated_used_amount = defaultdict(float)
     closing_qty = defaultdict(float)
-    closing_amount = defaultdict(float)
 
     for txn in txns:
         material_id = int(txn.material_item_id)
@@ -863,43 +1090,20 @@ def monthly_material_report():
         if month_start_dt <= txn_date < month_end_dt:
             if txn.txn_type == "purchase":
                 purchased_qty[material_id] += qty_delta
-                purchased_amount[material_id] += amount_delta
+                if amount_delta > 0:
+                    confirmed_purchase_qty[material_id] += qty_delta
+                    confirmed_purchase_amount[material_id] += amount_delta
+                else:
+                    estimated_purchase_amount[material_id] += float(qty_delta or 0.0) * float(item_map.get(material_id).reference_cost or 0.0)
             elif txn.txn_type == "task_use":
                 used_qty[material_id] += abs(qty_delta)
-                used_amount[material_id] += abs(amount_delta)
+                estimated_used_amount[material_id] += abs(amount_delta)
 
         closing_qty[material_id] += qty_delta
-        closing_amount[material_id] += amount_delta
 
-    per_material_rows: list[dict] = []
-    for item in items:
-        material_id = item.id
-        close_qty = float(closing_qty.get(material_id, 0.0))
-        close_amt = float(closing_amount.get(material_id, 0.0))
-        avg_cost = (close_amt / close_qty) if abs(close_qty) > 1e-9 else float(item.reference_cost or 0.0)
-        per_material_rows.append(
-            {
-                "material_item_id": material_id,
-                "display_name": _material_item_display_name(item),
-                "name": item.name,
-                "spec": item.spec,
-                "unit": item.unit,
-                "opening_qty": _round_qty(opening_qty.get(material_id)),
-                "opening_amount": _round_money(opening_amount.get(material_id)),
-                "purchased_qty": _round_qty(purchased_qty.get(material_id)),
-                "purchase_amount": _round_money(purchased_amount.get(material_id)),
-                "used_qty": _round_qty(used_qty.get(material_id)),
-                "used_amount": _round_money(used_amount.get(material_id)),
-                "closing_qty": _round_qty(close_qty),
-                "closing_amount": _round_money(close_amt),
-                "average_cost": round(avg_cost, 4),
-            }
-        )
-
-    # Supplier totals based on purchase batches in the selected month.
     purchase_batches = (
         MaterialPurchaseBatch.query.options(
-            selectinload(MaterialPurchaseBatch.items)
+            selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
         )
         .filter(
             or_(
@@ -913,6 +1117,53 @@ def monthly_material_report():
         .order_by(MaterialPurchaseBatch.purchase_date.asc(), MaterialPurchaseBatch.id.asc())
         .all()
     )
+    unpriced_purchase_material_ids: set[int] = set()
+    for batch in purchase_batches:
+        if _purchase_batch_is_confirmed(batch):
+            continue
+        for item in batch.items or []:
+            unpriced_purchase_material_ids.add(int(item.material_item_id))
+
+    per_material_rows: list[dict] = []
+    for item in items:
+        material_id = item.id
+        open_qty = float(opening_qty.get(material_id, 0.0))
+        open_amt = float(opening_amount.get(material_id, 0.0))
+        confirmed_qty = float(confirmed_purchase_qty.get(material_id, 0.0))
+        confirmed_amt = float(confirmed_purchase_amount.get(material_id, 0.0))
+        used_qty_value = float(used_qty.get(material_id, 0.0))
+        close_qty = float(closing_qty.get(material_id, 0.0))
+        report_cost_basis_qty = open_qty + confirmed_qty
+        report_cost_basis_amount = open_amt + confirmed_amt
+        avg_cost = (
+            report_cost_basis_amount / report_cost_basis_qty
+            if abs(report_cost_basis_qty) > 1e-9
+            else float(item.reference_cost or 0.0)
+        )
+        reported_used_amount = round(used_qty_value * avg_cost, 2)
+        close_amt = round(report_cost_basis_amount - reported_used_amount, 2)
+        per_material_rows.append(
+            {
+                "material_item_id": material_id,
+                "display_name": _material_item_display_name(item),
+                "name": item.name,
+                "spec": item.spec,
+                "unit": item.unit,
+                "opening_qty": _round_qty(open_qty),
+                "opening_amount": _round_money(open_amt),
+                "purchased_qty": _round_qty(purchased_qty.get(material_id)),
+                "confirmed_purchase_qty": _round_qty(confirmed_qty),
+                "confirmed_purchase_amount": _round_money(confirmed_amt),
+                "estimated_purchase_amount": _round_money(estimated_purchase_amount.get(material_id)),
+                "used_qty": _round_qty(used_qty_value),
+                "used_amount": _round_money(reported_used_amount),
+                "estimated_used_amount": _round_money(estimated_used_amount.get(material_id)),
+                "closing_qty": _round_qty(close_qty),
+                "closing_amount": _round_money(close_amt),
+                "average_cost": round(avg_cost, 4),
+                "has_unpriced_purchases": material_id in unpriced_purchase_material_ids,
+            }
+        )
     supplier_summary = defaultdict(lambda: {"supplier_name": "", "batch_count": 0, "total_amount": 0.0})
     purchase_batches_payload = []
     for batch in purchase_batches:
@@ -928,8 +1179,11 @@ def monthly_material_report():
                 "supplier_name": supplier,
                 "purchase_date": batch.purchase_date.isoformat() if batch.purchase_date else None,
                 "statement_month": batch.statement_month,
+                "status": batch.status or "draft",
+                "confirmed_at": batch.confirmed_at.isoformat() if batch.confirmed_at else None,
                 "total_amount": batch_total,
                 "item_count": len(batch.items or []),
+                "unpriced_item_count": sum(1 for item in (batch.items or []) if float(item.unit_cost or 0.0) <= 0),
             }
         )
 
@@ -944,10 +1198,14 @@ def monthly_material_report():
 
     summary = {
         "month": month_text,
-        "purchase_total_amount": _round_money(sum(row["purchase_amount"] for row in per_material_rows)),
+        "purchase_total_amount": _round_money(sum(row["confirmed_purchase_amount"] for row in per_material_rows)),
+        "confirmed_purchase_amount": _round_money(sum(row["confirmed_purchase_amount"] for row in per_material_rows)),
+        "estimated_purchase_amount": _round_money(sum(row["estimated_purchase_amount"] for row in per_material_rows)),
         "usage_total_amount": _round_money(sum(row["used_amount"] for row in per_material_rows)),
+        "estimated_usage_amount": _round_money(sum(row["estimated_used_amount"] for row in per_material_rows)),
         "opening_stock_amount": _round_money(sum(row["opening_amount"] for row in per_material_rows)),
         "closing_stock_amount": _round_money(sum(row["closing_amount"] for row in per_material_rows)),
+        "has_unpriced_purchases": any(row["has_unpriced_purchases"] for row in per_material_rows),
         "material_item_count": len(per_material_rows),
         "supplier_count": len(supplier_rows),
         "purchase_batch_count": len(purchase_batches_payload),

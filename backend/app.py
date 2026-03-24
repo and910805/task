@@ -255,6 +255,7 @@ def create_app() -> Flask:
             _ensure_quote_item_unit_column()
             _ensure_invoice_item_unit_column()
             _ensure_invoice_signature_columns()
+            _ensure_material_purchase_pricing_columns()
         else:
             app.logger.info("Skip startup DB schema init (INIT_DB_ON_STARTUP is disabled).")
 
@@ -278,6 +279,7 @@ def create_app() -> Flask:
         _ensure_quote_item_unit_column()
         _ensure_invoice_item_unit_column()
         _ensure_invoice_signature_columns()
+        _ensure_material_purchase_pricing_columns()
         click.echo("Database schema initialized.")
 
     return app
@@ -394,6 +396,28 @@ def _ensure_invoice_signature_columns() -> None:
         return
     for statement in statements:
         db.session.execute(text(statement))
+    db.session.commit()
+
+
+def _ensure_material_purchase_pricing_columns() -> None:
+    inspector = inspect(db.engine)
+    table_names = set(inspector.get_table_names())
+    dialect = db.engine.dialect.name
+    if dialect not in {"sqlite", "postgresql"}:
+        return
+
+    if "material_purchase_batch" in table_names:
+        batch_columns = {column["name"] for column in inspector.get_columns("material_purchase_batch")}
+        batch_statements = []
+        if "status" not in batch_columns:
+            batch_statements.append("ALTER TABLE material_purchase_batch ADD COLUMN status VARCHAR(32)")
+        if "confirmed_at" not in batch_columns:
+            batch_statements.append("ALTER TABLE material_purchase_batch ADD COLUMN confirmed_at TIMESTAMP")
+        for statement in batch_statements:
+            db.session.execute(text(statement))
+        if "status" not in batch_columns:
+            db.session.execute(text("UPDATE material_purchase_batch SET status = 'confirmed' WHERE status IS NULL"))
+
     db.session.commit()
 
 
