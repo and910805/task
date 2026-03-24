@@ -245,8 +245,8 @@ a:hover {
 
 .app-sidebar__nav {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  gap: 0.45rem;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
 }
 
 .global-search {
@@ -314,31 +314,120 @@ a:hover {
   color: var(--muted-color);
 }
 
-.app-sidebar__link {
-  display: inline-flex;
+.app-sidebar__groups {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.app-sidebar__group {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(241, 245, 249, 0.66)),
+    rgba(255, 255, 255, 0.42);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  overflow: hidden;
+}
+
+.app-sidebar__group.is-active {
+  border-color: rgba(217, 119, 6, 0.4);
+  box-shadow: 0 10px 30px rgba(217, 119, 6, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.app-sidebar__group-toggle {
+  width: 100%;
+  display: flex;
   align-items: center;
-  justify-content: center;
-  min-height: 38px;
-  padding: 0.4rem 0.65rem;
-  border-radius: 10px;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.95rem 1rem;
+  border: 0;
+  background: transparent;
+  color: var(--panel-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.app-sidebar__group-copy {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.app-sidebar__group-copy strong {
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.app-sidebar__group-copy small {
+  color: var(--muted-color);
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+}
+
+.app-sidebar__group-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--muted-color);
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.app-sidebar__group-links {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0 0.75rem 0.8rem 0.75rem;
+}
+
+.app-sidebar__link {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 40px;
+  padding: 0.7rem 0.9rem;
+  border-radius: 14px;
   border: 1px solid transparent;
   color: var(--panel-text);
-  background: rgba(148, 163, 184, 0.12);
-  font-weight: 600;
-  font-size: 0.9rem;
+  background: rgba(148, 163, 184, 0.1);
+  font-weight: 700;
+  font-size: 0.92rem;
   transition: border-color 0.2s ease, background 0.2s ease, transform 0.15s ease;
 }
 
+.app-sidebar__sublink {
+  position: relative;
+  padding-left: 1.1rem;
+}
+
+.app-sidebar__sublink::before {
+  content: '';
+  position: absolute;
+  left: 0.62rem;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.85);
+  transform: translateY(-50%);
+}
+
 .app-sidebar__link:hover {
-  border-color: var(--accent-color);
-  background: rgba(217, 119, 6, 0.14);
+  border-color: rgba(217, 119, 6, 0.35);
+  background: rgba(217, 119, 6, 0.1);
   transform: translateY(-1px);
 }
 
 .app-sidebar__link.is-active {
-  background: linear-gradient(135deg, rgba(217, 119, 6, 0.24), rgba(217, 119, 6, 0.12));
-  border-color: rgba(217, 119, 6, 0.55);
+  background: linear-gradient(135deg, rgba(255, 237, 213, 0.95), rgba(255, 247, 237, 0.92));
+  border-color: rgba(249, 115, 22, 0.5);
   color: var(--accent-hover);
+}
+
+.app-sidebar__link.is-active::before {
+  background: var(--accent-color);
 }
 
 .app-sidebar__footer {

@@ -45,7 +45,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as pdf_canvas
-from reportlab.platypus import Image, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import Image, KeepInFrame, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 crm_bp = Blueprint("crm", __name__)
 
@@ -756,6 +756,13 @@ def _format_amount_number(amount: float) -> str:
     return f"{safe_amount:,.2f}"
 
 
+def _format_compact_table_number(value: float) -> str:
+    safe_value = round(float(value or 0), 2)
+    if safe_value.is_integer():
+        return f"{safe_value:,.0f}"
+    return f"{safe_value:,.2f}".rstrip("0").rstrip(".")
+
+
 def _financial_group_to_text(group_value: int) -> str:
     if group_value <= 0:
         return ""
@@ -1116,8 +1123,8 @@ def _build_quote_template_pdf(
                 "",
                 item_unit,
                 f"{item_quantity:.2f}",
-                f"{item_unit_price:.2f}",
-                f"{item_amount:.2f}",
+                _format_compact_table_number(item_unit_price),
+                _format_compact_table_number(item_amount),
                 "",
             ]
         )
@@ -1191,6 +1198,12 @@ def _build_quote_template_pdf(
     item_cell_style.leading = 11
     item_cell_style.textColor = colors.HexColor("#111827")
     item_cell_style.wordWrap = "CJK"
+    numeric_cell_style = styles["Normal"].clone("QuoteTemplateNumericCell")
+    numeric_cell_style.fontName = PDF_FONT_NAME
+    numeric_cell_style.fontSize = 9
+    numeric_cell_style.leading = 10
+    numeric_cell_style.alignment = 2
+    numeric_cell_style.textColor = colors.HexColor("#111827")
 
     def _table_paragraph(value: object, *, alignment: int = 0):
         text = str(value or "").strip()
@@ -1199,6 +1212,13 @@ def _build_quote_template_pdf(
         cell_style = item_cell_style.clone(f"QuoteTemplateItemCell-{alignment}")
         cell_style.alignment = alignment
         return Paragraph(escape(text).replace("\n", "<br />"), cell_style)
+
+    def _fit_numeric_cell(value: object, *, width_mm: float):
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        paragraph = Paragraph(escape(text), numeric_cell_style)
+        return KeepInFrame((width_mm * mm) - 3, 7 * mm, [paragraph], mode="shrink")
 
     story = [
         Paragraph("立翔水電工程行", title_style),
@@ -1215,7 +1235,10 @@ def _build_quote_template_pdf(
     for row_index in range(1, len(rows) - 1):
         rows[row_index][1] = _table_paragraph(rows[row_index][1], alignment=0)
         rows[row_index][2] = _table_paragraph(rows[row_index][2], alignment=0)
+        rows[row_index][5] = _fit_numeric_cell(rows[row_index][5], width_mm=20)
+        rows[row_index][6] = _fit_numeric_cell(rows[row_index][6], width_mm=20)
         rows[row_index][7] = _table_paragraph(rows[row_index][7], alignment=0)
+    rows[-1][6] = _fit_numeric_cell(rows[-1][6], width_mm=20)
 
     table = Table(
         rows,
