@@ -613,16 +613,23 @@ class WebsiteBooking(db.Model):
     phone = db.Column(db.String(64), nullable=False)
     email = db.Column(db.String(255))
     service = db.Column(db.String(255), nullable=False)
+    inquiry_type = db.Column(db.String(32), nullable=False, default="booking")
+    preferred_time = db.Column(db.String(120))
+    budget_range = db.Column(db.String(120))
+    source_channel = db.Column(db.String(64))
     message = db.Column(db.Text)
     address = db.Column(db.Text)
     source_url = db.Column(db.Text)
     user_agent = db.Column(db.Text)
     client_ip = db.Column(db.String(64))
     status = db.Column(db.String(32), nullable=False, default="pending")
+    follow_up_note = db.Column(db.Text)
+    last_contacted_at = db.Column(db.DateTime)
     converted_customer_id = db.Column(db.Integer, db.ForeignKey("customer.id"), nullable=True)
     converted_contact_id = db.Column(db.Integer, db.ForeignKey("contact.id"), nullable=True)
     converted_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
     converted_at = db.Column(db.DateTime)
+    closed_at = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -637,17 +644,24 @@ class WebsiteBooking(db.Model):
             "phone": self.phone,
             "email": self.email,
             "service": self.service,
+            "inquiry_type": self.inquiry_type,
+            "preferred_time": self.preferred_time,
+            "budget_range": self.budget_range,
+            "source_channel": self.source_channel,
             "message": self.message,
             "address": self.address,
             "source_url": self.source_url,
             "user_agent": self.user_agent,
             "client_ip": self.client_ip,
             "status": self.status,
+            "follow_up_note": self.follow_up_note,
+            "last_contacted_at": self.last_contacted_at.isoformat() if self.last_contacted_at else None,
             "converted_customer_id": self.converted_customer_id,
             "converted_contact_id": self.converted_contact_id,
             "converted_by_id": self.converted_by_id,
             "converted_by_username": self.converted_by.username if self.converted_by else None,
             "converted_at": self.converted_at.isoformat() if self.converted_at else None,
+            "closed_at": self.closed_at.isoformat() if self.closed_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

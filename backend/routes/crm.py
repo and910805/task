@@ -53,6 +53,8 @@ READ_ROLES = ("site_supervisor", "hq_staff", "admin")
 WRITE_ROLES = ("site_supervisor", "hq_staff", "admin")
 VALID_QUOTE_STATUS = {"draft", "sent", "accepted", "rejected", "expired"}
 VALID_INVOICE_STATUS = {"draft", "issued", "partially_paid", "paid", "cancelled"}
+VALID_WEBSITE_BOOKING_TYPES = {"booking", "quote", "contact"}
+VALID_WEBSITE_BOOKING_STATUS = {"pending", "contacted", "quoted", "converted", "closed"}
 
 PDF_FONT_NAME = "Helvetica"
 PDF_FONT_ENV = "PDF_FONT_PATH"
@@ -1610,6 +1612,23 @@ def _ensure_website_booking_table() -> None:
     WebsiteBooking.__table__.create(bind=db.engine, checkfirst=True)
 
 
+def _normalize_website_booking_type(raw_value: str | None) -> str:
+    value = _trim(raw_value).lower()
+    return value if value in VALID_WEBSITE_BOOKING_TYPES else "booking"
+
+
+def _normalize_website_booking_status(raw_value: str | None, *, fallback: str = "pending") -> str:
+    value = _trim(raw_value).lower()
+    return value if value in VALID_WEBSITE_BOOKING_STATUS else fallback
+
+
+def _website_booking_status_counts(rows: list[WebsiteBooking]) -> dict[str, int]:
+    counts = {key: 0 for key in VALID_WEBSITE_BOOKING_STATUS}
+    for row in rows:
+        counts[_normalize_website_booking_status(getattr(row, "status", None))] += 1
+    return counts
+
+
 @crm_bp.post("/public/bookings")
 def create_public_booking():
     _ensure_website_booking_table()
@@ -1617,11 +1636,14 @@ def create_public_booking():
     name = _trim(data.get("name"))
     phone = _trim(data.get("phone"))
     email = _trim(data.get("email"))
-    service = _trim(data.get("service")) or "未填寫"
+    service = _trim(data.get("service")) or "一般諮詢"
+    inquiry_type = _normalize_website_booking_type(data.get("inquiry_type"))
     preferred_time = _trim(data.get("preferred_time"))
+    budget_range = _trim(data.get("budget_range"))
     message = _trim(data.get("message"))
     address = _trim(data.get("address"))
     source_url = _trim(data.get("source_url")) or _trim(request.referrer)
+    source_channel = _trim(data.get("source_channel")) or "website"
     user_agent = _trim(request.headers.get("User-Agent"))
     client_ip = _trim((request.headers.get("X-Forwarded-For") or "").split(",")[0]) or _trim(request.remote_addr)
 
@@ -1629,7 +1651,7 @@ def create_public_booking():
         return jsonify({"msg": "name is required"}), 400
     if not phone:
         return jsonify({"msg": "phone is required"}), 400
-    if not address:
+    if inquiry_type in {"booking", "quote"} and not address:
         return jsonify({"msg": "address is required"}), 400
     merged_message = message
     if preferred_time:
@@ -1640,6 +1662,10 @@ def create_public_booking():
         phone=phone,
         email=email,
         service=service,
+        inquiry_type=inquiry_type,
+        preferred_time=preferred_time or None,
+        budget_range=budget_range or None,
+        source_channel=source_channel,
         message=merged_message,
         address=address,
         source_url=source_url,
@@ -1666,11 +1692,14 @@ def create_public_booking():
 def list_public_bookings():
     _ensure_website_booking_table()
     status = _trim(request.args.get("status"))
+    inquiry_type = request.args.get("inquiry_type")
     q = _trim(request.args.get("q"))
 
     query = WebsiteBooking.query.order_by(WebsiteBooking.created_at.desc(), WebsiteBooking.id.desc())
-    if status in {"pending", "converted"}:
+    if status in VALID_WEBSITE_BOOKING_STATUS:
         query = query.filter(WebsiteBooking.status == status)
+    if inquiry_type:
+        query = query.filter(WebsiteBooking.inquiry_type == _normalize_website_booking_type(inquiry_type))
     if q:
         pattern = f"%{q}%"
         query = query.filter(
@@ -1678,9 +1707,54 @@ def list_public_bookings():
             | (WebsiteBooking.phone.ilike(pattern))
             | (WebsiteBooking.email.ilike(pattern))
             | (WebsiteBooking.service.ilike(pattern))
+            | (WebsiteBooking.address.ilike(pattern))
         )
     rows = query.limit(500).all()
     return jsonify([row.to_dict() for row in rows])
+
+
+@crm_bp.put("/public-bookings/<int:booking_id>")
+@role_required(*WRITE_ROLES)
+def update_public_booking(booking_id: int):
+    _ensure_website_booking_table()
+    booking = WebsiteBooking.query.get_or_404(booking_id)
+    before_snapshot = booking.to_dict()
+    data = request.get_json(silent=True) or {}
+
+    if "status" in data:
+        booking.status = _normalize_website_booking_status(data.get("status"), fallback=booking.status or "pending")
+        if booking.status in {"contacted", "quoted"}:
+            booking.last_contacted_at = datetime.utcnow()
+        if booking.status == "closed":
+            booking.closed_at = datetime.utcnow()
+        elif booking.status != "closed":
+            booking.closed_at = None
+    if "follow_up_note" in data:
+        booking.follow_up_note = _trim(data.get("follow_up_note")) or None
+    if "service" in data:
+        booking.service = _trim(data.get("service")) or booking.service
+    if "preferred_time" in data:
+        booking.preferred_time = _trim(data.get("preferred_time")) or None
+    if "budget_range" in data:
+        booking.budget_range = _trim(data.get("budget_range")) or None
+
+    after_snapshot = booking.to_dict()
+    changes = _audit_field_changes(
+        before_snapshot,
+        after_snapshot,
+        fields=["status", "follow_up_note", "service", "preferred_time", "budget_range", "last_contacted_at", "closed_at"],
+    )
+    if changes:
+        _append_audit_log(
+            action="website_lead_update",
+            entity_type="website_booking",
+            entity_id=booking.id,
+            entity_label=f"Lead #{booking.id}",
+            details={"changes": changes, "after": after_snapshot},
+            note="Updated website lead",
+        )
+    db.session.commit()
+    return jsonify(booking.to_dict())
 
 
 @crm_bp.post("/public-bookings/<int:booking_id>/convert")
@@ -1700,8 +1774,14 @@ def convert_public_booking_to_customer(booking_id: int):
         "Source: website booking",
         f"Booking ID: {booking.id}",
     ]
-    if booking.service and booking.service != "未填寫":
+    if booking.inquiry_type:
+        note_parts.append(f"Type: {booking.inquiry_type}")
+    if booking.service and booking.service != "一般諮詢":
         note_parts.append(f"Service: {booking.service}")
+    if booking.preferred_time:
+        note_parts.append(f"Preferred time: {booking.preferred_time}")
+    if booking.budget_range:
+        note_parts.append(f"Budget: {booking.budget_range}")
     if booking.message:
         note_parts.append(f"Message: {booking.message}")
     if booking.source_url:
@@ -1713,6 +1793,8 @@ def convert_public_booking_to_customer(booking_id: int):
     note_line = "\n".join(note_parts)
     # Keep customer/contact notes concise; technical metadata stays in booking record.
     note_parts = [f"網站預約轉入（#{booking.id}）"]
+    if booking.inquiry_type:
+        note_parts.append(f"類型：{booking.inquiry_type}")
     if booking.message:
         note_parts.append(booking.message)
     note_line = "\n".join(note_parts)
@@ -1737,6 +1819,22 @@ def convert_public_booking_to_customer(booking_id: int):
     booking.converted_contact_id = contact.id
     booking.converted_by_id = get_current_user_id()
     booking.converted_at = datetime.utcnow()
+    booking.last_contacted_at = booking.last_contacted_at or booking.converted_at
+    booking.closed_at = None
+    _append_audit_log(
+        action="website_lead_convert",
+        entity_type="website_booking",
+        entity_id=booking.id,
+        entity_label=f"Lead #{booking.id}",
+        details={
+            "booking": booking.to_dict(),
+            "customer_id": customer.id,
+            "customer_name": customer.name,
+            "contact_id": contact.id,
+            "contact_name": contact.name,
+        },
+        note="Converted website lead to customer",
+    )
     db.session.commit()
 
     return jsonify(
@@ -1745,6 +1843,84 @@ def convert_public_booking_to_customer(booking_id: int):
             "booking": booking.to_dict(),
             "customer": customer.to_dict(),
             "contact": contact.to_dict(),
+        }
+    )
+
+
+@crm_bp.get("/lead-metrics")
+@role_required(*READ_ROLES)
+def website_lead_metrics():
+    _ensure_website_booking_table()
+    days = request.args.get("days", default=180, type=int) or 180
+    days = max(30, min(days, 365))
+    start_at = datetime.utcnow() - timedelta(days=days)
+
+    leads = (
+        WebsiteBooking.query.filter(WebsiteBooking.created_at >= start_at)
+        .order_by(WebsiteBooking.created_at.desc(), WebsiteBooking.id.desc())
+        .all()
+    )
+    quotes = Quote.query.filter(Quote.created_at >= start_at).all()
+    invoices = Invoice.query.filter(Invoice.created_at >= start_at).all()
+
+    status_counts = _website_booking_status_counts(leads)
+    type_counts = {key: 0 for key in VALID_WEBSITE_BOOKING_TYPES}
+    for row in leads:
+        type_counts[_normalize_website_booking_type(getattr(row, "inquiry_type", None))] += 1
+
+    conversion_count = status_counts.get("converted", 0)
+    conversion_rate = round((conversion_count / len(leads)) * 100.0, 2) if leads else 0.0
+    recent_30d_start = datetime.utcnow() - timedelta(days=30)
+
+    monthly_map: dict[str, dict[str, object]] = {}
+    today_month = date.today().month
+    today_year = date.today().year
+    for offset in range(5, -1, -1):
+        month_index = (today_year * 12 + today_month - 1) - offset
+        year = month_index // 12
+        month = month_index % 12 + 1
+        month_pointer = date(year, month, 1)
+        month_key = month_pointer.strftime("%Y-%m")
+        monthly_map[month_key] = {"month": month_key, "leads": 0, "converted": 0, "quotes": 0, "invoice_total": 0.0}
+
+    for row in leads:
+        month_key = (row.created_at or datetime.utcnow()).strftime("%Y-%m")
+        monthly_map.setdefault(month_key, {"month": month_key, "leads": 0, "converted": 0, "quotes": 0, "invoice_total": 0.0})
+        monthly_map[month_key]["leads"] += 1
+        if row.status == "converted":
+            monthly_map[month_key]["converted"] += 1
+
+    for row in quotes:
+        month_key = (row.created_at or datetime.utcnow()).strftime("%Y-%m")
+        monthly_map.setdefault(month_key, {"month": month_key, "leads": 0, "converted": 0, "quotes": 0, "invoice_total": 0.0})
+        monthly_map[month_key]["quotes"] += 1
+
+    for row in invoices:
+        month_key = (row.created_at or datetime.utcnow()).strftime("%Y-%m")
+        monthly_map.setdefault(month_key, {"month": month_key, "leads": 0, "converted": 0, "quotes": 0, "invoice_total": 0.0})
+        monthly_map[month_key]["invoice_total"] += float(row.total_amount or 0.0)
+
+    return jsonify(
+        {
+            "range_days": days,
+            "summary": {
+                "total_leads": len(leads),
+                "recent_30d_leads": sum(1 for row in leads if row.created_at and row.created_at >= recent_30d_start),
+                "pending_leads": status_counts.get("pending", 0),
+                "contacted_leads": status_counts.get("contacted", 0),
+                "quoted_leads": status_counts.get("quoted", 0),
+                "converted_leads": conversion_count,
+                "closed_leads": status_counts.get("closed", 0),
+                "conversion_rate": conversion_rate,
+                "quote_count": len(quotes),
+                "quote_total": round(sum(float(row.total_amount or 0.0) for row in quotes), 2),
+                "invoice_count": len(invoices),
+                "invoice_total": round(sum(float(row.total_amount or 0.0) for row in invoices), 2),
+                "paid_total": round(sum(float(_invoice_payment_total(row) or 0.0) for row in invoices), 2),
+            },
+            "by_type": [{"type": key, "count": type_counts.get(key, 0)} for key in sorted(type_counts.keys())],
+            "by_status": [{"status": key, "count": status_counts.get(key, 0)} for key in sorted(status_counts.keys())],
+            "monthly": sorted(monthly_map.values(), key=lambda item: item["month"]),
         }
     )
 

@@ -93,8 +93,8 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
           },
           {
             to: '/crm/bookings',
-            label: '\u7db2\u7ad9\u9810\u7d04',
-            desc: '\u6aa2\u8996\u5b98\u7db2\u9810\u7d04\u8cc7\u6599\u4e26\u8f49\u6210\u5ba2\u6236\u8207\u806f\u7d61\u4eba\u3002',
+            label: '\u7db2\u7ad9\u4f86\u55ae',
+            desc: '\u7ba1\u7406\u5b98\u7db2\u7684\u9810\u7d04\u3001\u8a62\u50f9\u8207\u806f\u7d61\u540d\u55ae\uff0c\u4e26\u8ffd\u8e64\u8f49\u55ae\u3002',
             tag: 'Leads',
             exact: true,
           },

@@ -251,6 +251,7 @@ def create_app() -> Flask:
             db.create_all()
             _ensure_user_reminder_frequency_column()
             _ensure_task_location_url_column()
+            _ensure_website_booking_columns()
             _ensure_quote_recipient_name_column()
             _ensure_quote_item_unit_column()
             _ensure_invoice_item_unit_column()
@@ -275,6 +276,7 @@ def create_app() -> Flask:
         db.create_all()
         _ensure_user_reminder_frequency_column()
         _ensure_task_location_url_column()
+        _ensure_website_booking_columns()
         _ensure_quote_recipient_name_column()
         _ensure_quote_item_unit_column()
         _ensure_invoice_item_unit_column()
@@ -337,6 +339,42 @@ def _ensure_task_location_url_column() -> None:
         text("ALTER TABLE task ADD COLUMN location_url VARCHAR(500)")
     )
     db.session.commit()
+
+
+def _ensure_website_booking_columns() -> None:
+    inspector = inspect(db.engine)
+    if "website_booking" not in inspector.get_table_names():
+        return
+    if db.engine.dialect.name not in {"sqlite", "postgresql"}:
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("website_booking")}
+    statements = []
+    if "inquiry_type" not in columns:
+        statements.append("ALTER TABLE website_booking ADD COLUMN inquiry_type VARCHAR(32)")
+    if "preferred_time" not in columns:
+        statements.append("ALTER TABLE website_booking ADD COLUMN preferred_time VARCHAR(120)")
+    if "budget_range" not in columns:
+        statements.append("ALTER TABLE website_booking ADD COLUMN budget_range VARCHAR(120)")
+    if "source_channel" not in columns:
+        statements.append("ALTER TABLE website_booking ADD COLUMN source_channel VARCHAR(64)")
+    if "follow_up_note" not in columns:
+        statements.append("ALTER TABLE website_booking ADD COLUMN follow_up_note TEXT")
+    if "last_contacted_at" not in columns:
+        statements.append("ALTER TABLE website_booking ADD COLUMN last_contacted_at TIMESTAMP")
+    if "closed_at" not in columns:
+        statements.append("ALTER TABLE website_booking ADD COLUMN closed_at TIMESTAMP")
+
+    for statement in statements:
+        db.session.execute(text(statement))
+
+    if "inquiry_type" not in columns:
+        db.session.execute(text("UPDATE website_booking SET inquiry_type = 'booking' WHERE inquiry_type IS NULL"))
+    if "source_channel" not in columns:
+        db.session.execute(text("UPDATE website_booking SET source_channel = 'website' WHERE source_channel IS NULL"))
+
+    if statements:
+        db.session.commit()
 
 
 def _ensure_quote_item_unit_column() -> None:

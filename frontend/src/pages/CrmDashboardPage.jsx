@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+
 import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
 import { managerRoles } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
-const formatAmount = (value) =>
+const toCurrency = (value) =>
   Number(value || 0).toLocaleString('zh-TW', {
     style: 'currency',
     currency: 'TWD',
@@ -26,85 +27,84 @@ const formatDateTime = (value) => {
 };
 
 const auditActionLabel = (action) => {
-  const key = String(action || '').trim().toLowerCase();
   const map = {
-    catalog_item_create: '新增價目品項',
-    catalog_item_update: '修改價目品項',
-    catalog_item_toggle: '切換品項啟用',
-    catalog_item_delete: '刪除價目品項',
+    catalog_item_create: '新增價目',
+    catalog_item_update: '更新價目',
+    catalog_item_toggle: '切換價目啟用',
+    catalog_item_delete: '刪除價目',
     invoice_create_from_quote: '報價轉請款',
     invoice_update: '更新請款單',
-    invoice_status_update: '變更請款狀態',
-    invoice_cancel: '取消請款',
-    invoice_payment_create: '新增收款紀錄',
-    invoice_payment_delete: '刪除收款紀錄',
+    invoice_status_update: '更新請款狀態',
+    invoice_cancel: '取消請款單',
+    invoice_payment_create: '新增收款',
+    invoice_payment_delete: '刪除收款',
+    website_lead_update: '更新網站名單',
+    website_lead_convert: '網站名單轉客戶',
   };
-  return map[key] || key || '-';
+  return map[String(action || '').trim()] || action || '-';
 };
 
-const auditSummaryText = (row) => {
-  const details = row?.details && typeof row.details === 'object' ? row.details : null;
-  const changes = details?.changes && typeof details.changes === 'object' ? Object.keys(details.changes) : [];
-  if (changes.length > 0) {
-    return `欄位變更：${changes.join('、')}`;
-  }
-  const paymentAmount = details?.payment?.amount;
-  if (paymentAmount !== undefined && paymentAmount !== null) {
-    return `收款金額 NT$ ${Number(paymentAmount || 0).toFixed(2)}`;
-  }
-  const totalAmount = details?.totals?.total_amount;
-  if (totalAmount !== undefined && totalAmount !== null) {
-    return `總額 NT$ ${Number(totalAmount || 0).toFixed(2)}`;
-  }
-  return row?.note || '-';
-};
+const inquiryTypeLabel = (value) =>
+  ({
+    booking: '預約',
+    quote: '詢價',
+    contact: '聯絡',
+  }[String(value || '').trim()] || value || '-');
+
+const summaryCardItems = (boot, leadSummary) => [
+  {
+    label: '網站名單',
+    value: leadSummary.total_leads || 0,
+    hint: `近 30 天 ${leadSummary.recent_30d_leads || 0} 筆`,
+  },
+  {
+    label: '待跟進',
+    value: leadSummary.pending_leads || 0,
+    hint: `已接洽 ${leadSummary.contacted_leads || 0} 筆`,
+  },
+  {
+    label: '報價單',
+    value: leadSummary.quote_count || boot.quotes.length || 0,
+    hint: toCurrency(leadSummary.quote_total || 0),
+  },
+  {
+    label: '已收款營業額',
+    value: toCurrency(leadSummary.paid_total || 0),
+    hint: `轉換率 ${Number(leadSummary.conversion_rate || 0).toFixed(1)}%`,
+  },
+];
 
 const CrmDashboardPage = () => {
   const { user } = useAuth();
   const isManager = managerRoles.has(user?.role);
-  const [data, setData] = useState({ customers: [], contacts: [], quotes: [] });
+  const [boot, setBoot] = useState({ customers: [], contacts: [], quotes: [] });
+  const [leadMetrics, setLeadMetrics] = useState({ summary: {}, by_type: [], by_status: [], monthly: [] });
+  const [auditLogs, setAuditLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [auditLogs, setAuditLogs] = useState([]);
-  const [auditLoading, setAuditLoading] = useState(false);
-  const [auditError, setAuditError] = useState('');
 
   const loadData = async () => {
     setLoading(true);
     setError('');
-    if (isManager) {
-      setAuditLoading(true);
-      setAuditError('');
-    } else {
-      setAuditLogs([]);
-      setAuditLoading(false);
-      setAuditError('');
-    }
     try {
-      const bootResp = await api.get('crm/boot');
-      const payload = bootResp?.data;
-      setData({
-        customers: payload?.customers ?? [],
-        contacts: payload?.contacts ?? [],
-        quotes: payload?.quotes ?? [],
-      });
+      const requests = [api.get('crm/boot'), api.get('crm/lead-metrics')];
       if (isManager) {
-        try {
-          const auditResp = await api.get('crm/audit-logs', { params: { module: 'crm', limit: 20 } });
-          const rows = auditResp?.data;
-          setAuditLogs(Array.isArray(rows) ? rows : []);
-          setAuditError('');
-        } catch (auditErr) {
-          setAuditLogs([]);
-          setAuditError(auditErr?.networkMessage || auditErr?.response?.data?.msg || '操作紀錄載入失敗');
-        }
+        requests.push(api.get('crm/audit-logs', { params: { module: 'crm', limit: 20 } }));
       }
+      const [bootResp, leadResp, auditResp] = await Promise.all(requests);
+      const payload = bootResp?.data || {};
+      setBoot({
+        customers: Array.isArray(payload.customers) ? payload.customers : [],
+        contacts: Array.isArray(payload.contacts) ? payload.contacts : [],
+        quotes: Array.isArray(payload.quotes) ? payload.quotes : [],
+      });
+      setLeadMetrics(leadResp?.data || { summary: {}, by_type: [], by_status: [], monthly: [] });
+      setAuditLogs(Array.isArray(auditResp?.data) ? auditResp.data : []);
     } catch (err) {
-      const message = err?.networkMessage || err?.response?.data?.msg || 'CRM 資料載入失敗';
-      setError(message);
+      setError(err?.networkMessage || err?.response?.data?.msg || 'CRM 資料載入失敗');
+      setAuditLogs([]);
     } finally {
       setLoading(false);
-      if (isManager) setAuditLoading(false);
     }
   };
 
@@ -112,21 +112,18 @@ const CrmDashboardPage = () => {
     loadData();
   }, [isManager]);
 
-  const metrics = useMemo(() => {
-    const quoteTotal = data.quotes.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
-    return [
-      { label: '客戶數', value: data.customers.length, hint: '建立中的客戶資料' },
-      { label: '聯絡人數', value: data.contacts.length, hint: '客戶窗口資料' },
-      { label: '報價總額', value: formatAmount(quoteTotal), hint: `${data.quotes.length} 筆報價單` },
-      { label: '報價單數', value: data.quotes.length, hint: '含草稿與已建立報價' },
-    ];
-  }, [data]);
+  const summary = leadMetrics?.summary || {};
+  const cards = useMemo(() => summaryCardItems(boot, summary), [boot, summary]);
+  const recentQuotes = useMemo(() => boot.quotes.slice(0, 5), [boot.quotes]);
+  const leadTypeRows = Array.isArray(leadMetrics?.by_type) ? leadMetrics.by_type : [];
+  const leadStatusRows = Array.isArray(leadMetrics?.by_status) ? leadMetrics.by_status : [];
+  const monthlyRows = Array.isArray(leadMetrics?.monthly) ? leadMetrics.monthly.slice(-6) : [];
 
   return (
     <div className="page">
       <AppHeader
-        title="經營管理"
-        subtitle="整合客戶、報價、請款、耗材與營運報表入口"
+        title="CRM 儀表板"
+        subtitle="把網站詢價、預約、聯絡一路追到報價與營收。"
         actions={(
           <button type="button" className="refresh-btn" onClick={loadData} disabled={loading}>
             重新整理
@@ -138,7 +135,7 @@ const CrmDashboardPage = () => {
 
       <section className="panel panel--metrics">
         <div className="metric-grid">
-          {metrics.map((item) => (
+          {cards.map((item) => (
             <article key={item.label} className="metric-card">
               <p className="metric-card__title">{item.label}</p>
               <p className="metric-card__value">{item.value}</p>
@@ -148,22 +145,118 @@ const CrmDashboardPage = () => {
         </div>
       </section>
 
+      <section className="panel panel--table">
+        <div className="panel-header">
+          <h2>網站轉單漏斗</h2>
+          <Link to="/crm/bookings">查看全部名單</Link>
+        </div>
+        <div className="table-wrapper">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>名單來源</th>
+                <th>數量</th>
+                <th>流程狀態</th>
+                <th>數量</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Array.from({ length: Math.max(leadTypeRows.length, leadStatusRows.length, 1) }).map((_, index) => (
+                <tr key={`funnel-${index}`}>
+                  <td>{leadTypeRows[index] ? inquiryTypeLabel(leadTypeRows[index].type) : '-'}</td>
+                  <td>{leadTypeRows[index]?.count ?? '-'}</td>
+                  <td>{leadStatusRows[index]?.status ?? '-'}</td>
+                  <td>{leadStatusRows[index]?.count ?? '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel panel--table">
+        <div className="panel-header">
+          <h2>近六個月成效</h2>
+          <span className="panel-tag">Leads / Revenue</span>
+        </div>
+        <div className="table-wrapper">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>月份</th>
+                <th>網站名單</th>
+                <th>已轉客戶</th>
+                <th>報價單</th>
+                <th>請款金額</th>
+              </tr>
+            </thead>
+            <tbody>
+              {monthlyRows.map((row) => (
+                <tr key={row.month}>
+                  <td>{row.month}</td>
+                  <td>{row.leads}</td>
+                  <td>{row.converted}</td>
+                  <td>{row.quotes}</td>
+                  <td>{toCurrency(row.invoice_total || 0)}</td>
+                </tr>
+              ))}
+              {!loading && monthlyRows.length === 0 ? (
+                <tr>
+                  <td colSpan="5">目前沒有可顯示的網站成效資料</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel panel--table">
+        <div className="panel-header">
+          <h2>最近報價</h2>
+          <Link to="/crm/quotes">前往報價單</Link>
+        </div>
+        <div className="table-wrapper">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>報價單號</th>
+                <th>狀態</th>
+                <th>金額</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recentQuotes.map((quote) => (
+                <tr key={quote.id}>
+                  <td>{quote.quote_no || '-'}</td>
+                  <td>{quote.status || '-'}</td>
+                  <td>{toCurrency(quote.total_amount || 0)}</td>
+                </tr>
+              ))}
+              {!loading && recentQuotes.length === 0 ? (
+                <tr>
+                  <td colSpan="3">目前沒有報價資料</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       {isManager ? (
         <section className="panel panel--table">
           <div className="panel-header">
-            <h2>最近操作紀錄</h2>
+            <h2>最近 CRM 異動</h2>
             <span className="panel-tag">Audit</span>
           </div>
-          {auditError ? <p className="error-text">{auditError}</p> : null}
           <div className="table-wrapper">
             <table className="data-table">
               <thead>
                 <tr>
                   <th>時間</th>
-                  <th>人員</th>
+                  <th>操作者</th>
                   <th>動作</th>
                   <th>對象</th>
-                  <th>內容</th>
+                  <th>備註</th>
                 </tr>
               </thead>
               <tbody>
@@ -173,17 +266,12 @@ const CrmDashboardPage = () => {
                     <td>{row.actor_username || '-'}</td>
                     <td>{auditActionLabel(row.action)}</td>
                     <td>{row.entity_label || row.entity_type || '-'}</td>
-                    <td>{auditSummaryText(row)}</td>
+                    <td>{row.note || '-'}</td>
                   </tr>
                 ))}
-                {!auditLoading && auditLogs.length === 0 ? (
+                {!loading && auditLogs.length === 0 ? (
                   <tr>
-                    <td colSpan="5">尚無操作紀錄</td>
-                  </tr>
-                ) : null}
-                {auditLoading ? (
-                  <tr>
-                    <td colSpan="5">載入中...</td>
+                    <td colSpan="5">目前沒有 CRM 操作紀錄</td>
                   </tr>
                 ) : null}
               </tbody>
@@ -191,38 +279,6 @@ const CrmDashboardPage = () => {
           </div>
         </section>
       ) : null}
-
-      <section className="panel panel--table">
-        <div className="panel-header">
-          <h2>最近報價單</h2>
-          <Link to="/crm/quotes">查看全部</Link>
-        </div>
-        <div className="table-wrapper">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>單號</th>
-                <th>狀態</th>
-                <th>金額</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.quotes.slice(0, 5).map((quote) => (
-                <tr key={quote.id}>
-                  <td>{quote.quote_no}</td>
-                  <td>{quote.status}</td>
-                  <td>{Number(quote.total_amount || 0).toFixed(2)}</td>
-                </tr>
-              ))}
-              {!loading && data.quotes.length === 0 ? (
-                <tr>
-                  <td colSpan="3">尚無報價單</td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      </section>
     </div>
   );
 };
