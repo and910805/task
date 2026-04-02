@@ -12,11 +12,34 @@ const blankMarkerItem = () => ({ _key: nextLineItemKey(), description: '以下�
 const withLineItemKey = (item = {}) => ({ _key: nextLineItemKey(), ...item });
 const quoteDisplayAmount = (quote) => Number(quote?.total_amount ?? quote?.subtotal ?? 0).toFixed(2);
 const DEFAULT_QUOTE_VALID_DAYS = 10;
+const MANUAL_TAX_ITEM_NAME = '稅金';
+const MANUAL_TAX_RATE = 0.05;
 const toNumber = (value) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : 0;
 };
 const round2 = (value) => Math.round(toNumber(value) * 100) / 100;
+const isBlankMarkerItem = (item) => String(item?.description || '').trim() === '以下空白';
+const isManualTaxItem = (item) => String(item?.description || '').trim() === MANUAL_TAX_ITEM_NAME;
+const calculateManualTaxSubtotal = (items) =>
+  items.reduce((sum, item) => {
+    if (isBlankMarkerItem(item) || isManualTaxItem(item)) return sum;
+    return sum + toNumber(item?.quantity) * toNumber(item?.unit_price);
+  }, 0);
+const syncManualTaxItems = (items) => {
+  if (!Array.isArray(items) || !items.some(isManualTaxItem)) return items;
+  const taxAmount = round2(calculateManualTaxSubtotal(items) * MANUAL_TAX_RATE);
+  return items.map((item) =>
+    isManualTaxItem(item)
+      ? {
+          ...item,
+          unit: '式',
+          quantity: 1,
+          unit_price: taxAmount,
+        }
+      : item,
+  );
+};
 const STATUS_LABELS = {
   quote: {
     draft: '尚未送出',
@@ -138,6 +161,12 @@ const CrmQuotesPage = () => {
     note: '',
   }));
   const [items, setItems] = useState([blankItem()]);
+  const updateItems = (updater) => {
+    setItems((prev) => {
+      const nextItems = typeof updater === 'function' ? updater(prev) : updater;
+      return syncManualTaxItems(nextItems);
+    });
+  };
 
   const loadBase = async () => {
     const [customerRes, contactRes, catalogRes] = await Promise.all([
@@ -297,7 +326,7 @@ const CrmQuotesPage = () => {
   };
 
   const handleItemChange = (index, field, value) => {
-    setItems((prev) => prev.map((item, idx) => (idx === index ? { ...item, [field]: value } : item)));
+    updateItems((prev) => prev.map((item, idx) => (idx === index ? { ...item, [field]: value } : item)));
   };
 
   const resetForm = () => {
@@ -322,16 +351,16 @@ const CrmQuotesPage = () => {
     setQuoteVersions([]);
   };
 
-  const addItem = () => setItems((prev) => [...prev, blankItem()]);
+  const addItem = () => updateItems((prev) => [...prev, blankItem()]);
 
   const removeItem = (index) => {
-    setItems((prev) => {
+    updateItems((prev) => {
       const next = prev.filter((_, idx) => idx !== index);
       return next.length ? next : [blankItem()];
     });
   };
   const moveItem = (index, direction) => {
-    setItems((prev) => {
+    updateItems((prev) => {
       const targetIndex = index + direction;
       if (targetIndex < 0 || targetIndex >= prev.length) return prev;
       const next = [...prev];
@@ -344,7 +373,7 @@ const CrmQuotesPage = () => {
     if (!catalogPick) return;
     const selected = catalogItems.find((item) => String(item.id) === String(catalogPick));
     if (!selected) return;
-    setItems((prev) => [
+    updateItems((prev) => [
       ...prev,
       {
         _key: nextLineItemKey(),
@@ -367,7 +396,7 @@ const CrmQuotesPage = () => {
 
   const addSpecialItem = () => {
     if (specialItemType === 'blank') {
-      setItems((prev) => [...prev, blankMarkerItem()]);
+      updateItems((prev) => [...prev, blankMarkerItem()]);
       return;
     }
     if (specialItemType === 'tax') {
@@ -376,22 +405,19 @@ const CrmQuotesPage = () => {
         setError('已設定稅率，PDF 會自動產生稅金列，不需手動加入。');
         return;
       }
-      const subtotal = items.reduce((sum, row) => {
-        const name = String(row?.description || '').trim();
-        if (!name || name === '以下空白') return sum;
-        const quantity = toNumber(row?.quantity);
-        const unitPrice = toNumber(row?.unit_price);
-        return sum + quantity * unitPrice;
-      }, 0);
-      setItems((prev) => [
+      if (items.some(isManualTaxItem)) {
+        setError('已經有稅金品項，後續會自動重算，不需重複加入。');
+        return;
+      }
+      updateItems((prev) => [
         ...prev,
         {
           _key: nextLineItemKey(),
-          description: '稅金',
+          description: MANUAL_TAX_ITEM_NAME,
           unit: '式',
           note: '',
           quantity: 1,
-          unit_price: round2(subtotal * 0.05),
+          unit_price: 0,
         },
       ]);
       return;
@@ -428,7 +454,7 @@ const CrmQuotesPage = () => {
       tax_rate: Number(quote.tax_rate || 0),
       note: quote.note || '',
     });
-    setItems(
+    updateItems(
       Array.isArray(quote.items) && quote.items.length > 0
         ? quote.items.map((item) =>
             withLineItemKey({
@@ -898,6 +924,7 @@ const CrmQuotesPage = () => {
                   onChange={(event) => handleItemChange(idx, 'quantity', event.target.value)}
                   placeholder="數量"
                   step="0.1"
+                  disabled={isManualTaxItem(item)}
                 />
                 <input
                   type="number"
@@ -905,6 +932,7 @@ const CrmQuotesPage = () => {
                   onChange={(event) => handleItemChange(idx, 'unit_price', event.target.value)}
                   placeholder="單價"
                   step="0.1"
+                  disabled={isManualTaxItem(item)}
                 />
                 <button type="button" className="secondary-btn" onClick={() => moveItem(idx, -1)} disabled={idx === 0}>
                   上移
