@@ -1459,11 +1459,12 @@ button:disabled {
 
 .crm-line-item {
   display: grid;
-  grid-template-columns: minmax(200px, 2fr) repeat(2, minmax(100px, 1fr)) auto;
+  grid-template-columns: minmax(200px, 2fr) repeat(4, minmax(100px, 1fr)) auto;
   gap: 0.75rem;
 }
 
-.crm-line-item input {
+.crm-line-item input,
+.crm-line-item textarea {
   width: 100%;
 }
 

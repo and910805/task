@@ -7,7 +7,7 @@ import SignaturePad from '../components/task/SignaturePad.jsx';
 
 let lineItemKeySeed = 1;
 const nextLineItemKey = () => `line-${lineItemKeySeed++}`;
-const blankItem = () => ({ _key: nextLineItemKey(), description: '', unit: '式', quantity: 1, unit_price: 0 });
+const blankItem = () => ({ _key: nextLineItemKey(), description: '', unit: '式', note: '', quantity: 1, unit_price: 0 });
 const blankMarkerItem = () => ({ _key: nextLineItemKey(), description: '以下空白', unit: '', quantity: 0, unit_price: 0 });
 const withLineItemKey = (item = {}) => ({ _key: nextLineItemKey(), ...item });
 const quoteDisplayAmount = (quote) => Number(quote?.total_amount ?? quote?.subtotal ?? 0).toFixed(2);
@@ -348,6 +348,7 @@ const CrmQuotesPage = () => {
         _key: nextLineItemKey(),
         description: selected.name || '',
         unit: selected.unit || '式',
+        note: '',
         quantity: 1,
         unit_price: Number(selected.unit_price || 0),
       },
@@ -386,6 +387,7 @@ const CrmQuotesPage = () => {
           _key: nextLineItemKey(),
           description: '稅金',
           unit: '式',
+          note: '',
           quantity: 1,
           unit_price: round2(subtotal * 0.05),
         },
@@ -429,6 +431,7 @@ const CrmQuotesPage = () => {
             withLineItemKey({
               description: item.description || '',
               unit: item.unit || '式',
+              note: item.note || '',
               quantity: item.quantity ?? 1,
               unit_price: item.unit_price ?? 0,
             }),
@@ -468,6 +471,7 @@ const CrmQuotesPage = () => {
         items: validItems.map((item) => ({
           description: item.description.trim(),
           unit: (item.unit || '式').trim(),
+          note: (item.note || '').trim() || null,
           quantity: Number(item.quantity || 0),
           unit_price: Number(item.unit_price || 0),
         })),
@@ -870,6 +874,11 @@ const CrmQuotesPage = () => {
                   value={item.unit}
                   onChange={(event) => handleItemChange(idx, 'unit', event.target.value)}
                   placeholder="單位"
+                />
+                <input
+                  value={item.note || ''}
+                  onChange={(event) => handleItemChange(idx, 'note', event.target.value)}
+                  placeholder="備註"
                 />
                 <input
                   type="number"

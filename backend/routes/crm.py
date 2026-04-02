@@ -462,6 +462,7 @@ def _normalize_items(raw_items):
         description = (raw.get("description") or "").strip()
         if not description:
             return None, (jsonify({"msg": f"items[{idx}].description is required"}), 400)
+        note = (raw.get("note") or "").strip() or None
         unit = (raw.get("unit") or "").strip() or "式"
 
         qty, qty_err = _parse_float(raw.get("quantity", 1), f"items[{idx}].quantity", minimum=0)
@@ -478,6 +479,7 @@ def _normalize_items(raw_items):
             {
                 "description": description,
                 "unit": unit,
+                "note": note,
                 "quantity": quantity,
                 "unit_price": unit_price,
                 "amount": amount,
@@ -938,6 +940,7 @@ def _apply_quote_to_template_sheet(ws, quote: Quote, customer: Customer | None, 
         ws[f"G{row}"] = float(item.quantity or 0)
         ws[f"H{row}"] = float(item.unit_price or 0)
         ws[f"I{row}"] = float(item.amount or 0)
+        ws[f"J{row}"] = item.note or ""
 
     total_amount = _quote_display_total_without_tax(quote)
     ws["C27"] = "總計"
@@ -1109,12 +1112,14 @@ def _build_quote_template_pdf(
         if isinstance(item, dict):
             item_description = item.get("description") or ""
             item_unit = item.get("unit") or "式"
+            item_note = item.get("note") or ""
             item_quantity = float(item.get("quantity") or 0)
             item_unit_price = float(item.get("unit_price") or 0)
             item_amount = float(item.get("amount") or 0)
         else:
             item_description = item.description or ""
             item_unit = item.unit or "式"
+            item_note = item.note or ""
             item_quantity = float(item.quantity or 0)
             item_unit_price = float(item.unit_price or 0)
             item_amount = float(item.amount or 0)
@@ -1127,7 +1132,7 @@ def _build_quote_template_pdf(
                 f"{item_quantity:.2f}",
                 _format_compact_table_number(item_unit_price),
                 _format_compact_table_number(item_amount),
-                "",
+                item_note,
             ]
         )
 

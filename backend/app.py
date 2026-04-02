@@ -254,6 +254,7 @@ def create_app() -> Flask:
             _ensure_website_booking_columns()
             _ensure_quote_recipient_name_column()
             _ensure_quote_item_unit_column()
+            _ensure_quote_item_note_column()
             _ensure_invoice_item_unit_column()
             _ensure_invoice_signature_columns()
             _ensure_material_purchase_pricing_columns()
@@ -279,6 +280,7 @@ def create_app() -> Flask:
         _ensure_website_booking_columns()
         _ensure_quote_recipient_name_column()
         _ensure_quote_item_unit_column()
+        _ensure_quote_item_note_column()
         _ensure_invoice_item_unit_column()
         _ensure_invoice_signature_columns()
         _ensure_material_purchase_pricing_columns()
@@ -387,6 +389,19 @@ def _ensure_quote_item_unit_column() -> None:
     if db.engine.dialect.name != "sqlite":
         return
     db.session.execute(text("ALTER TABLE quote_item ADD COLUMN unit VARCHAR(32)"))
+    db.session.commit()
+
+
+def _ensure_quote_item_note_column() -> None:
+    inspector = inspect(db.engine)
+    if "quote_item" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("quote_item")}
+    if "note" in columns:
+        return
+    if db.engine.dialect.name not in {"sqlite", "postgresql"}:
+        return
+    db.session.execute(text("ALTER TABLE quote_item ADD COLUMN note TEXT"))
     db.session.commit()
 
 
