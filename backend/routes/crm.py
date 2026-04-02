@@ -910,7 +910,7 @@ def _apply_quote_to_template_sheet(ws, quote: Quote, customer: Customer | None, 
     recipient = _resolve_quote_recipient_display(quote, customer, contact)
     site_address = (quote.site_address or "").strip()
 
-    ws["D2"] = "立翔水電工程行"
+    ws["D2"] = "立翔水電行"
     ws["D3"] = "估價單"
     ws["D4"] = recipient
     ws["E4"] = "台照"
@@ -1231,7 +1231,7 @@ def _build_quote_template_pdf(
         return KeepInFrame((width_mm * mm) - 3, 7 * mm, [paragraph], mode="shrink")
 
     story = [
-        Paragraph("立翔水電工程行", title_style),
+        Paragraph("立翔水電行", title_style),
         Paragraph("估價單", subtitle_style),
         Spacer(1, 3 * mm),
         Paragraph(f"{recipient} 台照", recipient_style),
