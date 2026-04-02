@@ -253,6 +253,7 @@ def create_app() -> Flask:
             _ensure_task_location_url_column()
             _ensure_website_booking_columns()
             _ensure_quote_recipient_name_column()
+            _ensure_quote_site_address_column()
             _ensure_quote_item_unit_column()
             _ensure_quote_item_note_column()
             _ensure_invoice_item_unit_column()
@@ -279,6 +280,7 @@ def create_app() -> Flask:
         _ensure_task_location_url_column()
         _ensure_website_booking_columns()
         _ensure_quote_recipient_name_column()
+        _ensure_quote_site_address_column()
         _ensure_quote_item_unit_column()
         _ensure_quote_item_note_column()
         _ensure_invoice_item_unit_column()
@@ -415,6 +417,19 @@ def _ensure_quote_recipient_name_column() -> None:
     if db.engine.dialect.name not in {"sqlite", "postgresql"}:
         return
     db.session.execute(text("ALTER TABLE quote ADD COLUMN recipient_name VARCHAR(255)"))
+    db.session.commit()
+
+
+def _ensure_quote_site_address_column() -> None:
+    inspector = inspect(db.engine)
+    if "quote" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("quote")}
+    if "site_address" in columns:
+        return
+    if db.engine.dialect.name not in {"sqlite", "postgresql"}:
+        return
+    db.session.execute(text("ALTER TABLE quote ADD COLUMN site_address VARCHAR(255)"))
     db.session.commit()
 
 

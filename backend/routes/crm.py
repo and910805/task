@@ -908,12 +908,14 @@ def _find_quote_template_path() -> Path | None:
 
 def _apply_quote_to_template_sheet(ws, quote: Quote, customer: Customer | None, contact: Contact | None) -> None:
     recipient = _resolve_quote_recipient_display(quote, customer, contact)
+    site_address = (quote.site_address or "").strip()
 
     ws["D2"] = "立翔水電工程行"
     ws["D3"] = "估價單"
     ws["D4"] = recipient
     ws["E4"] = "台照"
     ws["D5"] = _to_roc_date_text(quote.issue_date)
+    ws["D6"] = f"施工地點：{site_address}" if site_address else "施工地點：__________________________"
 
     # Template reserves rows 7-26 for up to 20 line items.
     for idx, row in enumerate(range(7, 27), start=1):
@@ -1075,6 +1077,7 @@ def _build_quote_template_pdf(
 ):
     _require_embedded_pdf_font()
     recipient = _resolve_quote_recipient_display(quote, customer, contact)
+    site_address = (quote.site_address or "").strip()
     customer_signature_name = (getattr(quote, "customer_signature_name", None) or "").strip()
     customer_signed_at = getattr(quote, "customer_signed_at", None)
     signature_image_path = _invoice_signature_image_path(quote) if getattr(quote, "customer_signature_path", None) else None
@@ -1233,7 +1236,7 @@ def _build_quote_template_pdf(
         Spacer(1, 3 * mm),
         Paragraph(f"{recipient} 台照", recipient_style),
         Paragraph(_to_roc_date_text(quote.issue_date), body_style),
-        Paragraph("施工地點：__________________________", body_style),
+        Paragraph(f"施工地點：{site_address}" if site_address else "施工地點：__________________________", body_style),
         Spacer(1, 4 * mm),
     ]
     story[1] = Paragraph(document_label, subtitle_style)
@@ -2309,6 +2312,7 @@ def create_quote():
         customer_id=customer_id,
         contact_id=contact_id,
         recipient_name=(data.get("recipient_name") or "").strip() or None,
+        site_address=(data.get("site_address") or "").strip() or None,
         issue_date=issue_date,
         expiry_date=expiry_date,
         currency=(data.get("currency") or "TWD").strip().upper() or "TWD",
@@ -2375,6 +2379,8 @@ def update_quote(quote_id: int):
         quote.currency = (data.get("currency") or "TWD").strip().upper() or "TWD"
     if "recipient_name" in data:
         quote.recipient_name = (data.get("recipient_name") or "").strip() or None
+    if "site_address" in data:
+        quote.site_address = (data.get("site_address") or "").strip() or None
     if "note" in data:
         quote.note = (data.get("note") or "").strip() or None
 

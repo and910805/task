@@ -131,6 +131,7 @@ const CrmQuotesPage = () => {
     customer_id: '',
     contact_id: '',
     recipient_name: '',
+    site_address: '',
     ...defaultQuoteDateFields(),
     currency: 'TWD',
     tax_rate: 0,
@@ -304,6 +305,7 @@ const CrmQuotesPage = () => {
       customer_id: '',
       contact_id: '',
       recipient_name: '',
+      site_address: '',
       ...defaultQuoteDateFields(),
       currency: 'TWD',
       tax_rate: 0,
@@ -418,6 +420,7 @@ const CrmQuotesPage = () => {
       customer_id: quote.customer_id ? String(quote.customer_id) : '',
       contact_id: quote.contact_id ? String(quote.contact_id) : '',
       recipient_name: quote.recipient_name || '',
+      site_address: quote.site_address || '',
       issue_date: quote.issue_date || '',
       expiry_date: quote.expiry_date || '',
       quote_valid_days: String(getDateDiffDays(quote.issue_date || '', quote.expiry_date || '') || DEFAULT_QUOTE_VALID_DAYS),
@@ -766,6 +769,15 @@ const CrmQuotesPage = () => {
                   <option key={`recipient-p-${contact.id}`} value={contact.name} />
                 ))}
               </datalist>
+            </label>
+            <label>
+              施工地點
+              <input
+                name="site_address"
+                value={form.site_address}
+                onChange={handleChange}
+                placeholder="填寫施工地址或地點名稱"
+              />
             </label>
             <label>
               報價日期
