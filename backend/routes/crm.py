@@ -415,14 +415,31 @@ def _make_pdf_stamp_canvasmaker(doc, center: tuple[float, float] | None = None):
             canvas_obj.setFont(PDF_FONT_NAME, 10)
         except Exception:
             canvas_obj.setFont("Helvetica", 10)
-        canvas_obj.drawRightString(float(page_w) - float(doc.rightMargin), float(page_h) - float(doc.topMargin) + (2 * mm), label)
+        canvas_obj.drawRightString(
+            float(page_w) - float(doc.rightMargin),
+            float(page_h) - float(doc.topMargin) + (2 * mm),
+            label,
+        )
         canvas_obj.restoreState()
 
     class _StampCanvas(pdf_canvas.Canvas):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._saved_page_states = []
+
         def showPage(self):
-            _draw_page_watermark(self)
-            _draw_pdf_stamp(self, doc, center)
-            super().showPage()
+            self._saved_page_states.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            total_pages = len(self._saved_page_states)
+            for page_state in self._saved_page_states:
+                self.__dict__.update(page_state)
+                if total_pages > 1:
+                    _draw_page_watermark(self)
+                _draw_pdf_stamp(self, doc, center)
+                super().showPage()
+            super().save()
 
     return _StampCanvas
 
