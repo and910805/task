@@ -843,11 +843,11 @@ def _default_quote_dates(issue_date: date | None, expiry_date: date | None) -> t
 
 
 def _resolve_quote_recipient_display(quote: Quote, customer: Customer | None, contact: Contact | None) -> str:
+    if quote.recipient_name and quote.recipient_name.strip():
+        return quote.recipient_name.strip()
     customer_name = (customer.name if customer else "") or ""
     if customer_name.strip():
         return customer_name.strip()
-    if quote.recipient_name and quote.recipient_name.strip():
-        return quote.recipient_name.strip()
     contact_name = (contact.name if contact else "") or ""
     return contact_name.strip()
 
@@ -2920,7 +2920,7 @@ def quote_pdf(quote_id: int):
                 "font_health": _pdf_font_health_payload(),
             }
         ), 500
-    customer_raw = (customer.name if customer else None) or (quote.recipient_name or "").strip() or (contact.name if contact else None)
+    customer_raw = (quote.recipient_name or "").strip() or (customer.name if customer else None) or (contact.name if contact else None)
     customer_part = _safe_download_filename_part(customer_raw, fallback="客戶")
     if quote.issue_date:
         date_compact = quote.issue_date.strftime("%Y%m%d")

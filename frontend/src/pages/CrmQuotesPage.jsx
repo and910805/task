@@ -292,13 +292,11 @@ const CrmQuotesPage = () => {
     if (name === 'issue_date') {
       setForm((prev) => {
         const validDays = Math.max(0, Number(prev.quote_valid_days || 0));
-        const previousAutoExpiry = addDaysToDateInput(prev.issue_date, validDays);
         const nextAutoExpiry = addDaysToDateInput(value, validDays);
-        const shouldSyncExpiry = !prev.expiry_date || prev.expiry_date === previousAutoExpiry;
         return {
           ...prev,
           issue_date: value,
-          expiry_date: shouldSyncExpiry ? nextAutoExpiry : prev.expiry_date,
+          expiry_date: nextAutoExpiry,
         };
       });
       return;
