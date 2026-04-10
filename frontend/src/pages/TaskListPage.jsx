@@ -428,6 +428,43 @@ const TaskListPage = () => {
     [selectedCalendarDate, tasksByCalendarDate],
   );
 
+  const mobileOverdueTasks = useMemo(
+    () =>
+      filteredTasks
+        .filter((task) => {
+          const dueDate = task.due_date || task.expected_time;
+          if (task.is_overdue) return true;
+          if (!dueDate) return false;
+          const dueTime = new Date(dueDate).getTime();
+          return !Number.isNaN(dueTime) && dueTime < Date.now();
+        })
+        .slice(0, 3),
+    [filteredTasks],
+  );
+
+  const mobileAssignedCount = useMemo(
+    () =>
+      filteredTasks.reduce((total, task) => {
+        const assigneeCount =
+          task.assignees?.length ||
+          task.assignee_ids?.length ||
+          (task.assigned_to_id ? 1 : 0);
+        return total + assigneeCount;
+      }, 0),
+    [filteredTasks],
+  );
+
+  const mobileUnassignedCount = useMemo(
+    () =>
+      filteredTasks.filter(
+        (task) =>
+          !task.assigned_to_id &&
+          (task.assignee_ids || []).length === 0 &&
+          (task.assignees || []).length === 0,
+      ).length,
+    [filteredTasks],
+  );
+
   const selectedDateLabel = useMemo(() => {
     if (!selectedCalendarDate) return '';
     const parsed = new Date(`${selectedCalendarDate}T00:00:00`);
@@ -761,14 +798,60 @@ const TaskListPage = () => {
   );
 
   return (
-    <div className="page">
+    <div className="page task-list-page">
       <AppHeader
         title="任務管理面板"
         subtitle="檢視與指派任務"
         actions={headerActions}
       />
+      <section className="mobile-field-summary" aria-label="派工系統行動摘要">
+        <div className="mobile-system-strip">Taskgo_line - 專案管理 系統</div>
+        <div className="mobile-field-bar">
+          <button type="button" className="mobile-icon-button" aria-label="關閉">×</button>
+          <strong>TaskGo 現場版</strong>
+          <button type="button" className="mobile-icon-button" aria-label="更多">...</button>
+        </div>
+        <div className="mobile-metric-grid">
+          <article className="mobile-metric mobile-metric--blue">
+            <span>□</span>
+            <strong>{filteredTasks.length}</strong>
+            <small>進行中專案</small>
+          </article>
+          <article className="mobile-metric mobile-metric--teal">
+            <span>✓</span>
+            <strong>{mobileAssignedCount}</strong>
+            <small>進行中任務</small>
+          </article>
+          <article className="mobile-metric mobile-metric--amber">
+            <span>!</span>
+            <strong>{mobileUnassignedCount}</strong>
+            <small>待處理</small>
+          </article>
+        </div>
+        <div className="mobile-reminder-card">
+          <div className="mobile-reminder-head">
+            <strong>△ 任務提醒</strong>
+            <span>逾期 {mobileOverdueTasks.length}</span>
+          </div>
+          {mobileOverdueTasks.length === 0 ? (
+            <p className="mobile-empty-note">目前沒有逾期任務</p>
+          ) : (
+            <ul>
+              {mobileOverdueTasks.map((task) => (
+                <li key={`mobile-overdue-${task.id}`}>
+                  <Link to={`/tasks/${task.id}`}>
+                    <span>△ 逾期</span>
+                    <strong>{task.title}</strong>
+                    <small>{task.location || '未設定地點'}</small>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </section>
       {isManager && (
-        <section className="panel">
+        <section className="panel task-create-panel">
           <button type="button" onClick={() => setCreating((prev) => !prev)}>
             {creating ? '關閉建立表單' : '新增任務'}
           </button>
@@ -899,7 +982,7 @@ const TaskListPage = () => {
           </button>
         </div>
       )}
-      <section className="panel">
+      <section className="panel task-dispatch-panel">
         <h2>任務列表</h2>
         {loading || (availableOnly && loadingAvailable) ? (
           <p>載入中...</p>

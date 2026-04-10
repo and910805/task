@@ -1,13 +1,39 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from typing import Optional
+from urllib.parse import quote
 
-from flask import current_app
+from flask import current_app, has_request_context
+from flask_jwt_extended import create_access_token, get_jwt, get_jwt_identity
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from sqlalchemy import UniqueConstraint
 
 from extensions import db
+
+
+def _with_download_token(url: str | None) -> str | None:
+    if not url or not has_request_context():
+        return url
+
+    try:
+        identity = get_jwt_identity()
+        if identity is None:
+            return url
+
+        claims = get_jwt() or {}
+        role = claims.get("role")
+        additional_claims = {"role": role} if role else None
+        token = create_access_token(
+            identity=str(identity),
+            additional_claims=additional_claims,
+            expires_delta=timedelta(minutes=15),
+        )
+    except Exception:
+        return url
+
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}token={quote(token)}"
 
 
 ROLE_LABEL_DEFAULTS = {
@@ -308,6 +334,7 @@ class Attachment(db.Model):
                 url = None
         if not url:
             url = f"/api/upload/files/{self.file_path}"
+        url = _with_download_token(url)
         return {
             "id": self.id,
             "file_type": self.file_type,
@@ -842,6 +869,7 @@ class Invoice(db.Model):
                 signature_url = None
         if self.customer_signature_path and not signature_url:
             signature_url = f"/api/upload/files/{self.customer_signature_path}"
+        signature_url = _with_download_token(signature_url)
         return {
             "id": self.id,
             "invoice_no": self.invoice_no,

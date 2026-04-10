@@ -853,6 +853,14 @@ const TaskDetailPage = () => {
           ← 返回任務列表
         </Link>
       </AppHeader>
+      <header className="mobile-task-detail-header">
+        <Link to="/app" className="mobile-task-back">‹</Link>
+        <div>
+          <span>TaskGo 現場版</span>
+          <strong>{task.title}</strong>
+        </div>
+        <span className={statusBadgeClass[task.status] || 'status-badge'}>{task.status}</span>
+      </header>
       {error && (
         <div className="error-text" style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
           <span>{error}</span>

@@ -75,7 +75,8 @@ def create_app() -> Flask:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     marketing_photo_dir = os.path.abspath(os.path.join(base_dir, "..", "data", "photo"))
 
-    uploads_path = os.path.join(base_dir, "uploads")
+    uploads_path = os.environ.get("UPLOAD_FOLDER") or os.path.join(base_dir, "uploads")
+    uploads_path = os.path.abspath(uploads_path)
     os.makedirs(uploads_path, exist_ok=True)
 
     database_path = os.path.join(uploads_path, "task_manager.db")

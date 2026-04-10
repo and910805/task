@@ -46,6 +46,7 @@ COPY data/ ./data
 RUN mkdir -p /app/backend/uploads
 
 ENV PYTHONUNBUFFERED=1
+ENV UPLOAD_FOLDER=/app/backend/uploads
 ENV PDF_FONT_PATH=/usr/local/share/fonts/NotoSerifTC-wght.ttf
 ENV PDF_REQUIRE_EMBEDDED_FONT=1
 ENV INIT_DB_ON_STARTUP=1
