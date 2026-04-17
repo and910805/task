@@ -98,6 +98,7 @@ const defaultInvoicePaymentForm = (invoice) => ({
   method: '',
   note: '',
 });
+const CRM_LIST_LIMIT_OPTIONS = [5, 10];
 const getFilenameFromDisposition = (contentDisposition) => {
   if (!contentDisposition) return '';
   const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(contentDisposition);
@@ -147,6 +148,7 @@ const CrmQuotesPage = () => {
   const [catalogQuery, setCatalogQuery] = useState('');
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [specialItemType, setSpecialItemType] = useState('blank');
+  const [listLimit, setListLimit] = useState(5);
   const [invoicePaymentForm, setInvoicePaymentForm] = useState(() => defaultInvoicePaymentForm(null));
   const invoiceSignatureSectionRef = useRef(null);
 
@@ -180,12 +182,12 @@ const CrmQuotesPage = () => {
   };
 
   const loadQuotes = async () => {
-    const { data } = await api.get('crm/quotes');
+    const { data } = await api.get('crm/quotes', { params: { limit: listLimit } });
     setQuotes(Array.isArray(data) ? data : []);
   };
 
   const loadInvoices = async () => {
-    const { data } = await api.get('crm/invoices');
+    const { data } = await api.get('crm/invoices', { params: { limit: listLimit } });
     setInvoices(Array.isArray(data) ? data : []);
   };
 
@@ -205,7 +207,7 @@ const CrmQuotesPage = () => {
       setLoading(true);
       setError('');
       try {
-        await Promise.all([loadBase(), loadQuotes(), loadInvoices()]);
+        await loadBase();
       } catch (err) {
         setError(err?.networkMessage || err?.response?.data?.msg || '報價資料載入失敗');
       } finally {
@@ -214,6 +216,21 @@ const CrmQuotesPage = () => {
     };
     bootstrap();
   }, []);
+
+  useEffect(() => {
+    const reloadLists = async () => {
+      setLoading(true);
+      setError('');
+      try {
+        await Promise.all([loadQuotes(), loadInvoices()]);
+      } catch (err) {
+        setError(err?.networkMessage || err?.response?.data?.msg || '報價資料載入失敗');
+      } finally {
+        setLoading(false);
+      }
+    };
+    reloadLists();
+  }, [listLimit]);
 
   useEffect(() => {
     if (form.customer_id) {
@@ -1045,6 +1062,16 @@ const CrmQuotesPage = () => {
       <section className="panel panel--table">
         <div className="panel-header">
           <h2>報價單列表</h2>
+          <label className="panel-tag" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            顯示筆數
+            <select value={listLimit} onChange={(event) => setListLimit(Number(event.target.value) || 5)}>
+              {CRM_LIST_LIMIT_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  最新 {option} 筆
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         <div className="table-wrapper">
           <table className="data-table">
@@ -1126,6 +1153,7 @@ const CrmQuotesPage = () => {
       <section className="panel panel--table">
         <div className="panel-header">
           <h2>請款單列表</h2>
+          <span className="panel-tag">同步顯示最新 {listLimit} 筆</span>
         </div>
         <div className="table-wrapper">
           <table className="data-table">

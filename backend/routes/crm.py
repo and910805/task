@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 from io import BytesIO
+from collections import OrderedDict
 import glob
 import json
 import math
@@ -81,6 +82,52 @@ PDF_STAMP_WIDTH_MM = 24.0 * 1.35 * 1.30
 PDF_STAMP_Y_OFFSET_ENV = "PDF_STAMP_Y_OFFSET_MM"
 PDF_STAMP_DEFAULT_Y_OFFSET_MM = 10.0
 PDF_COMPANY_TAX_ID_TEXT = "\u7acb\u7fd4\u6c34\u96fb\u7d71\u7de8 14511159"
+CRM_DOWNLOAD_CACHE_MAX_ITEMS = 32
+CRM_DOWNLOAD_CACHE: OrderedDict[str, tuple[bytes, str, str]] = OrderedDict()
+
+
+def _normalize_limit_arg(raw_limit: int | None, *, default: int = 5, maximum: int = 200) -> int:
+    if raw_limit is None:
+        return default
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        return default
+    if limit < 1:
+        return default
+    return min(limit, maximum)
+
+
+def _cache_datetime_token(value) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, datetime):
+        return value.replace(microsecond=0).isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
+
+
+def _build_download_cache_key(prefix: str, *parts: object) -> str:
+    normalized = [str(prefix)]
+    for part in parts:
+        normalized.append(_cache_datetime_token(part))
+    return "|".join(normalized)
+
+
+def _get_cached_download(cache_key: str) -> tuple[bytes, str, str] | None:
+    cached = CRM_DOWNLOAD_CACHE.get(cache_key)
+    if cached is None:
+        return None
+    CRM_DOWNLOAD_CACHE.move_to_end(cache_key)
+    return cached
+
+
+def _store_cached_download(cache_key: str, *, content: bytes, filename: str, mimetype: str) -> None:
+    CRM_DOWNLOAD_CACHE[cache_key] = (content, filename, mimetype)
+    CRM_DOWNLOAD_CACHE.move_to_end(cache_key)
+    while len(CRM_DOWNLOAD_CACHE) > CRM_DOWNLOAD_CACHE_MAX_ITEMS:
+        CRM_DOWNLOAD_CACHE.popitem(last=False)
 FINANCIAL_DIGITS = ("零", "壹", "貳", "參", "肆", "伍", "陸", "柒", "捌", "玖")
 FINANCIAL_SMALL_UNITS = ("", "拾", "佰", "仟")
 FINANCIAL_BIG_UNITS = ("", "萬", "億", "兆")
@@ -2285,13 +2332,14 @@ def list_quotes():
     query = Quote.query.options(selectinload(Quote.items)).order_by(Quote.updated_at.desc())
     customer_id = request.args.get("customer_id", type=int)
     status = (request.args.get("status") or "").strip().lower()
+    limit = _normalize_limit_arg(request.args.get("limit", type=int), default=5, maximum=200)
 
     if customer_id:
         query = query.filter(Quote.customer_id == customer_id)
     if status:
         query = query.filter(Quote.status == status)
 
-    rows = query.limit(200).all()
+    rows = query.limit(limit).all()
     return jsonify([row.to_dict() for row in rows])
 
 
@@ -2617,6 +2665,7 @@ def list_invoices():
     customer_id = request.args.get("customer_id", type=int)
     quote_id = request.args.get("quote_id", type=int)
     status = (request.args.get("status") or "").strip().lower()
+    limit = _normalize_limit_arg(request.args.get("limit", type=int), default=5, maximum=200)
 
     if customer_id:
         query = query.filter(Invoice.customer_id == customer_id)
@@ -2625,7 +2674,7 @@ def list_invoices():
     if status:
         query = query.filter(Invoice.status == status)
 
-    rows = query.limit(200).all()
+    rows = query.limit(limit).all()
     return jsonify([row.to_dict() for row in rows])
 
 
@@ -2859,6 +2908,22 @@ def quote_xlsx(quote_id: int):
     quote = Quote.query.options(selectinload(Quote.items)).get_or_404(quote_id)
     customer = Customer.query.get(quote.customer_id)
     contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
+    cache_key = _build_download_cache_key(
+        "quote-xlsx",
+        quote.id,
+        quote.updated_at,
+        customer.updated_at if customer else None,
+        contact.updated_at if contact else None,
+    )
+    cached = _get_cached_download(cache_key)
+    if cached is not None:
+        content, cached_filename, cached_mimetype = cached
+        return send_file(
+            BytesIO(content),
+            mimetype=cached_mimetype,
+            as_attachment=True,
+            download_name=cached_filename,
+        )
 
     template_path = _find_quote_template_path()
     if template_path is None:
@@ -2895,8 +2960,15 @@ def quote_xlsx(quote_id: int):
     customer_part = _safe_download_filename_part(customer.name if customer else None, fallback="客戶")
     quote_part = _safe_download_filename_part(quote.quote_no, fallback="估價單")
     filename = f"{customer_part}-{quote_part}.xlsx"
+    content = output.getvalue()
+    _store_cached_download(
+        cache_key,
+        content=content,
+        filename=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
     return send_file(
-        output,
+        BytesIO(content),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         as_attachment=True,
         download_name=filename,
@@ -2909,6 +2981,22 @@ def quote_pdf(quote_id: int):
     quote = Quote.query.options(selectinload(Quote.items)).get_or_404(quote_id)
     customer = Customer.query.get(quote.customer_id)
     contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
+    cache_key = _build_download_cache_key(
+        "quote-pdf",
+        quote.id,
+        quote.updated_at,
+        customer.updated_at if customer else None,
+        contact.updated_at if contact else None,
+    )
+    cached = _get_cached_download(cache_key)
+    if cached is not None:
+        content, cached_filename, cached_mimetype = cached
+        return send_file(
+            BytesIO(content),
+            mimetype=cached_mimetype,
+            as_attachment=False,
+            download_name=cached_filename,
+        )
 
     try:
         buffer = _build_quote_template_pdf(quote, customer, contact)
@@ -2930,8 +3018,15 @@ def quote_pdf(quote_id: int):
         date_compact = datetime.utcnow().strftime("%Y%m%d")
     date_part = _safe_download_filename_part(date_compact, fallback="date")
     filename = f"{customer_part}_{date_part}.pdf"
+    content = buffer.getvalue()
+    _store_cached_download(
+        cache_key,
+        content=content,
+        filename=filename,
+        mimetype="application/pdf",
+    )
     return send_file(
-        buffer,
+        BytesIO(content),
         mimetype="application/pdf",
         as_attachment=False,
         download_name=filename,
@@ -2966,6 +3061,22 @@ def invoice_pdf(invoice_id: int):
     invoice = Invoice.query.options(selectinload(Invoice.items)).get_or_404(invoice_id)
     customer = Customer.query.get(invoice.customer_id)
     contact = Contact.query.get(invoice.contact_id) if invoice.contact_id else None
+    cache_key = _build_download_cache_key(
+        "invoice-pdf",
+        invoice.id,
+        invoice.updated_at,
+        customer.updated_at if customer else None,
+        contact.updated_at if contact else None,
+    )
+    cached = _get_cached_download(cache_key)
+    if cached is not None:
+        content, cached_filename, cached_mimetype = cached
+        return send_file(
+            BytesIO(content),
+            mimetype=cached_mimetype,
+            as_attachment=False,
+            download_name=cached_filename,
+        )
 
     try:
         buffer = _build_invoice_template_pdf(invoice, customer, contact)
@@ -2988,8 +3099,15 @@ def invoice_pdf(invoice_id: int):
         date_compact = datetime.utcnow().strftime("%Y%m%d")
     date_part = _safe_download_filename_part(date_compact, fallback="date")
     filename = f"{customer_part}_{date_part}_請款單.pdf"
+    content = buffer.getvalue()
+    _store_cached_download(
+        cache_key,
+        content=content,
+        filename=filename,
+        mimetype="application/pdf",
+    )
     return send_file(
-        buffer,
+        BytesIO(content),
         mimetype="application/pdf",
         as_attachment=False,
         download_name=filename,
