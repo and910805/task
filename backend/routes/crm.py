@@ -91,9 +91,11 @@ CRM_DOWNLOAD_CACHE_MAX_ITEMS = 32
 CRM_DOWNLOAD_CACHE: OrderedDict[str, tuple[bytes, str, str]] = OrderedDict()
 
 
-def _normalize_limit_arg(raw_limit: int | None, *, default: int = 5, maximum: int = 200) -> int:
+def _normalize_limit_arg(raw_limit, *, default: int = 5, maximum: int = 200) -> int | None:
     if raw_limit is None:
         return default
+    if isinstance(raw_limit, str) and raw_limit.strip().lower() in {"all", "全部"}:
+        return None
     try:
         limit = int(raw_limit)
     except (TypeError, ValueError):
@@ -2364,14 +2366,14 @@ def list_quotes():
     query = Quote.query.options(selectinload(Quote.items)).order_by(Quote.updated_at.desc())
     customer_id = request.args.get("customer_id", type=int)
     status = (request.args.get("status") or "").strip().lower()
-    limit = _normalize_limit_arg(request.args.get("limit", type=int), default=5, maximum=200)
+    limit = _normalize_limit_arg(request.args.get("limit"), default=5, maximum=200)
 
     if customer_id:
         query = query.filter(Quote.customer_id == customer_id)
     if status:
         query = query.filter(Quote.status == status)
 
-    rows = query.limit(limit).all()
+    rows = query.limit(limit).all() if limit is not None else query.all()
     return jsonify([row.to_dict() for row in rows])
 
 
@@ -2697,7 +2699,7 @@ def list_invoices():
     customer_id = request.args.get("customer_id", type=int)
     quote_id = request.args.get("quote_id", type=int)
     status = (request.args.get("status") or "").strip().lower()
-    limit = _normalize_limit_arg(request.args.get("limit", type=int), default=5, maximum=200)
+    limit = _normalize_limit_arg(request.args.get("limit"), default=5, maximum=200)
 
     if customer_id:
         query = query.filter(Invoice.customer_id == customer_id)
@@ -2706,7 +2708,7 @@ def list_invoices():
     if status:
         query = query.filter(Invoice.status == status)
 
-    rows = query.limit(limit).all()
+    rows = query.limit(limit).all() if limit is not None else query.all()
     return jsonify([row.to_dict() for row in rows])
 
 

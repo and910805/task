@@ -98,7 +98,15 @@ const defaultInvoicePaymentForm = (invoice) => ({
   method: '',
   note: '',
 });
-const CRM_LIST_LIMIT_OPTIONS = [5, 10];
+const CRM_LIST_LIMIT_OPTIONS = [
+  { value: '5', label: '最新 5 筆' },
+  { value: '10', label: '最新 10 筆' },
+  { value: '25', label: '最新 25 筆' },
+  { value: '50', label: '最新 50 筆' },
+  { value: '100', label: '最新 100 筆' },
+  { value: '200', label: '最新 200 筆' },
+  { value: 'all', label: '全部' },
+];
 const getFilenameFromDisposition = (contentDisposition) => {
   if (!contentDisposition) return '';
   const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(contentDisposition);
@@ -148,7 +156,7 @@ const CrmQuotesPage = () => {
   const [catalogQuery, setCatalogQuery] = useState('');
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [specialItemType, setSpecialItemType] = useState('blank');
-  const [listLimit, setListLimit] = useState(5);
+  const [listLimit, setListLimit] = useState('10');
   const [invoicePaymentForm, setInvoicePaymentForm] = useState(() => defaultInvoicePaymentForm(null));
   const invoiceSignatureSectionRef = useRef(null);
 
@@ -275,6 +283,10 @@ const CrmQuotesPage = () => {
   const activeInvoices = useMemo(
     () => invoices.filter((invoice) => String(invoice?.status || '').trim().toLowerCase() !== 'cancelled'),
     [invoices],
+  );
+  const listLimitLabel = useMemo(
+    () => CRM_LIST_LIMIT_OPTIONS.find((option) => option.value === String(listLimit))?.label || '最新 10 筆',
+    [listLimit],
   );
   const paymentPanelInvoice = useMemo(
     () => activeInvoices.find((invoice) => Number(invoice.id) === Number(paymentPanelInvoiceId)) || null,
@@ -1064,10 +1076,10 @@ const CrmQuotesPage = () => {
           <h2>報價單列表</h2>
           <label className="panel-tag" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
             顯示筆數
-            <select value={listLimit} onChange={(event) => setListLimit(Number(event.target.value) || 5)}>
+            <select value={listLimit} onChange={(event) => setListLimit(event.target.value || '10')}>
               {CRM_LIST_LIMIT_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  最新 {option} 筆
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </select>
@@ -1153,7 +1165,7 @@ const CrmQuotesPage = () => {
       <section className="panel panel--table">
         <div className="panel-header">
           <h2>請款單列表</h2>
-          <span className="panel-tag">同步顯示最新 {listLimit} 筆</span>
+          <span className="panel-tag">同步顯示{listLimitLabel}</span>
         </div>
         <div className="table-wrapper">
           <table className="data-table">
