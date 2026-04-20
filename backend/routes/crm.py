@@ -67,6 +67,11 @@ PDF_FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/noto/NotoSerifCJK-Regular.ttc",
     "/usr/share/fonts/opentype/source-han-sans/SourceHanSansTW-Regular.otf",
+    "C:/Windows/Fonts/NotoSansTC-VF.ttf",
+    "C:/Windows/Fonts/NotoSerifTC-VF.ttf",
+    "C:/Windows/Fonts/msjh.ttc",
+    "C:/Windows/Fonts/mingliu.ttc",
+    "C:/Windows/Fonts/kaiu.ttf",
 )
 PDF_CID_FALLBACKS = ("MSung-Light", "STSong-Light")
 PDF_REQUIRE_EMBEDDED_FONT_ENV = "PDF_REQUIRE_EMBEDDED_FONT"
@@ -194,6 +199,19 @@ def _candidate_pdf_font_paths() -> list[str]:
         for path in sorted(glob.glob(pattern, recursive=True)):
             if os.path.isfile(path):
                 _add(path)
+
+    windows_fonts = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
+    windows_patterns = (
+        "*NotoSansTC*.ttf",
+        "*NotoSerifTC*.ttf",
+        "msjh*.ttc",
+        "mingliu*.ttc",
+        "kaiu.ttf",
+    )
+    for pattern in windows_patterns:
+        for path in sorted(windows_fonts.glob(pattern)):
+            if path.is_file():
+                _add(str(path))
     return paths
 
 
@@ -890,8 +908,9 @@ def _default_quote_dates(issue_date: date | None, expiry_date: date | None) -> t
 
 
 def _resolve_quote_recipient_display(quote: Quote, customer: Customer | None, contact: Contact | None) -> str:
-    if quote.recipient_name and quote.recipient_name.strip():
-        return quote.recipient_name.strip()
+    recipient_name = getattr(quote, "recipient_name", None)
+    if recipient_name and recipient_name.strip():
+        return recipient_name.strip()
     customer_name = (customer.name if customer else "") or ""
     if customer_name.strip():
         return customer_name.strip()
@@ -972,7 +991,7 @@ def _find_quote_template_path() -> Path | None:
 
 def _apply_quote_to_template_sheet(ws, quote: Quote, customer: Customer | None, contact: Contact | None) -> None:
     recipient = _resolve_quote_recipient_display(quote, customer, contact)
-    site_address = (quote.site_address or "").strip()
+    site_address = (getattr(quote, "site_address", None) or "").strip()
 
     ws["D2"] = "立翔水電行"
     ws["D3"] = "估價單"
@@ -1186,7 +1205,7 @@ def _build_quote_template_pdf(
         else:
             item_description = item.description or ""
             item_unit = item.unit or "式"
-            item_note = item.note or ""
+            item_note = getattr(item, "note", None) or ""
             item_quantity = float(item.quantity or 0)
             item_unit_price = float(item.unit_price or 0)
             item_amount = float(item.amount or 0)
@@ -1579,10 +1598,23 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
         total_amount=invoice.total_amount,
         subtotal=invoice.subtotal,
         note=invoice.note,
+        site_address=(invoice.quote.site_address if invoice.quote else None),
         customer_signature_path=invoice.customer_signature_path,
         customer_signature_name=invoice.customer_signature_name,
         customer_signed_at=invoice.customer_signed_at,
-        items=list(invoice.items or []),
+        items=[
+            SimpleNamespace(
+                id=item.id,
+                sort_order=item.sort_order,
+                description=item.description,
+                unit=item.unit,
+                note="",
+                quantity=item.quantity,
+                unit_price=item.unit_price,
+                amount=item.amount,
+            )
+            for item in (invoice.items or [])
+        ],
     )
     return _build_quote_template_pdf(
         quote_like,
@@ -3028,7 +3060,7 @@ def quote_pdf(quote_id: int):
     return send_file(
         BytesIO(content),
         mimetype="application/pdf",
-        as_attachment=False,
+        as_attachment=True,
         download_name=filename,
     )
 
@@ -3109,7 +3141,7 @@ def invoice_pdf(invoice_id: int):
     return send_file(
         BytesIO(content),
         mimetype="application/pdf",
-        as_attachment=False,
+        as_attachment=True,
         download_name=filename,
     )
 
