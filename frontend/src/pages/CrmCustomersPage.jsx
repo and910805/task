@@ -12,6 +12,17 @@ const initialForm = {
   note: '',
 };
 
+const getApiErrorMessage = (err, fallback) => {
+  if (err?.networkMessage) return err.networkMessage;
+  const data = err?.response?.data;
+  if (data?.msg) return data.msg;
+  if (data?.message) return data.message;
+  if (typeof data === 'string' && data.trim()) return data.trim();
+  if (err?.response?.status === 403) return '權限不足，請使用主管、行政或管理員帳號操作。';
+  if (err?.response?.status === 401) return '登入已失效，請重新登入後再試。';
+  return fallback;
+};
+
 const CrmCustomersPage = () => {
   const [customers, setCustomers] = useState([]);
   const [form, setForm] = useState({ ...initialForm });
@@ -30,8 +41,7 @@ const CrmCustomersPage = () => {
       });
       setCustomers(Array.isArray(data) ? data : []);
     } catch (err) {
-      const message = err?.networkMessage || err?.response?.data?.msg || '客戶載入失敗';
-      setError(message);
+      setError(getApiErrorMessage(err, '客戶資料載入失敗'));
     } finally {
       setLoading(false);
     }
@@ -44,6 +54,12 @@ const CrmCustomersPage = () => {
   const handleChange = (event) => {
     const { name, value } = event.target;
     setForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const resetForm = () => {
+    setEditingId(null);
+    setForm({ ...initialForm });
+    setError('');
   };
 
   const handleSubmit = async (event) => {
@@ -64,8 +80,7 @@ const CrmCustomersPage = () => {
       setEditingId(null);
       await loadCustomers();
     } catch (err) {
-      const message = err?.response?.data?.msg || '保存失敗';
-      setError(message);
+      setError(getApiErrorMessage(err, '保存失敗'));
     } finally {
       setSaving(false);
     }
@@ -73,6 +88,7 @@ const CrmCustomersPage = () => {
 
   const handleEdit = (customer) => {
     setEditingId(customer.id);
+    setError('');
     setForm({
       name: customer.name || '',
       tax_id: customer.tax_id || '',
@@ -87,7 +103,7 @@ const CrmCustomersPage = () => {
 
   return (
     <div className="page">
-      <AppHeader title="客戶管理" subtitle="新增、維護與搜尋客戶資料" />
+      <AppHeader title="客戶管理" subtitle="建立、查詢與維護客戶資料" />
 
       {error && <p className="error-text">{error}</p>}
 
@@ -95,14 +111,7 @@ const CrmCustomersPage = () => {
         <div className="panel-header">
           <h2>{editingId ? '編輯客戶' : '新增客戶'}</h2>
           {editingId ? (
-            <button
-              type="button"
-              className="secondary-btn"
-              onClick={() => {
-                setEditingId(null);
-                setForm({ ...initialForm });
-              }}
-            >
+            <button type="button" className="secondary-btn" onClick={resetForm}>
               取消編輯
             </button>
           ) : null}
@@ -144,11 +153,7 @@ const CrmCustomersPage = () => {
         <div className="panel-header">
           <h2>客戶列表</h2>
           <div className="crm-search">
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜尋客戶"
-            />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜尋客戶" />
             <button type="button" className="secondary-btn" onClick={loadCustomers} disabled={loading}>
               搜尋
             </button>
@@ -182,7 +187,7 @@ const CrmCustomersPage = () => {
               ))}
               {!loading && filteredCustomers.length === 0 && (
                 <tr>
-                  <td colSpan="4">尚無客戶資料</td>
+                  <td colSpan="4">目前沒有客戶資料</td>
                 </tr>
               )}
               {loading && (

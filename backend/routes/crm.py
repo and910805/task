@@ -16,6 +16,7 @@ from flask import Blueprint, current_app, jsonify, request, send_file
 from flask_jwt_extended import jwt_required
 from openpyxl import load_workbook
 from sqlalchemy import func, inspect
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from decorators import role_required
@@ -2211,11 +2212,11 @@ def create_customer():
     data = request.get_json() or {}
     name = (data.get("name") or "").strip()
     if not name:
-        return jsonify({"msg": "name is required"}), 400
+        return jsonify({"msg": "客戶名稱為必填"}), 400
 
-    exists = Customer.query.filter(Customer.name == name).first()
+    exists = Customer.query.filter(func.lower(Customer.name) == name.lower()).first()
     if exists:
-        return jsonify({"msg": "Customer name already exists"}), 400
+        return jsonify({"msg": f"客戶「{name}」已存在，請搜尋後編輯既有客戶。"}), 400
 
     customer = Customer(
         name=name,
@@ -2227,7 +2228,11 @@ def create_customer():
         created_by_id=get_current_user_id(),
     )
     db.session.add(customer)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"msg": f"客戶「{name}」已存在，請搜尋後編輯既有客戶。"}), 400
     return jsonify(customer.to_dict()), 201
 
 
@@ -2274,10 +2279,13 @@ def update_customer(customer_id: int):
     if "name" in data:
         name = (data.get("name") or "").strip()
         if not name:
-            return jsonify({"msg": "name is required"}), 400
-        duplicate = Customer.query.filter(Customer.name == name, Customer.id != customer_id).first()
+            return jsonify({"msg": "客戶名稱為必填"}), 400
+        duplicate = Customer.query.filter(
+            func.lower(Customer.name) == name.lower(),
+            Customer.id != customer_id,
+        ).first()
         if duplicate:
-            return jsonify({"msg": "Customer name already exists"}), 400
+            return jsonify({"msg": f"客戶「{name}」已存在，請搜尋後編輯既有客戶。"}), 400
         customer.name = name
 
     for key in ("tax_id", "email", "phone", "address", "note"):
@@ -2285,7 +2293,11 @@ def update_customer(customer_id: int):
             value = data.get(key)
             customer.__setattr__(key, (value or "").strip() or None)
 
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"msg": f"客戶「{customer.name}」已存在，請搜尋後編輯既有客戶。"}), 400
     return jsonify(customer.to_dict())
 
 
