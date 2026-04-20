@@ -921,6 +921,19 @@ def _resolve_quote_recipient_display(quote: Quote, customer: Customer | None, co
     return contact_name.strip()
 
 
+def _resolve_invoice_recipient_display(invoice: Invoice, customer: Customer | None, contact: Contact | None) -> str:
+    quote = getattr(invoice, "quote", None)
+    if quote is not None:
+        resolved = _resolve_quote_recipient_display(quote, customer, contact)
+        if resolved:
+            return resolved
+    customer_name = (customer.name if customer else "") or ""
+    if customer_name.strip():
+        return customer_name.strip()
+    contact_name = (contact.name if contact else "") or ""
+    return contact_name.strip()
+
+
 def _safe_download_filename_part(raw: str | None, fallback: str = "估價單") -> str:
     source = (raw or "").strip() or fallback
     safe = re.sub(r'[\\/:*?"<>|]+', "_", source)
@@ -1458,11 +1471,7 @@ def _build_quote_template_pdf(
 def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, contact: Contact | None):
     _require_embedded_pdf_font()
 
-    customer_name = (customer.name if customer else "") or ""
-    contact_name = (contact.name if contact else "") or ""
-    recipient = contact_name or customer_name
-    if customer_name and contact_name and customer_name != contact_name:
-        recipient = f"{customer_name} {contact_name}"
+    recipient = _resolve_invoice_recipient_display(invoice, customer, contact)
 
     ordered_items = sorted(
         invoice.items,
@@ -1593,7 +1602,7 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
 def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, contact: Contact | None):
     quote_like = SimpleNamespace(
         quote_no=invoice.invoice_no,
-        recipient_name=None,
+        recipient_name=_resolve_invoice_recipient_display(invoice, customer, contact),
         issue_date=invoice.issue_date,
         expiry_date=invoice.due_date,
         tax_rate=invoice.tax_rate,

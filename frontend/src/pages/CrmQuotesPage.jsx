@@ -693,7 +693,9 @@ const CrmQuotesPage = () => {
     if (!invoiceId) return;
     setPaymentPanelInvoiceId(invoiceId);
     setInvoicePaymentForm(defaultInvoicePaymentForm(invoice));
-    setInvoiceSignatureName(invoice?.customer_signature_name || invoice?.contact_name || invoice?.customer_name || '');
+    setInvoiceSignatureName(
+      invoice?.customer_signature_name || invoice?.recipient_name || invoice?.contact_name || invoice?.customer_name || '',
+    );
     setError('');
   };
 
@@ -1173,7 +1175,7 @@ const CrmQuotesPage = () => {
               <tr>
                 <th>請款單號</th>
                 <th>來源報價單</th>
-                <th>客戶</th>
+                <th>台照顯示名稱</th>
                 <th>狀態</th>
                 <th>金額</th>
                 <th>日期</th>
@@ -1185,7 +1187,7 @@ const CrmQuotesPage = () => {
                 <tr key={invoice.id}>
                   <td>{invoice.invoice_no || '-'}</td>
                   <td>{invoice.quote_no || '-'}</td>
-                  <td>{invoice.customer_name || '-'}</td>
+                  <td>{invoice.recipient_name || invoice.customer_name || invoice.contact_name || '-'}</td>
                   <td>
                     <div className="crm-status-stack">
                       <span>{crmStatusLabel('invoice', invoice.status)}</span>

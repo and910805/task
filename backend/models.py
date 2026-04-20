@@ -728,6 +728,18 @@ class Quote(db.Model):
     invoices = db.relationship("Invoice", back_populates="quote")
 
     def to_dict(self) -> dict:
+        active_invoice = next(
+            (
+                invoice
+                for invoice in sorted(
+                    self.invoices or [],
+                    key=lambda row: (row.created_at or datetime.min, row.id or 0),
+                    reverse=True,
+                )
+                if (invoice.status or "").lower() != "cancelled"
+            ),
+            None,
+        )
         return {
             "id": self.id,
             "quote_no": self.quote_no,
@@ -750,6 +762,15 @@ class Quote(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "items": [item.to_dict() for item in self.items],
+            "active_invoice": (
+                {
+                    "id": active_invoice.id,
+                    "invoice_no": active_invoice.invoice_no,
+                    "status": active_invoice.status,
+                }
+                if active_invoice
+                else None
+            ),
         }
 
 
@@ -854,6 +875,10 @@ class Invoice(db.Model):
         payment_total = round(sum(float(row.amount or 0.0) for row in self.payment_records), 2)
         total_amount = round(self.total_amount or 0.0, 2)
         outstanding_amount = round(max(total_amount - payment_total, 0.0), 2)
+        quote_recipient_name = ((self.quote.recipient_name if self.quote else None) or "").strip()
+        customer_name = ((self.customer.name if self.customer else None) or "").strip()
+        contact_name = ((self.contact.name if self.contact else None) or "").strip()
+        recipient_name = quote_recipient_name or customer_name or contact_name or None
         signature_url = None
         try:
             storage = current_app.extensions.get("storage")  # type: ignore[attr-defined]
@@ -877,8 +902,9 @@ class Invoice(db.Model):
             "customer_id": self.customer_id,
             "contact_id": self.contact_id,
             "quote_id": self.quote_id,
-            "customer_name": self.customer.name if self.customer else None,
-            "contact_name": self.contact.name if self.contact else None,
+            "customer_name": customer_name or None,
+            "contact_name": contact_name or None,
+            "recipient_name": recipient_name,
             "quote_no": self.quote.quote_no if self.quote else None,
             "issue_date": self.issue_date.isoformat() if self.issue_date else None,
             "due_date": self.due_date.isoformat() if self.due_date else None,
