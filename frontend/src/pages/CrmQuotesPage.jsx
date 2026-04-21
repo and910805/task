@@ -700,13 +700,7 @@ const CrmQuotesPage = () => {
     const quoteId = Number(quote?.id || 0);
     if (!quoteId) return;
     const existingInvoice = getActiveInvoiceForQuote(quote);
-    if (existingInvoice?.id) {
-      openInvoicePaymentPanel(existingInvoice);
-      window.setTimeout(() => {
-        invoiceListSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }, 0);
-      return;
-    }
+    if (existingInvoice?.id) return;
     setConvertingQuoteId(quoteId);
     setError('');
     try {
@@ -1202,12 +1196,12 @@ const CrmQuotesPage = () => {
                       type="button"
                       className="secondary-btn"
                       onClick={() => convertQuoteToInvoice(quote)}
-                      disabled={convertingQuoteId === quote.id}
+                      disabled={convertingQuoteId === quote.id || hasActiveInvoice}
                     >
                       {convertingQuoteId === quote.id
                         ? '轉換中...'
                         : hasActiveInvoice
-                          ? '查看請款單'
+                          ? '已轉請款單'
                           : '轉成請款單'}
                     </button>
                     <button type="button" className="secondary-btn" onClick={() => openPdf(quote.id)}>
