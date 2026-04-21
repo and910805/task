@@ -142,6 +142,7 @@ const CrmQuotesPage = () => {
   const [saving, setSaving] = useState(false);
   const [convertingQuoteId, setConvertingQuoteId] = useState(null);
   const [deletingQuoteId, setDeletingQuoteId] = useState(null);
+  const [pendingDeleteQuoteId, setPendingDeleteQuoteId] = useState(null);
   const [cancellingInvoiceId, setCancellingInvoiceId] = useState(null);
   const [paymentPanelInvoiceId, setPaymentPanelInvoiceId] = useState(null);
   const [savingInvoicePayment, setSavingInvoicePayment] = useState(false);
@@ -449,6 +450,7 @@ const CrmQuotesPage = () => {
     setEditingQuoteId(null);
     setVersionsForQuoteId(null);
     setQuoteVersions([]);
+    setPendingDeleteQuoteId(null);
   };
 
   const addItem = () => updateItems((prev) => [...prev, blankItem()]);
@@ -731,8 +733,11 @@ const CrmQuotesPage = () => {
     const quoteId = Number(quote?.id || 0);
     if (!quoteId) return;
     const quoteLabel = quote?.quote_no || `#${quoteId}`;
-    const confirmed = window.confirm(`確定要刪除報價單 ${quoteLabel} 嗎？此操作無法復原。`);
-    if (!confirmed) return;
+    if (pendingDeleteQuoteId !== quoteId) {
+      setPendingDeleteQuoteId(quoteId);
+      setError(`再按一次「確認刪除」才會刪除報價單 ${quoteLabel}。`);
+      return;
+    }
     setDeletingQuoteId(quoteId);
     setError('');
     try {
@@ -740,6 +745,7 @@ const CrmQuotesPage = () => {
       if (editingQuoteId === quoteId) {
         resetForm();
       }
+      setPendingDeleteQuoteId(null);
       await reloadManagedLists();
     } catch (err) {
       setError(err?.networkMessage || err?.response?.data?.msg || '刪除報價單失敗');
@@ -1233,7 +1239,11 @@ const CrmQuotesPage = () => {
                       onClick={() => deleteQuote(quote)}
                       disabled={deletingQuoteId === quote.id}
                     >
-                      {deletingQuoteId === quote.id ? '刪除中...' : '刪除'}
+                      {deletingQuoteId === quote.id
+                        ? '刪除中...'
+                        : pendingDeleteQuoteId === Number(quote.id)
+                          ? '確認刪除'
+                          : '刪除'}
                     </button>
                     <button type="button" className="secondary-btn" onClick={() => loadQuoteVersions(quote.id)}>
                       版本
