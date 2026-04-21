@@ -71,12 +71,24 @@ def _should_init_db_on_startup(database_url: str | None) -> bool:
     return _env_bool("INIT_DB_ON_STARTUP", default=True)
 
 
+def _default_upload_folder(base_dir: str) -> str:
+    configured = (os.environ.get("UPLOAD_FOLDER") or "").strip()
+    if configured:
+        return os.path.abspath(configured)
+
+    # Zeabur volume is typically mounted here for this project.
+    zeabur_uploads = os.path.abspath("/app/backend/uploads")
+    if os.path.isdir("/app/backend") or os.path.exists(zeabur_uploads):
+        return zeabur_uploads
+
+    return os.path.abspath(os.path.join(base_dir, "uploads"))
+
+
 def create_app() -> Flask:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     marketing_photo_dir = os.path.abspath(os.path.join(base_dir, "..", "data", "photo"))
 
-    uploads_path = os.environ.get("UPLOAD_FOLDER") or os.path.join(base_dir, "uploads")
-    uploads_path = os.path.abspath(uploads_path)
+    uploads_path = _default_upload_folder(base_dir)
     os.makedirs(uploads_path, exist_ok=True)
 
     database_path = os.path.join(uploads_path, "task_manager.db")

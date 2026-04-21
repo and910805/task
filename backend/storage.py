@@ -24,6 +24,18 @@ def _normalise_relative_path(relative_path: str) -> str:
     return relative_path.replace("\\", "/").lstrip("/")
 
 
+def _default_upload_folder() -> Path:
+    configured = (os.environ.get("UPLOAD_FOLDER") or "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+
+    zeabur_uploads = Path("/app/backend/uploads")
+    if Path("/app/backend").exists() or zeabur_uploads.exists():
+        return zeabur_uploads
+
+    return (Path.cwd() / "uploads").resolve()
+
+
 @dataclass
 class LocalStorage:
     """Store files on the local filesystem (Zeabur Volume)."""
@@ -75,6 +87,6 @@ def create_storage(config: dict) -> LocalStorage:
     uploads_dir = config.get("UPLOAD_FOLDER")
     if not uploads_dir:
         # 如果沒設定，預設使用 app 所在的目錄下的 uploads
-        uploads_dir = os.path.join(os.getcwd(), 'uploads')
+        uploads_dir = str(_default_upload_folder())
         
     return LocalStorage(Path(uploads_dir))
