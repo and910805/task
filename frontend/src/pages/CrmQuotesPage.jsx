@@ -159,6 +159,7 @@ const CrmQuotesPage = () => {
   const [listLimit, setListLimit] = useState('10');
   const [invoicePaymentForm, setInvoicePaymentForm] = useState(() => defaultInvoicePaymentForm(null));
   const invoiceSignatureSectionRef = useRef(null);
+  const invoiceListSectionRef = useRef(null);
 
   const [form, setForm] = useState(() => ({
     customer_id: '',
@@ -296,6 +297,13 @@ const CrmQuotesPage = () => {
     () => new Map(customers.map((customer) => [String(customer.id), customer])),
     [customers],
   );
+  const getActiveInvoiceForQuote = (quote) => {
+    const quoteInvoiceStatus = String(quote?.active_invoice?.status || '').trim().toLowerCase();
+    if (quote?.active_invoice?.id && quoteInvoiceStatus !== 'cancelled') {
+      return quote.active_invoice;
+    }
+    return invoiceByQuoteId.get(Number(quote?.id || 0)) || null;
+  };
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -640,11 +648,19 @@ const CrmQuotesPage = () => {
   const convertQuoteToInvoice = async (quote) => {
     const quoteId = Number(quote?.id || 0);
     if (!quoteId) return;
+    const existingInvoice = getActiveInvoiceForQuote(quote);
+    if (existingInvoice?.id) {
+      openInvoicePaymentPanel(existingInvoice);
+      window.setTimeout(() => {
+        invoiceListSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 0);
+      return;
+    }
     setConvertingQuoteId(quoteId);
     setError('');
     try {
       await api.post(`crm/quotes/${quoteId}/convert-to-invoice`);
-      await loadInvoices();
+      await Promise.all([loadQuotes(), loadInvoices()]);
     } catch (err) {
       setError(err?.networkMessage || err?.response?.data?.msg || '轉成請款單失敗');
     } finally {
@@ -1073,7 +1089,7 @@ const CrmQuotesPage = () => {
         </div>
       </section>
 
-      <section className="panel panel--table">
+      <section ref={invoiceListSectionRef} className="panel panel--table">
         <div className="panel-header">
           <h2>報價單列表</h2>
           <label className="panel-tag" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
@@ -1100,6 +1116,11 @@ const CrmQuotesPage = () => {
             <tbody>
               {quotes.map((quote) => (
                 <tr key={quote.id}>
+                  {(() => {
+                    const activeInvoice = getActiveInvoiceForQuote(quote);
+                    const hasActiveInvoice = Boolean(activeInvoice?.id);
+                    return (
+                      <>
                   <td>
                     <div style={{ display: 'grid', gap: 4 }}>
                       <strong>{quote.quote_no || '-'}</strong>
@@ -1118,12 +1139,12 @@ const CrmQuotesPage = () => {
                       type="button"
                       className="secondary-btn"
                       onClick={() => convertQuoteToInvoice(quote)}
-                      disabled={convertingQuoteId === quote.id || invoiceByQuoteId.has(Number(quote.id))}
+                      disabled={convertingQuoteId === quote.id}
                     >
                       {convertingQuoteId === quote.id
                         ? '轉換中...'
-                        : invoiceByQuoteId.has(Number(quote.id))
-                          ? '已轉請款單'
+                        : hasActiveInvoice
+                          ? '查看請款單'
                           : '轉成請款單'}
                     </button>
                     <button type="button" className="secondary-btn" onClick={() => openPdf(quote.id)}>
@@ -1147,6 +1168,9 @@ const CrmQuotesPage = () => {
                       版本
                     </button>
                   </td>
+                      </>
+                    );
+                  })()}
                 </tr>
               ))}
               {!loading && quotes.length === 0 ? (
