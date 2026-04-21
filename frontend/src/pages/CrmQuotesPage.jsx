@@ -199,12 +199,30 @@ const CrmQuotesPage = () => {
 
   const loadQuotes = async () => {
     const { data } = await api.get('crm/quotes', { params: { limit: listLimit } });
-    setQuotes(Array.isArray(data) ? data : []);
+    const rows = Array.isArray(data) ? data : [];
+    setQuotes(rows);
+    return rows;
   };
 
-  const loadInvoices = async () => {
-    const { data } = await api.get('crm/invoices', { params: { limit: listLimit } });
-    setInvoices(Array.isArray(data) ? data : []);
+  const loadInvoices = async (quoteRows = null) => {
+    const rows = Array.isArray(quoteRows) ? quoteRows : quotes;
+    const quoteIds = rows
+      .map((row) => Number(row?.id || 0))
+      .filter((id) => id > 0);
+    const params = { limit: listLimit };
+    if (quoteIds.length > 0) {
+      params.quote_ids = quoteIds.join(',');
+      params.limit = 'all';
+    }
+    const { data } = await api.get('crm/invoices', { params });
+    const invoiceRows = Array.isArray(data) ? data : [];
+    setInvoices(invoiceRows);
+    return invoiceRows;
+  };
+
+  const reloadManagedLists = async () => {
+    const quoteRows = await loadQuotes();
+    await loadInvoices(quoteRows);
   };
 
   const loadHistory = async (customerId) => {
@@ -278,7 +296,7 @@ const CrmQuotesPage = () => {
       setLoading(true);
       setError('');
       try {
-        await Promise.all([loadQuotes(), loadInvoices()]);
+        await reloadManagedLists();
       } catch (err) {
         setError(err?.networkMessage || err?.response?.data?.msg || '報價資料載入失敗');
       } finally {
@@ -331,10 +349,6 @@ const CrmQuotesPage = () => {
   const activeInvoices = useMemo(
     () => invoices.filter((invoice) => String(invoice?.status || '').trim().toLowerCase() !== 'cancelled'),
     [invoices],
-  );
-  const listLimitLabel = useMemo(
-    () => CRM_LIST_LIMIT_OPTIONS.find((option) => option.value === String(listLimit))?.label || '最新 10 筆',
-    [listLimit],
   );
   const paymentPanelInvoice = useMemo(
     () => activeInvoices.find((invoice) => Number(invoice.id) === Number(paymentPanelInvoiceId)) || null,
@@ -598,7 +612,7 @@ const CrmQuotesPage = () => {
       }
 
       resetForm();
-      await Promise.all([loadQuotes(), loadBase()]);
+      await Promise.all([reloadManagedLists(), loadBase()]);
     } catch (err) {
       setError(err?.response?.data?.msg || (editingQuoteId ? '更新報價失敗' : '新增報價失敗'));
     } finally {
@@ -705,7 +719,7 @@ const CrmQuotesPage = () => {
     setError('');
     try {
       await api.post(`crm/quotes/${quoteId}/convert-to-invoice`);
-      await Promise.all([loadQuotes(), loadInvoices()]);
+      await reloadManagedLists();
     } catch (err) {
       setError(err?.networkMessage || err?.response?.data?.msg || '轉成請款單失敗');
     } finally {
@@ -726,7 +740,7 @@ const CrmQuotesPage = () => {
       if (editingQuoteId === quoteId) {
         resetForm();
       }
-      await loadQuotes();
+      await reloadManagedLists();
     } catch (err) {
       setError(err?.networkMessage || err?.response?.data?.msg || '刪除報價單失敗');
     } finally {
@@ -741,7 +755,7 @@ const CrmQuotesPage = () => {
     setError('');
     try {
       await api.put(`crm/invoices/${invoiceId}`, { status: 'cancelled' });
-      await loadInvoices();
+      await reloadManagedLists();
     } catch (err) {
       setError(err?.networkMessage || err?.response?.data?.msg || '取消請款失敗');
     } finally {
@@ -786,7 +800,7 @@ const CrmQuotesPage = () => {
         method: (invoicePaymentForm.method || '').trim() || null,
         note: (invoicePaymentForm.note || '').trim() || null,
       });
-      await loadInvoices();
+      await reloadManagedLists();
       setInvoicePaymentForm(defaultInvoicePaymentForm(data?.invoice || paymentPanelInvoice));
     } catch (err) {
       setError(err?.networkMessage || err?.response?.data?.msg || '新增收款紀錄失敗');
@@ -804,7 +818,7 @@ const CrmQuotesPage = () => {
     setError('');
     try {
       await api.delete(`crm/invoices/${invoiceId}/payments/${paymentId}`);
-      await loadInvoices();
+      await reloadManagedLists();
     } catch (err) {
       setError(err?.networkMessage || err?.response?.data?.msg || '刪除收款紀錄失敗');
     } finally {
@@ -827,7 +841,7 @@ const CrmQuotesPage = () => {
         data_url: dataUrl,
         signature_name: (invoiceSignatureName || '').trim() || null,
       });
-      await loadInvoices();
+      await reloadManagedLists();
     } catch (err) {
       setError(err?.networkMessage || err?.response?.data?.msg || '客戶簽名儲存失敗');
     } finally {
@@ -1248,7 +1262,7 @@ const CrmQuotesPage = () => {
       <section className="panel panel--table">
         <div className="panel-header">
           <h2>請款單列表</h2>
-          <span className="panel-tag">同步顯示{listLimitLabel}</span>
+          <span className="panel-tag">同步目前報價列表</span>
         </div>
         <div className="table-wrapper">
           <table className="data-table">

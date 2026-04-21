@@ -2833,6 +2833,7 @@ def list_invoices():
 
     customer_id = request.args.get("customer_id", type=int)
     quote_id = request.args.get("quote_id", type=int)
+    raw_quote_ids = (request.args.get("quote_ids") or "").strip()
     status = (request.args.get("status") or "").strip().lower()
     limit = _normalize_limit_arg(request.args.get("limit"), default=5, maximum=200)
 
@@ -2840,6 +2841,18 @@ def list_invoices():
         query = query.filter(Invoice.customer_id == customer_id)
     if quote_id:
         query = query.filter(Invoice.quote_id == quote_id)
+    if raw_quote_ids:
+        quote_ids = []
+        for chunk in raw_quote_ids.split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            try:
+                quote_ids.append(int(chunk))
+            except ValueError:
+                continue
+        if quote_ids:
+            query = query.filter(Invoice.quote_id.in_(quote_ids))
     if status:
         query = query.filter(Invoice.status == status)
 
