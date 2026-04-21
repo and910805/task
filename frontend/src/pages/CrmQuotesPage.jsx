@@ -733,6 +733,12 @@ const CrmQuotesPage = () => {
     const quoteId = Number(quote?.id || 0);
     if (!quoteId) return;
     const quoteLabel = quote?.quote_no || `#${quoteId}`;
+    const existingInvoice = getActiveInvoiceForQuote(quote);
+    if (existingInvoice?.id) {
+      setPendingDeleteQuoteId(null);
+      setError(`此報價單已建立請款單 ${existingInvoice.invoice_no || ''}，請先取消請款後再刪除報價單。`);
+      return;
+    }
     if (pendingDeleteQuoteId !== quoteId) {
       setPendingDeleteQuoteId(quoteId);
       setError(`再按一次「確認刪除」才會刪除報價單 ${quoteLabel}。`);
@@ -748,7 +754,12 @@ const CrmQuotesPage = () => {
       setPendingDeleteQuoteId(null);
       await reloadManagedLists();
     } catch (err) {
-      setError(err?.networkMessage || err?.response?.data?.msg || '刪除報價單失敗');
+      const invoiceNo = err?.response?.data?.invoice_no;
+      setError(
+        invoiceNo
+          ? `此報價單已建立請款單 ${invoiceNo}，請先取消請款後再刪除報價單。`
+          : err?.networkMessage || err?.response?.data?.msg || '刪除報價單失敗',
+      );
     } finally {
       setDeletingQuoteId(null);
     }

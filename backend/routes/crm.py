@@ -2659,6 +2659,7 @@ def delete_quote(quote_id: int):
 
     related_invoice = (
         Invoice.query.filter(Invoice.quote_id == quote.id)
+        .filter(Invoice.status != "cancelled")
         .order_by(Invoice.created_at.desc(), Invoice.id.desc())
         .first()
     )
@@ -2673,6 +2674,13 @@ def delete_quote(quote_id: int):
             ),
             400,
         )
+
+    cancelled_invoices = Invoice.query.filter(
+        Invoice.quote_id == quote.id,
+        Invoice.status == "cancelled",
+    ).all()
+    for invoice in cancelled_invoices:
+        invoice.quote_id = None
 
     quote_snapshot = quote.to_dict()
     customer = quote.customer
