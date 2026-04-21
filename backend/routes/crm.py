@@ -616,7 +616,8 @@ def _apply_totals(entity, items: list[dict], tax_rate_raw):
         return tax_rate_err
 
     safe_tax_rate = round(tax_rate or 0.0, 2)
-    tax_amount = round(subtotal * safe_tax_rate / 100.0, 2)
+    raw_tax_amount = subtotal * safe_tax_rate / 100.0
+    tax_amount = float(math.ceil(raw_tax_amount)) if raw_tax_amount > 0 else 0.0
     total_amount = round(subtotal + tax_amount, 2)
 
     entity.subtotal = subtotal
@@ -2396,6 +2397,119 @@ def list_quotes():
 
     rows = query.limit(limit).all() if limit is not None else query.all()
     return jsonify([row.to_dict() for row in rows])
+
+
+@crm_bp.get("/quotes/item-usage")
+@role_required(*READ_ROLES)
+def search_quote_item_usage():
+    raw_keyword = (request.args.get("q") or "").strip()
+    catalog_item_id = request.args.get("catalog_item_id", type=int)
+    raw_item_name = (request.args.get("item_name") or "").strip()
+    limit = _normalize_limit_arg(request.args.get("limit"), default=30, maximum=200)
+
+    catalog_item = None
+    item_name = raw_item_name
+    if catalog_item_id:
+        catalog_item = ServiceCatalogItem.query.get(catalog_item_id)
+        if not catalog_item:
+            return jsonify({"msg": "Catalog item not found"}), 404
+        item_name = (catalog_item.name or "").strip()
+
+    if not item_name and not raw_keyword:
+        return jsonify({"msg": "item_name or q is required"}), 400
+
+    query = (
+        QuoteItem.query.join(QuoteItem.quote)
+        .options(
+            selectinload(QuoteItem.quote).selectinload(Quote.customer),
+            selectinload(QuoteItem.quote).selectinload(Quote.contact),
+            selectinload(QuoteItem.quote).selectinload(Quote.invoices),
+        )
+        .order_by(Quote.updated_at.desc(), Quote.id.desc(), QuoteItem.sort_order.asc(), QuoteItem.id.asc())
+    )
+
+    if item_name:
+        normalized_item_name = item_name.lower()
+        query = query.filter(func.lower(func.trim(QuoteItem.description)) == normalized_item_name)
+
+    if raw_keyword:
+        pattern = f"%{raw_keyword}%"
+        query = query.filter((QuoteItem.description.ilike(pattern)) | (QuoteItem.note.ilike(pattern)))
+
+    rows = query.limit(limit).all() if limit is not None else query.all()
+
+    grouped_results: OrderedDict[int, dict] = OrderedDict()
+    for row in rows:
+        quote = row.quote
+        if quote is None:
+            continue
+        entry = grouped_results.get(quote.id)
+        if entry is None:
+            active_invoice = next(
+                (
+                    invoice
+                    for invoice in sorted(
+                        quote.invoices or [],
+                        key=lambda item: (item.created_at or datetime.min, item.id or 0),
+                        reverse=True,
+                    )
+                    if (invoice.status or "").lower() != "cancelled"
+                ),
+                None,
+            )
+            entry = {
+                "quote": {
+                    "id": quote.id,
+                    "quote_no": quote.quote_no,
+                    "status": quote.status,
+                    "customer_id": quote.customer_id,
+                    "contact_id": quote.contact_id,
+                    "customer_name": quote.customer.name if quote.customer else None,
+                    "contact_name": quote.contact.name if quote.contact else None,
+                    "recipient_name": quote.recipient_name,
+                    "issue_date": quote.issue_date.isoformat() if quote.issue_date else None,
+                    "expiry_date": quote.expiry_date.isoformat() if quote.expiry_date else None,
+                    "total_amount": round(float(quote.total_amount or 0.0), 2),
+                    "updated_at": quote.updated_at.isoformat() if quote.updated_at else None,
+                    "active_invoice": (
+                        {
+                            "id": active_invoice.id,
+                            "invoice_no": active_invoice.invoice_no,
+                            "status": active_invoice.status,
+                        }
+                        if active_invoice
+                        else None
+                    ),
+                },
+                "matched_items": [],
+            }
+            grouped_results[quote.id] = entry
+
+        entry["matched_items"].append(
+            {
+                "id": row.id,
+                "description": row.description,
+                "unit": row.unit,
+                "note": row.note,
+                "quantity": round(float(row.quantity or 0.0), 4),
+                "unit_price": round(float(row.unit_price or 0.0), 2),
+                "amount": round(float(row.amount or 0.0), 2),
+                "sort_order": row.sort_order,
+            }
+        )
+
+    return jsonify(
+        {
+            "criteria": {
+                "catalog_item_id": catalog_item.id if catalog_item else None,
+                "item_name": item_name or None,
+                "q": raw_keyword or None,
+            },
+            "total_quotes": len(grouped_results),
+            "total_matches": len(rows),
+            "results": list(grouped_results.values()),
+        }
+    )
 
 
 @crm_bp.post("/quotes")

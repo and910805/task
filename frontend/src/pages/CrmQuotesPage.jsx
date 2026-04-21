@@ -131,6 +131,7 @@ const withAuthToken = (rawUrl) => {
 };
 
 const CrmQuotesPage = () => {
+  const [activeTab, setActiveTab] = useState('manage');
   const [customers, setCustomers] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [catalogItems, setCatalogItems] = useState([]);
@@ -157,6 +158,12 @@ const CrmQuotesPage = () => {
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [specialItemType, setSpecialItemType] = useState('blank');
   const [listLimit, setListLimit] = useState('10');
+  const [itemUsageCatalogId, setItemUsageCatalogId] = useState('');
+  const [itemUsageKeyword, setItemUsageKeyword] = useState('');
+  const [itemUsageLoading, setItemUsageLoading] = useState(false);
+  const [itemUsageResults, setItemUsageResults] = useState([]);
+  const [itemUsageMeta, setItemUsageMeta] = useState({ total_quotes: 0, total_matches: 0, criteria: {} });
+  const [itemUsageSearched, setItemUsageSearched] = useState(false);
   const [invoicePaymentForm, setInvoicePaymentForm] = useState(() => defaultInvoicePaymentForm(null));
   const invoiceSignatureSectionRef = useRef(null);
   const invoiceListSectionRef = useRef(null);
@@ -209,6 +216,46 @@ const CrmQuotesPage = () => {
     setHistory({
       quotes: Array.isArray(data?.quotes) ? data.quotes : [],
     });
+  };
+
+  const searchItemUsage = async () => {
+    const keyword = itemUsageKeyword.trim();
+    if (!itemUsageCatalogId && !keyword) {
+      setError('請先選擇品項或輸入關鍵字');
+      setItemUsageSearched(false);
+      return;
+    }
+    setItemUsageLoading(true);
+    setError('');
+    try {
+      const params = { limit: '100' };
+      if (itemUsageCatalogId) params.catalog_item_id = itemUsageCatalogId;
+      if (keyword) params.q = keyword;
+      const { data } = await api.get('crm/quotes/item-usage', { params });
+      setItemUsageResults(Array.isArray(data?.results) ? data.results : []);
+      setItemUsageMeta({
+        total_quotes: Number(data?.total_quotes || 0),
+        total_matches: Number(data?.total_matches || 0),
+        criteria: data?.criteria || {},
+      });
+      setItemUsageSearched(true);
+    } catch (err) {
+      setError(err?.networkMessage || err?.response?.data?.msg || '查詢品項使用紀錄失敗');
+      setItemUsageResults([]);
+      setItemUsageMeta({ total_quotes: 0, total_matches: 0, criteria: {} });
+      setItemUsageSearched(true);
+    } finally {
+      setItemUsageLoading(false);
+    }
+  };
+
+  const resetItemUsageSearch = () => {
+    setItemUsageCatalogId('');
+    setItemUsageKeyword('');
+    setItemUsageResults([]);
+    setItemUsageMeta({ total_quotes: 0, total_matches: 0, criteria: {} });
+    setItemUsageSearched(false);
+    setError('');
   };
 
   useEffect(() => {
@@ -296,6 +343,10 @@ const CrmQuotesPage = () => {
   const customerMap = useMemo(
     () => new Map(customers.map((customer) => [String(customer.id), customer])),
     [customers],
+  );
+  const selectedUsageCatalogItem = useMemo(
+    () => catalogItems.find((item) => String(item.id) === String(itemUsageCatalogId)) || null,
+    [catalogItems, itemUsageCatalogId],
   );
   const getActiveInvoiceForQuote = (quote) => {
     const quoteInvoiceStatus = String(quote?.active_invoice?.status || '').trim().toLowerCase();
@@ -795,6 +846,18 @@ const CrmQuotesPage = () => {
       <AppHeader title="報價單" subtitle="可從價目資料庫帶入品項，並查看客戶歷史施工紀錄。" />
 
       {error && <p className="error-text">{error}</p>}
+
+      <nav className="tab-bar" aria-label="報價功能分頁" style={{ marginBottom: 16 }}>
+        <button type="button" className={activeTab === 'manage' ? 'tab active' : 'tab'} onClick={() => setActiveTab('manage')}>
+          報價管理
+        </button>
+        <button type="button" className={activeTab === 'usage' ? 'tab active' : 'tab'} onClick={() => setActiveTab('usage')}>
+          品項使用紀錄
+        </button>
+      </nav>
+
+      {activeTab === 'manage' ? (
+        <>
 
       <section className="panel">
         <h2>新增報價單</h2>
@@ -1400,6 +1463,149 @@ const CrmQuotesPage = () => {
             </table>
           </div>
         </section>
+      ) : null}
+        </>
+      ) : null}
+
+      {activeTab === 'usage' ? (
+        <>
+          <section className="panel">
+            <div className="panel-header">
+              <h2>品項使用紀錄</h2>
+              <span className="panel-tag">可選品項或輸入關鍵字</span>
+            </div>
+            <form
+              className="stack"
+              onSubmit={(event) => {
+                event.preventDefault();
+                searchItemUsage();
+              }}
+            >
+              <div className="crm-form-grid">
+                <label>
+                  選擇品項
+                  <select value={itemUsageCatalogId} onChange={(event) => setItemUsageCatalogId(event.target.value || '')}>
+                    <option value="">請選擇價目品項</option>
+                    {catalogItems.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  關鍵字搜尋
+                  <input
+                    value={itemUsageKeyword}
+                    onChange={(event) => setItemUsageKeyword(event.target.value)}
+                    placeholder="例如：配線、燈具、漏水"
+                  />
+                </label>
+              </div>
+
+              <div className="crm-form-actions">
+                <button type="submit" disabled={itemUsageLoading}>
+                  {itemUsageLoading ? '查詢中...' : '搜尋'}
+                </button>
+                <button type="button" className="secondary-btn" onClick={resetItemUsageSearch} disabled={itemUsageLoading}>
+                  清除條件
+                </button>
+              </div>
+
+              <div className="crm-actions-cell">
+                {selectedUsageCatalogItem ? (
+                  <span className="panel-tag">品項：{selectedUsageCatalogItem.name}</span>
+                ) : null}
+                {itemUsageKeyword.trim() ? <span className="panel-tag">關鍵字：{itemUsageKeyword.trim()}</span> : null}
+                {itemUsageSearched ? (
+                  <>
+                    <span className="panel-tag">估價單 {itemUsageMeta.total_quotes} 張</span>
+                    <span className="panel-tag">符合品項 {itemUsageMeta.total_matches} 筆</span>
+                  </>
+                ) : null}
+              </div>
+            </form>
+          </section>
+
+          <section className="panel panel--table">
+            <div className="panel-header">
+              <h2>搜尋結果</h2>
+              <span className="panel-tag">最多顯示 100 筆符合資料</span>
+            </div>
+            <div className="table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>報價單號</th>
+                    <th>客戶</th>
+                    <th>日期</th>
+                    <th>符合品項</th>
+                    <th>報價金額</th>
+                    <th>狀態</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {itemUsageResults.map((row) => (
+                    <tr key={row.quote?.id}>
+                      <td>{row.quote?.quote_no || '-'}</td>
+                      <td>{row.quote?.customer_name || row.quote?.recipient_name || row.quote?.contact_name || '-'}</td>
+                      <td>{formatListDate(row.quote?.issue_date || row.quote?.updated_at)}</td>
+                      <td>
+                        <div style={{ display: 'grid', gap: 6, minWidth: 260 }}>
+                          {(Array.isArray(row.matched_items) ? row.matched_items : []).map((item) => (
+                            <div key={item.id} className="panel-tag" style={{ whiteSpace: 'normal', lineHeight: 1.45 }}>
+                              <strong>{item.description || '-'}</strong>
+                              {` / ${Number(item.quantity || 0).toFixed(2)} ${item.unit || ''} / NT$ ${Number(item.amount || 0).toFixed(2)}`}
+                              {item.note ? ` / 備註：${item.note}` : ''}
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                      <td>{quoteDisplayAmount(row.quote || {})}</td>
+                      <td>{crmStatusLabel('quote', row.quote?.status)}</td>
+                      <td className="crm-actions-cell">
+                        <button type="button" className="secondary-btn" onClick={() => openPdf(row.quote?.id)}>
+                          PDF下載
+                        </button>
+                        {quotes.some((quote) => Number(quote.id) === Number(row.quote?.id)) ? (
+                          <button
+                            type="button"
+                            className="secondary-btn"
+                            onClick={() => {
+                              const matchedQuote = quotes.find((quote) => Number(quote.id) === Number(row.quote?.id));
+                              if (matchedQuote) {
+                                setActiveTab('manage');
+                                startEditQuote(matchedQuote);
+                              }
+                            }}
+                          >
+                            編輯
+                          </button>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                  {!itemUsageLoading && !itemUsageSearched ? (
+                    <tr>
+                      <td colSpan="7">先選品項或輸入關鍵字，再按搜尋</td>
+                    </tr>
+                  ) : null}
+                  {!itemUsageLoading && itemUsageSearched && itemUsageResults.length === 0 ? (
+                    <tr>
+                      <td colSpan="7">查無符合的估價單</td>
+                    </tr>
+                  ) : null}
+                  {itemUsageLoading ? (
+                    <tr>
+                      <td colSpan="7">查詢中...</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
       ) : null}
     </div>
   );
