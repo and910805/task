@@ -45,6 +45,15 @@ def _db_url_query_value(db_url: str | None, key: str) -> str | None:
     return values[0] if values else None
 
 
+def _default_postgres_sslmode(db_url: str | None) -> str:
+    if not db_url:
+        return "require"
+    host = (urlsplit(db_url).hostname or "").lower()
+    if host.endswith(".zeabur.com") or host == "zeabur.com":
+        return "disable"
+    return "require"
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     value = (os.environ.get(name) or "").strip().lower()
     if value in {"1", "true", "yes", "y", "on"}:
@@ -116,7 +125,7 @@ def create_app() -> Flask:
         engine_options["pool_size"] = _env_int("DB_POOL_SIZE", 5)
         engine_options["max_overflow"] = _env_int("DB_MAX_OVERFLOW", 10)
         connect_args: dict[str, object] = {}
-        sslmode = os.environ.get("PGSSLMODE") or _db_url_query_value(database_url, "sslmode") or "require"
+        sslmode = os.environ.get("PGSSLMODE") or _db_url_query_value(database_url, "sslmode") or _default_postgres_sslmode(database_url)
         if sslmode:
             connect_args["sslmode"] = sslmode
         connect_timeout = os.environ.get("DB_CONNECT_TIMEOUT", "10")
