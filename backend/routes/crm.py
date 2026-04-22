@@ -501,11 +501,12 @@ def _make_pdf_stamp_canvasmaker(doc, center: tuple[float, float] | None = None):
 
         def save(self):
             total_pages = len(self._saved_page_states)
-            for page_state in self._saved_page_states:
+            for page_index, page_state in enumerate(self._saved_page_states, start=1):
                 self.__dict__.update(page_state)
                 if total_pages > 1:
                     _draw_page_watermark(self)
-                _draw_pdf_stamp(self, doc, center)
+                if page_index == total_pages:
+                    _draw_pdf_stamp(self, doc, center)
                 super().showPage()
             super().save()
 

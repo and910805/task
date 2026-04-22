@@ -755,9 +755,22 @@ class DesktopQuoteTool:
                 return
 
         class StampCanvas(pdf_canvas.Canvas):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._saved_page_states = []
+
             def showPage(self):
-                draw_stamp(self, doc)
-                super().showPage()
+                self._saved_page_states.append(dict(self.__dict__))
+                self._startPage()
+
+            def save(self):
+                total_pages = len(self._saved_page_states)
+                for page_index, page_state in enumerate(self._saved_page_states, start=1):
+                    self.__dict__.update(page_state)
+                    if page_index == total_pages:
+                        draw_stamp(self, doc)
+                    super().showPage()
+                super().save()
 
         doc.build(story, canvasmaker=StampCanvas)
         with open(temp, "rb") as f:
