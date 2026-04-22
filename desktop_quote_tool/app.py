@@ -639,7 +639,8 @@ class DesktopQuoteTool:
         issue = str(q.get("issue_date") or date.today().isoformat())
         rows = [["項次", "項目名稱", "規格內容", "單位", "數量", "單價", "金額", "備註"]]
         items = q.get("items") or []
-        for i in range(20):
+        item_row_count = max(20, len(items))
+        for i in range(item_row_count):
             item = items[i] if i < len(items) else None
             if not item:
                 rows.append([str(i + 1), "", "", "", "", "", "", ""])

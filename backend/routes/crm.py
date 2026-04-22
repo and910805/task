@@ -1203,57 +1203,9 @@ def _build_quote_template_pdf(
             }
         )
 
-    rows = [["項目", "項目名稱", "規格內容", "單位", "數量", "單價", "合計", "備註"]]
-    first_blank_row_written = False
-    for idx in range(20):
-        item = display_items[idx] if idx < len(display_items) else None
-        if item is None:
-            blank_description = "以下空白" if not first_blank_row_written and len(display_items) > 0 else ""
-            first_blank_row_written = True if blank_description else first_blank_row_written
-            rows.append([str(idx + 1), blank_description, "", "", "", "", "", ""])
-            continue
-        if isinstance(item, dict):
-            item_description = item.get("description") or ""
-            item_unit = item.get("unit") or "式"
-            item_note = item.get("note") or ""
-            item_quantity = float(item.get("quantity") or 0)
-            item_unit_price = float(item.get("unit_price") or 0)
-            item_amount = float(item.get("amount") or 0)
-        else:
-            item_description = item.description or ""
-            item_unit = item.unit or "式"
-            item_note = getattr(item, "note", None) or ""
-            item_quantity = float(item.quantity or 0)
-            item_unit_price = float(item.unit_price or 0)
-            item_amount = float(item.amount or 0)
-        rows.append(
-            [
-                str(idx + 1),
-                item_description,
-                "",
-                item_unit,
-                f"{item_quantity:.2f}",
-                _format_compact_table_number(item_unit_price),
-                _format_compact_table_number(item_amount),
-                item_note,
-            ]
-        )
-
     total_amount = _quote_display_total_without_tax(quote)
     total_amount_numeric = _format_amount_number(total_amount)
     total_amount_upper = _format_financial_amount_text(total_amount)
-    rows.append(
-        [
-            "總計",
-            "",
-            "新台幣",
-            total_amount_upper,
-            "",
-            "",
-            f"NT$ {total_amount_numeric}",
-            "",
-        ]
-    )
 
     buffer = BytesIO()
     doc = SimpleDocTemplate(
@@ -1342,6 +1294,45 @@ def _build_quote_template_pdf(
     story[1] = Paragraph(document_label, subtitle_style)
     story.insert(0, Spacer(1, 1 * mm))
     story.insert(0, Paragraph(PDF_COMPANY_TAX_ID_TEXT, company_meta_style))
+
+    rows = [["項目", "項目名稱", "規格內容", "單位", "數量", "單價", "合計", "備註"]]
+    first_blank_row_written = False
+    item_row_count = max(20, len(display_items))
+    for idx in range(item_row_count):
+        item = display_items[idx] if idx < len(display_items) else None
+        if item is None:
+            blank_description = "以下空白" if not first_blank_row_written and len(display_items) > 0 else ""
+            first_blank_row_written = True if blank_description else first_blank_row_written
+            rows.append([str(idx + 1), blank_description, "", "", "", "", "", ""])
+            continue
+        if isinstance(item, dict):
+            item_description = item.get("description") or ""
+            item_unit = item.get("unit") or "式"
+            item_note = item.get("note") or ""
+            item_quantity = float(item.get("quantity") or 0)
+            item_unit_price = float(item.get("unit_price") or 0)
+            item_amount = float(item.get("amount") or 0)
+        else:
+            item_description = item.description or ""
+            item_unit = item.unit or "式"
+            item_note = getattr(item, "note", None) or ""
+            item_quantity = float(item.quantity or 0)
+            item_unit_price = float(item.unit_price or 0)
+            item_amount = float(item.amount or 0)
+        rows.append(
+            [
+                str(idx + 1),
+                item_description,
+                "",
+                item_unit,
+                f"{item_quantity:.2f}",
+                _format_compact_table_number(item_unit_price),
+                _format_compact_table_number(item_amount),
+                item_note,
+            ]
+        )
+    rows.append(["總計", "", "新台幣", total_amount_upper, "", "", f"NT$ {total_amount_numeric}", ""])
+
     for row_index in range(1, len(rows) - 1):
         rows[row_index][1] = _table_paragraph(rows[row_index][1], alignment=0)
         rows[row_index][2] = _table_paragraph(rows[row_index][2], alignment=0)
@@ -1353,6 +1344,7 @@ def _build_quote_template_pdf(
     table = Table(
         rows,
         colWidths=[12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm],
+        rowHeights=([9 * mm] * len(rows) if len(display_items) > 20 else None),
         repeatRows=1,
         hAlign="CENTER",
     )
@@ -3172,7 +3164,7 @@ def quote_pdf(quote_id: int):
     customer = Customer.query.get(quote.customer_id)
     contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
     cache_key = _build_download_cache_key(
-        "quote-pdf",
+        "quote-pdf-v2",
         quote.id,
         quote.updated_at,
         customer.updated_at if customer else None,
@@ -3252,7 +3244,7 @@ def invoice_pdf(invoice_id: int):
     customer = Customer.query.get(invoice.customer_id)
     contact = Contact.query.get(invoice.contact_id) if invoice.contact_id else None
     cache_key = _build_download_cache_key(
-        "invoice-pdf",
+        "invoice-pdf-v2",
         invoice.id,
         invoice.updated_at,
         customer.updated_at if customer else None,
