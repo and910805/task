@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import math
 import subprocess
 import sys
 import tempfile
@@ -639,7 +640,8 @@ class DesktopQuoteTool:
         issue = str(q.get("issue_date") or date.today().isoformat())
         rows = [["項次", "項目名稱", "規格內容", "單位", "數量", "單價", "金額", "備註"]]
         items = q.get("items") or []
-        item_row_count = max(20, len(items))
+        item_rows_per_page = 20
+        item_row_count = max(item_rows_per_page, math.ceil(max(len(items), 1) / item_rows_per_page) * item_rows_per_page)
         for i in range(item_row_count):
             item = items[i] if i < len(items) else None
             if not item:
@@ -680,7 +682,14 @@ class DesktopQuoteTool:
         signer.fontSize = 12
         signer.leading = 16
         story = [Paragraph("立翔水電工程行", title), Paragraph("估價單", body), Spacer(1, 3 * mm), Paragraph(f"{recipient} 台照", body), Paragraph(f"日期：{issue}", body), Paragraph(f"單號：{quote_no}", body), Spacer(1, 4 * mm)]
-        table = Table(rows, colWidths=[12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm], repeatRows=1, hAlign="CENTER")
+        col_widths = [12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm]
+        table = Table(
+            rows,
+            colWidths=col_widths,
+            rowHeights=([9 * mm] * len(rows) if len(items) > item_rows_per_page else None),
+            repeatRows=1,
+            hAlign="CENTER",
+        )
         table.setStyle(
             TableStyle(
                 [
@@ -701,14 +710,38 @@ class DesktopQuoteTool:
             )
         )
         totals_row_index = len(rows) - 1 if rows else 0
-        stamp_center = self._estimate_table_cell_center(
-            doc,
-            story,
-            table,
-            row_index=totals_row_index,
-            col_index=6,
-            h_align="LEFT",
-        )
+        stamp_center = None
+        if len(items) > item_rows_per_page and stamp_path:
+            try:
+                image = ImageReader(stamp_path)
+                src_w, src_h = image.getSize()
+                if src_w and src_h:
+                    table_w = sum(col_widths)
+                    table_left = float(doc.leftMargin) + (float(doc.width) - table_w) / 2.0
+                    col_center_x = table_left + sum(col_widths[:6]) + (col_widths[6] / 2.0)
+                    stamp_w = LOCAL_PDF_STAMP_WIDTH_MM * mm
+                    stamp_h = stamp_w * float(src_h) / float(src_w)
+                    rotate_deg = self._resolve_local_stamp_rotate_deg()
+                    radians = math.radians(float(rotate_deg or 0.0))
+                    bbox_half_h = (stamp_w * abs(math.sin(radians)) + stamp_h * abs(math.cos(radians))) / 2.0
+                    y_offset = self._resolve_local_stamp_y_offset_mm() * mm
+                    total_row_top_y = (
+                        float(doc.pagesize[1])
+                        - float(doc.topMargin)
+                        - ((1 + item_rows_per_page) * 9 * mm)
+                    )
+                    stamp_center = (float(col_center_x), float(total_row_top_y) + float(bbox_half_h) - float(y_offset))
+            except Exception:
+                stamp_center = None
+        if stamp_center is None:
+            stamp_center = self._estimate_table_cell_center(
+                doc,
+                story,
+                table,
+                row_index=totals_row_index,
+                col_index=6,
+                h_align="CENTER",
+            )
         story.append(table)
         story.extend([Spacer(1, 4 * mm), Paragraph("經手人：莊全立", signer)])
 

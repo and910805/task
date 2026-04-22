@@ -1259,9 +1259,10 @@ def _build_quote_template_pdf(
     story.insert(0, Spacer(1, 1 * mm))
     story.insert(0, Paragraph(PDF_COMPANY_TAX_ID_TEXT, company_meta_style))
 
+    item_rows_per_page = 20
     rows = [["項目", "項目名稱", "規格內容", "單位", "數量", "單價", "合計", "備註"]]
     first_blank_row_written = False
-    item_row_count = max(20, len(display_items))
+    item_row_count = max(item_rows_per_page, math.ceil(max(len(display_items), 1) / item_rows_per_page) * item_rows_per_page)
     for idx in range(item_row_count):
         item = display_items[idx] if idx < len(display_items) else None
         if item is None:
@@ -1308,7 +1309,7 @@ def _build_quote_template_pdf(
     table = Table(
         rows,
         colWidths=[12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm],
-        rowHeights=([9 * mm] * len(rows) if len(display_items) > 20 else None),
+        rowHeights=([9 * mm] * len(rows) if len(display_items) > item_rows_per_page else None),
         repeatRows=1,
         hAlign="CENTER",
     )
@@ -1346,32 +1347,57 @@ def _build_quote_template_pdf(
     )
     totals_row_index = len(rows) - 1 if rows else 0
     stamp_center = None
-    stamp_cell_box = _estimate_table_cell_box(
-        doc,
-        story,
-        table,
-        row_index=totals_row_index,
-        col_index=6,
-        h_align="LEFT",
-    )
-    if stamp_cell_box is not None:
+    if len(display_items) > item_rows_per_page:
         try:
             stamp_path = _resolve_pdf_stamp_path()
             if stamp_path:
                 stamp_image = ImageReader(stamp_path)
                 src_w, src_h = stamp_image.getSize()
                 if src_w and src_h:
+                    col_widths = [12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm]
+                    table_w = sum(col_widths)
+                    table_left = float(doc.leftMargin) + (float(doc.width) - table_w) / 2.0
+                    col_center_x = table_left + sum(col_widths[:6]) + (col_widths[6] / 2.0)
                     stamp_w = PDF_STAMP_WIDTH_MM * mm
                     stamp_h = stamp_w * float(src_h) / float(src_w)
                     rotate_deg = _resolve_pdf_stamp_rotation_deg()
                     _, bbox_half_h = _rotated_rect_half_extents(stamp_w, stamp_h, rotate_deg)
                     y_offset = _resolve_pdf_stamp_y_offset_mm() * mm
-                    stamp_center = (
-                        float(stamp_cell_box["col_center_x"]),
-                        float(stamp_cell_box["row_top_y"]) + float(bbox_half_h) - float(y_offset),
+                    total_row_top_y = (
+                        float(doc.pagesize[1])
+                        - float(doc.topMargin)
+                        - ((1 + item_rows_per_page) * 9 * mm)
                     )
+                    stamp_center = (float(col_center_x), float(total_row_top_y) + float(bbox_half_h) - float(y_offset))
         except Exception:
             stamp_center = None
+    if stamp_center is None:
+        stamp_cell_box = _estimate_table_cell_box(
+            doc,
+            story,
+            table,
+            row_index=totals_row_index,
+            col_index=6,
+            h_align="CENTER",
+        )
+        if stamp_cell_box is not None:
+            try:
+                stamp_path = _resolve_pdf_stamp_path()
+                if stamp_path:
+                    stamp_image = ImageReader(stamp_path)
+                    src_w, src_h = stamp_image.getSize()
+                    if src_w and src_h:
+                        stamp_w = PDF_STAMP_WIDTH_MM * mm
+                        stamp_h = stamp_w * float(src_h) / float(src_w)
+                        rotate_deg = _resolve_pdf_stamp_rotation_deg()
+                        _, bbox_half_h = _rotated_rect_half_extents(stamp_w, stamp_h, rotate_deg)
+                        y_offset = _resolve_pdf_stamp_y_offset_mm() * mm
+                        stamp_center = (
+                            float(stamp_cell_box["col_center_x"]),
+                            float(stamp_cell_box["row_top_y"]) + float(bbox_half_h) - float(y_offset),
+                        )
+            except Exception:
+                stamp_center = None
     if stamp_center is None:
         stamp_center = _estimate_table_cell_center(
             doc,
@@ -3128,7 +3154,7 @@ def quote_pdf(quote_id: int):
     customer = Customer.query.get(quote.customer_id)
     contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
     cache_key = _build_download_cache_key(
-        "quote-pdf-v2",
+        "quote-pdf-v3",
         quote.id,
         quote.updated_at,
         customer.updated_at if customer else None,
@@ -3208,7 +3234,7 @@ def invoice_pdf(invoice_id: int):
     customer = Customer.query.get(invoice.customer_id)
     contact = Contact.query.get(invoice.contact_id) if invoice.contact_id else None
     cache_key = _build_download_cache_key(
-        "invoice-pdf-v2",
+        "invoice-pdf-v3",
         invoice.id,
         invoice.updated_at,
         customer.updated_at if customer else None,
