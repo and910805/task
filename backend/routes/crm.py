@@ -455,41 +455,6 @@ def _draw_pdf_stamp(canvas, doc, center: tuple[float, float] | None = None):
 
 
 def _make_pdf_stamp_canvasmaker(doc, center: tuple[float, float] | None = None):
-    def _draw_page_watermark(canvas_obj) -> None:
-        try:
-            page_no = int(getattr(canvas_obj, "_pageNumber", 1) or 1)
-        except Exception:
-            page_no = 1
-        page_w, page_h = doc.pagesize
-        label = f"第{page_no}頁"
-
-        canvas_obj.saveState()
-        try:
-            canvas_obj.setFillAlpha(0.18)
-        except Exception:
-            pass
-        canvas_obj.setFillColor(colors.HexColor("#64748b"))
-        try:
-            canvas_obj.setFont(PDF_FONT_NAME, 44)
-        except Exception:
-            canvas_obj.setFont("Helvetica", 44)
-        canvas_obj.drawCentredString(page_w / 2.0, page_h / 2.0, label)
-
-        try:
-            canvas_obj.setFillAlpha(0.55)
-        except Exception:
-            pass
-        try:
-            canvas_obj.setFont(PDF_FONT_NAME, 10)
-        except Exception:
-            canvas_obj.setFont("Helvetica", 10)
-        canvas_obj.drawRightString(
-            float(page_w) - float(doc.rightMargin),
-            float(page_h) - float(doc.topMargin) + (2 * mm),
-            label,
-        )
-        canvas_obj.restoreState()
-
     class _StampCanvas(pdf_canvas.Canvas):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -503,8 +468,6 @@ def _make_pdf_stamp_canvasmaker(doc, center: tuple[float, float] | None = None):
             total_pages = len(self._saved_page_states)
             for page_index, page_state in enumerate(self._saved_page_states, start=1):
                 self.__dict__.update(page_state)
-                if total_pages > 1:
-                    _draw_page_watermark(self)
                 if page_index == total_pages:
                     _draw_pdf_stamp(self, doc, center)
                 super().showPage()
