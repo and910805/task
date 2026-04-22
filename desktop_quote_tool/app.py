@@ -725,12 +725,15 @@ class DesktopQuoteTool:
                     radians = math.radians(float(rotate_deg or 0.0))
                     bbox_half_h = (stamp_w * abs(math.sin(radians)) + stamp_h * abs(math.cos(radians))) / 2.0
                     y_offset = self._resolve_local_stamp_y_offset_mm() * mm
-                    total_row_top_y = (
-                        float(doc.pagesize[1])
-                        - float(doc.topMargin)
-                        - ((1 + item_rows_per_page) * 9 * mm)
-                    )
-                    stamp_center = (float(col_center_x), float(total_row_top_y) + float(bbox_half_h) - float(y_offset))
+                    last_page_item_count = len(items) % item_rows_per_page or item_rows_per_page
+                    first_blank_slot = min(last_page_item_count + 1, item_rows_per_page)
+                    blank_slots = max(item_rows_per_page - last_page_item_count, 1)
+                    blank_center_slot = first_blank_slot + (blank_slots - 1) / 2.0
+                    page_table_top_y = float(doc.pagesize[1]) - float(doc.topMargin)
+                    blank_center_y = page_table_top_y - (blank_center_slot + 0.5) * 9 * mm
+                    total_row_top_y = page_table_top_y - ((1 + item_rows_per_page) * 9 * mm)
+                    min_center_y = float(total_row_top_y) + float(bbox_half_h) + (2 * mm)
+                    stamp_center = (float(col_center_x), max(float(blank_center_y) - float(y_offset), min_center_y))
             except Exception:
                 stamp_center = None
         if stamp_center is None:
