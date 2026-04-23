@@ -18,7 +18,6 @@ const toNumber = (value) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : 0;
 };
-const round2 = (value) => Math.round(toNumber(value) * 100) / 100;
 const isBlankMarkerItem = (item) => String(item?.description || '').trim() === '以下空白';
 const isManualTaxItem = (item) => String(item?.description || '').trim() === MANUAL_TAX_ITEM_NAME;
 const calculateManualTaxSubtotal = (items) =>
@@ -26,6 +25,7 @@ const calculateManualTaxSubtotal = (items) =>
     if (isBlankMarkerItem(item) || isManualTaxItem(item)) return sum;
     return sum + toNumber(item?.quantity) * toNumber(item?.unit_price);
   }, 0);
+const calculateManualTaxAmount = (items) => Math.ceil(calculateManualTaxSubtotal(items) * MANUAL_TAX_RATE);
 const STATUS_LABELS = {
   quote: {
     draft: '尚未送出',
@@ -505,7 +505,7 @@ const CrmQuotesPage = () => {
           unit: '式',
           note: '',
           quantity: 1,
-          unit_price: round2(calculateManualTaxSubtotal(prev) * MANUAL_TAX_RATE),
+          unit_price: calculateManualTaxAmount(prev),
         },
       ]);
       return;
@@ -550,7 +550,7 @@ const CrmQuotesPage = () => {
               unit: item.unit || '式',
               note: item.note || '',
               quantity: item.quantity ?? 1,
-              unit_price: item.unit_price ?? 0,
+              unit_price: isManualTaxItem(item) ? Math.ceil(toNumber(item.unit_price)) : item.unit_price ?? 0,
             }),
           )
         : [blankItem()],
@@ -1042,14 +1042,14 @@ const CrmQuotesPage = () => {
                   value={item.quantity}
                   onChange={(event) => handleItemChange(idx, 'quantity', event.target.value)}
                   placeholder="數量"
-                  step="0.1"
+                  step={isManualTaxItem(item) ? '1' : '0.1'}
                 />
                 <input
                   type="number"
                   value={item.unit_price}
                   onChange={(event) => handleItemChange(idx, 'unit_price', event.target.value)}
                   placeholder="單價"
-                  step="0.1"
+                  step={isManualTaxItem(item) ? '1' : '0.1'}
                 />
                 <button type="button" className="secondary-btn" onClick={() => moveItem(idx, -1)} disabled={idx === 0}>
                   上移
