@@ -128,8 +128,10 @@ const CrmQuotesPage = () => {
   const [saving, setSaving] = useState(false);
   const [convertingQuoteId, setConvertingQuoteId] = useState(null);
   const [deletingQuoteId, setDeletingQuoteId] = useState(null);
+  const [downloadingQuotePdfId, setDownloadingQuotePdfId] = useState(null);
   const [pendingDeleteQuoteId, setPendingDeleteQuoteId] = useState(null);
   const [cancellingInvoiceId, setCancellingInvoiceId] = useState(null);
+  const [downloadingInvoicePdfId, setDownloadingInvoicePdfId] = useState(null);
   const [paymentPanelInvoiceId, setPaymentPanelInvoiceId] = useState(null);
   const [savingInvoicePayment, setSavingInvoicePayment] = useState(false);
   const [deletingInvoicePaymentId, setDeletingInvoicePaymentId] = useState(null);
@@ -609,8 +611,10 @@ const CrmQuotesPage = () => {
   };
 
   const openPdf = async (quoteId) => {
+    if (!quoteId) return;
+    setDownloadingQuotePdfId(quoteId);
     try {
-      const response = await api.get(`crm/quotes/${quoteId}/pdf`, { responseType: 'blob' });
+      const response = await api.get(`crm/quotes/${quoteId}/pdf`, { responseType: 'blob', timeout: 60000 });
       const data = response.data;
       const filenameFromHeader = getFilenameFromDisposition(response.headers?.['content-disposition']);
       const blobUrl = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }));
@@ -639,12 +643,16 @@ const CrmQuotesPage = () => {
         }
       }
       setError(err?.networkMessage || err?.response?.data?.msg || '下載 PDF 失敗');
+    } finally {
+      setDownloadingQuotePdfId(null);
     }
   };
 
   const openInvoicePdf = async (invoiceId) => {
+    if (!invoiceId) return;
+    setDownloadingInvoicePdfId(invoiceId);
     try {
-      const response = await api.get(`crm/invoices/${invoiceId}/pdf`, { responseType: 'blob' });
+      const response = await api.get(`crm/invoices/${invoiceId}/pdf`, { responseType: 'blob', timeout: 60000 });
       const data = response.data;
       const filenameFromHeader = getFilenameFromDisposition(response.headers?.['content-disposition']);
       const blobUrl = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }));
@@ -673,6 +681,8 @@ const CrmQuotesPage = () => {
         }
       }
       setError(err?.networkMessage || err?.response?.data?.msg || '下載請款單 PDF 失敗');
+    } finally {
+      setDownloadingInvoicePdfId(null);
     }
   };
 
@@ -1219,8 +1229,13 @@ const CrmQuotesPage = () => {
                           ? '已轉請款單'
                           : '轉成請款單'}
                     </button>
-                    <button type="button" className="secondary-btn" onClick={() => openPdf(quote.id)}>
-                      PDF下載
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      onClick={() => openPdf(quote.id)}
+                      disabled={downloadingQuotePdfId === quote.id}
+                    >
+                      {downloadingQuotePdfId === quote.id ? 'PDF產生中...' : 'PDF下載'}
                     </button>
                     <button type="button" className="secondary-btn" onClick={() => downloadXlsx(quote)}>
                       XLSX
@@ -1299,8 +1314,13 @@ const CrmQuotesPage = () => {
                   <td>{quoteDisplayAmount(invoice)}</td>
                   <td>{invoice.issue_date || '-'}</td>
                   <td className="crm-actions-cell">
-                    <button type="button" className="secondary-btn" onClick={() => openInvoicePdf(invoice.id)}>
-                      PDF下載
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      onClick={() => openInvoicePdf(invoice.id)}
+                      disabled={downloadingInvoicePdfId === invoice.id}
+                    >
+                      {downloadingInvoicePdfId === invoice.id ? 'PDF產生中...' : 'PDF下載'}
                     </button>
                     <button type="button" className="secondary-btn" onClick={() => openInvoicePaymentPanel(invoice)}>
                       {invoice.customer_signed_at ? '查看簽名' : '客戶簽名'}
@@ -1578,8 +1598,13 @@ const CrmQuotesPage = () => {
                       <td>{quoteDisplayAmount(row.quote || {})}</td>
                       <td>{crmStatusLabel('quote', row.quote?.status)}</td>
                       <td className="crm-actions-cell">
-                        <button type="button" className="secondary-btn" onClick={() => openPdf(row.quote?.id)}>
-                          PDF下載
+                        <button
+                          type="button"
+                          className="secondary-btn"
+                          onClick={() => openPdf(row.quote?.id)}
+                          disabled={downloadingQuotePdfId === row.quote?.id}
+                        >
+                          {downloadingQuotePdfId === row.quote?.id ? 'PDF產生中...' : 'PDF下載'}
                         </button>
                         {quotes.some((quote) => Number(quote.id) === Number(row.quote?.id)) ? (
                           <button
