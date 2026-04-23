@@ -3084,7 +3084,7 @@ def quote_xlsx(quote_id: int):
     customer = Customer.query.get(quote.customer_id)
     contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
     cache_key = _build_download_cache_key(
-        "quote-xlsx",
+        "quote-xlsx-v2",
         quote.id,
         quote.updated_at,
         customer.updated_at if customer else None,
@@ -3157,7 +3157,7 @@ def quote_pdf(quote_id: int):
     customer = Customer.query.get(quote.customer_id)
     contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
     cache_key = _build_download_cache_key(
-        "quote-pdf-v3",
+        "quote-pdf-v4",
         quote.id,
         quote.updated_at,
         customer.updated_at if customer else None,
