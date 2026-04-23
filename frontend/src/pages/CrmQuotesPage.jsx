@@ -26,20 +26,6 @@ const calculateManualTaxSubtotal = (items) =>
     if (isBlankMarkerItem(item) || isManualTaxItem(item)) return sum;
     return sum + toNumber(item?.quantity) * toNumber(item?.unit_price);
   }, 0);
-const syncManualTaxItems = (items) => {
-  if (!Array.isArray(items) || !items.some(isManualTaxItem)) return items;
-  const taxAmount = round2(calculateManualTaxSubtotal(items) * MANUAL_TAX_RATE);
-  return items.map((item) =>
-    isManualTaxItem(item)
-      ? {
-          ...item,
-          unit: '式',
-          quantity: 1,
-          unit_price: taxAmount,
-        }
-      : item,
-  );
-};
 const STATUS_LABELS = {
   quote: {
     draft: '尚未送出',
@@ -183,7 +169,7 @@ const CrmQuotesPage = () => {
   const updateItems = (updater) => {
     setItems((prev) => {
       const nextItems = typeof updater === 'function' ? updater(prev) : updater;
-      return syncManualTaxItems(nextItems);
+      return Array.isArray(nextItems) ? nextItems : prev;
     });
   };
 
@@ -508,7 +494,7 @@ const CrmQuotesPage = () => {
         return;
       }
       if (items.some(isManualTaxItem)) {
-        setError('已經有稅金品項，後續會自動重算，不需重複加入。');
+        setError('已經有稅金品項，可直接修改既有稅金金額，不需重複加入。');
         return;
       }
       updateItems((prev) => [
@@ -519,7 +505,7 @@ const CrmQuotesPage = () => {
           unit: '式',
           note: '',
           quantity: 1,
-          unit_price: 0,
+          unit_price: round2(calculateManualTaxSubtotal(prev) * MANUAL_TAX_RATE),
         },
       ]);
       return;
@@ -1026,7 +1012,7 @@ const CrmQuotesPage = () => {
                 </button>
                 <select value={specialItemType} onChange={(event) => setSpecialItemType(event.target.value)}>
                   <option value="blank">空白行</option>
-                  <option value="tax">稅金（5%預設）</option>
+                  <option value="tax">稅金（5%預填，可修改）</option>
                 </select>
                 <button type="button" className="secondary-btn" onClick={addSpecialItem}>
                   加入特殊項
@@ -1057,7 +1043,6 @@ const CrmQuotesPage = () => {
                   onChange={(event) => handleItemChange(idx, 'quantity', event.target.value)}
                   placeholder="數量"
                   step="0.1"
-                  disabled={isManualTaxItem(item)}
                 />
                 <input
                   type="number"
@@ -1065,7 +1050,6 @@ const CrmQuotesPage = () => {
                   onChange={(event) => handleItemChange(idx, 'unit_price', event.target.value)}
                   placeholder="單價"
                   step="0.1"
-                  disabled={isManualTaxItem(item)}
                 />
                 <button type="button" className="secondary-btn" onClick={() => moveItem(idx, -1)} disabled={idx === 0}>
                   上移
