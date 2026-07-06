@@ -127,6 +127,7 @@ const CrmQuotesPage = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [convertingQuoteId, setConvertingQuoteId] = useState(null);
+  const [copyingQuoteId, setCopyingQuoteId] = useState(null);
   const [deletingQuoteId, setDeletingQuoteId] = useState(null);
   const [downloadingQuotePdfId, setDownloadingQuotePdfId] = useState(null);
   const [pendingDeleteQuoteId, setPendingDeleteQuoteId] = useState(null);
@@ -725,6 +726,29 @@ const CrmQuotesPage = () => {
     }
   };
 
+  const duplicateQuote = async (quote) => {
+    const quoteId = Number(quote?.id || 0);
+    if (!quoteId) return;
+    setCopyingQuoteId(quoteId);
+    setPendingDeleteQuoteId(null);
+    setError('');
+    try {
+      const { data } = await api.post(`crm/quotes/${quoteId}/duplicate`);
+      const copiedQuote = data && typeof data === 'object' ? data : null;
+      const quoteRows = await loadQuotes();
+      await loadInvoices(quoteRows);
+      await loadBase();
+      if (copiedQuote?.id) {
+        setActiveTab('manage');
+        startEditQuote(copiedQuote);
+      }
+    } catch (err) {
+      setError(err?.networkMessage || err?.response?.data?.msg || '複製報價單失敗');
+    } finally {
+      setCopyingQuoteId(null);
+    }
+  };
+
   const deleteQuote = async (quote) => {
     const quoteId = Number(quote?.id || 0);
     if (!quoteId) return;
@@ -1242,6 +1266,14 @@ const CrmQuotesPage = () => {
                     </button>
                     <button type="button" className="secondary-btn" onClick={() => startEditQuote(quote)}>
                       編輯
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      onClick={() => duplicateQuote(quote)}
+                      disabled={copyingQuoteId === quote.id}
+                    >
+                      {copyingQuoteId === quote.id ? '複製中...' : '複製'}
                     </button>
                     <button
                       type="button"

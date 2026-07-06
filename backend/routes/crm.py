@@ -57,6 +57,7 @@ VALID_QUOTE_STATUS = {"draft", "sent", "accepted", "rejected", "expired"}
 VALID_INVOICE_STATUS = {"draft", "issued", "partially_paid", "paid", "cancelled"}
 VALID_WEBSITE_BOOKING_TYPES = {"booking", "quote", "contact"}
 VALID_WEBSITE_BOOKING_STATUS = {"pending", "contacted", "quoted", "converted", "closed"}
+DEFAULT_QUOTE_VALID_DAYS = 10
 
 PDF_FONT_NAME = "Helvetica"
 PDF_FONT_ENV = "PDF_FONT_PATH"
@@ -644,8 +645,8 @@ def _apply_totals(entity, items: list[dict], tax_rate_raw):
     return None
 
 
-def _next_quote_no() -> str:
-    ymd = datetime.utcnow().strftime("%Y%m%d")
+def _next_quote_no(reference_date: date | None = None) -> str:
+    ymd = reference_date.strftime("%Y%m%d") if reference_date else datetime.utcnow().strftime("%Y%m%d")
     prefix = f"QT-{ymd}-"
 
     rows = Quote.query.with_entities(Quote.quote_no).filter(Quote.quote_no.like(f"{prefix}%")).all()
@@ -663,6 +664,69 @@ def _next_quote_no() -> str:
         next_seq += 1
         candidate = f"{prefix}{next_seq:03d}"
     return candidate
+
+
+def _duplicate_quote(source: Quote, *, today: date | None = None) -> Quote:
+    issue_date = today or date.today()
+    if source.issue_date and source.expiry_date:
+        valid_days = max(0, (source.expiry_date - source.issue_date).days)
+    else:
+        valid_days = DEFAULT_QUOTE_VALID_DAYS
+    expiry_date = issue_date + timedelta(days=valid_days)
+    items = [
+        {
+            "description": item.description,
+            "unit": item.unit,
+            "note": item.note,
+            "quantity": float(item.quantity or 0.0),
+            "unit_price": float(item.unit_price or 0.0),
+            "amount": round(float(item.quantity or 0.0) * float(item.unit_price or 0.0), 2),
+            "sort_order": index,
+        }
+        for index, item in enumerate(
+            sorted(
+                source.items or [],
+                key=lambda row: (
+                    row.sort_order if row.sort_order is not None else 10**9,
+                    row.id if row.id is not None else 10**9,
+                ),
+            )
+        )
+    ]
+
+    quote = Quote(
+        quote_no=_next_quote_no(issue_date),
+        status="draft",
+        customer_id=source.customer_id,
+        contact_id=source.contact_id,
+        recipient_name=source.recipient_name,
+        site_address=source.site_address,
+        issue_date=issue_date,
+        expiry_date=expiry_date,
+        currency=(source.currency or "TWD").strip().upper() or "TWD",
+        note=source.note,
+        created_by_id=get_current_user_id(),
+    )
+    total_err = _apply_totals(quote, items, source.tax_rate)
+    if total_err:
+        raise ValueError("Invalid source quote totals")
+
+    db.session.add(quote)
+    db.session.flush()
+    for item in items:
+        db.session.add(QuoteItem(quote_id=quote.id, **item))
+    _sync_quote_items_to_catalog(items)
+
+    db.session.flush()
+    copied = Quote.query.options(selectinload(Quote.items)).get(quote.id) or quote
+    _append_quote_version_snapshot(
+        copied,
+        action="duplicate",
+        summary=f"Duplicated from {source.quote_no}",
+    )
+    if source.customer:
+        db.session.add(_create_task_for_quote(copied, source.customer, source.contact))
+    return copied
 
 
 def _next_invoice_no() -> str:
@@ -2709,6 +2773,26 @@ def update_quote(quote_id: int):
     db.session.commit()
     quote = Quote.query.options(selectinload(Quote.items)).get(quote.id)
     return jsonify(quote.to_dict())
+
+
+@crm_bp.post("/quotes/<int:quote_id>/duplicate")
+@role_required(*WRITE_ROLES)
+def duplicate_quote(quote_id: int):
+    source = Quote.query.options(
+        selectinload(Quote.items),
+        selectinload(Quote.customer),
+        selectinload(Quote.contact),
+    ).get_or_404(quote_id)
+
+    try:
+        copied = _duplicate_quote(source)
+    except ValueError:
+        db.session.rollback()
+        return jsonify({"msg": "無法複製此報價單，請檢查品項或稅率資料"}), 400
+
+    db.session.commit()
+    copied = Quote.query.options(selectinload(Quote.items)).get(copied.id)
+    return jsonify(copied.to_dict() if copied else {}), 201
 
 
 @crm_bp.delete("/quotes/<int:quote_id>")
