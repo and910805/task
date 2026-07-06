@@ -51,4 +51,4 @@ ENV PDF_FONT_PATH=/usr/local/share/fonts/NotoSerifTC-wght.ttf
 ENV PDF_REQUIRE_EMBEDDED_FONT=1
 ENV INIT_DB_ON_STARTUP=1
 
-CMD ["sh", "-c", "flask --app backend/app.py init-db && gunicorn --chdir backend -w ${WEB_CONCURRENCY:-1} --threads ${WEB_THREADS:-2} -b 0.0.0.0:${PORT:-5000} app:app"]
+CMD ["sh", "-c", "APP_PORT=${WEB_PORT:-${PORT:-5000}}; case \"$APP_PORT\" in ''|*[!0-9]*) APP_PORT=5000 ;; esac; flask --app backend/app.py init-db && gunicorn --chdir backend -w ${WEB_CONCURRENCY:-1} --threads ${WEB_THREADS:-2} -b 0.0.0.0:${APP_PORT} app:app"]
