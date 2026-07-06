@@ -349,6 +349,46 @@ def _rotated_rect_half_extents(width: float, height: float, rotate_deg: float) -
     return half_w, half_h
 
 
+def _quote_pdf_item_row_count(item_count: int, rows_per_page: int) -> int:
+    rows_per_page = max(int(rows_per_page or 1), 1)
+    item_count = max(int(item_count or 0), 0)
+    page_count = max(1, math.ceil(max(item_count, 1) / rows_per_page))
+    row_count = page_count * rows_per_page
+    if item_count > 0 and item_count % rows_per_page == 0:
+        row_count += rows_per_page
+    return row_count
+
+
+def _fit_stamp_in_safe_box(
+    stamp_w: float,
+    stamp_h: float,
+    rotate_deg: float,
+    safe_box: dict[str, float],
+    *,
+    padding: float = 1.5 * mm,
+) -> tuple[float, float, float, float] | None:
+    left_x = float(safe_box.get("left_x", safe_box.get("col_left_x", 0.0)))
+    right_x = float(safe_box.get("right_x", safe_box.get("col_right_x", 0.0)))
+    bottom_y = float(safe_box.get("bottom_y", safe_box.get("row_bottom_y", 0.0)))
+    top_y = float(safe_box.get("top_y", safe_box.get("row_top_y", 0.0)))
+    available_w = max(0.0, right_x - left_x - (2.0 * padding))
+    available_h = max(0.0, top_y - bottom_y - (2.0 * padding))
+    if available_w <= 0.0 or available_h <= 0.0:
+        return None
+
+    bbox_half_w, bbox_half_h = _rotated_rect_half_extents(stamp_w, stamp_h, rotate_deg)
+    if bbox_half_w <= 0.0 or bbox_half_h <= 0.0:
+        return None
+
+    scale = min(1.0, available_w / (2.0 * bbox_half_w), available_h / (2.0 * bbox_half_h))
+    if scale <= 0.0:
+        return None
+
+    fitted_w = float(stamp_w) * scale
+    fitted_h = float(stamp_h) * scale
+    return (left_x + right_x) / 2.0, (bottom_y + top_y) / 2.0, fitted_w, fitted_h
+
+
 def _estimate_table_cell_box(doc, flowables_before, table, row_index: int, col_index: int, h_align: str):
     try:
         table.wrap(doc.width, doc.height)
@@ -406,7 +446,7 @@ def _estimate_table_cell_center(doc, flowables_before, table, row_index: int, co
     return box["col_center_x"], box["row_center_y"]
 
 
-def _draw_pdf_stamp(canvas, doc, center: tuple[float, float] | None = None):
+def _draw_pdf_stamp(canvas, doc, placement=None):
     stamp_path = _resolve_pdf_stamp_path()
     if not stamp_path:
         return
@@ -422,13 +462,26 @@ def _draw_pdf_stamp(canvas, doc, center: tuple[float, float] | None = None):
         y_offset = _resolve_pdf_stamp_y_offset_mm() * mm
         bbox_half_w, bbox_half_h = _rotated_rect_half_extents(stamp_w, stamp_h, rotate_deg)
 
-        if center is not None:
-            center_x, center_y = center
+        apply_y_offset = True
+        if placement is not None:
+            if isinstance(placement, dict):
+                center_x = placement["center_x"]
+                center_y = placement["center_y"]
+                stamp_w = placement.get("stamp_w", stamp_w)
+                stamp_h = placement.get("stamp_h", stamp_h)
+                apply_y_offset = bool(placement.get("apply_y_offset", False))
+            elif len(placement) == 4:
+                center_x, center_y, stamp_w, stamp_h = placement
+                apply_y_offset = False
+            else:
+                center_x, center_y = placement
+            bbox_half_w, bbox_half_h = _rotated_rect_half_extents(stamp_w, stamp_h, rotate_deg)
         else:
             page_w, page_h = doc.pagesize
             center_x = page_w - doc.rightMargin - bbox_half_w
             center_y = page_h - doc.topMargin - bbox_half_h + 4 * mm
-        center_y += y_offset
+        if apply_y_offset:
+            center_y += y_offset
         page_w, page_h = doc.pagesize
         min_x = float(doc.leftMargin) + bbox_half_w
         max_x = float(page_w) - float(doc.rightMargin) - bbox_half_w
@@ -454,7 +507,7 @@ def _draw_pdf_stamp(canvas, doc, center: tuple[float, float] | None = None):
         return
 
 
-def _make_pdf_stamp_canvasmaker(doc, center: tuple[float, float] | None = None):
+def _make_pdf_stamp_canvasmaker(doc, placement=None):
     class _StampCanvas(pdf_canvas.Canvas):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -469,7 +522,7 @@ def _make_pdf_stamp_canvasmaker(doc, center: tuple[float, float] | None = None):
             for page_index, page_state in enumerate(self._saved_page_states, start=1):
                 self.__dict__.update(page_state)
                 if page_index == total_pages:
-                    _draw_pdf_stamp(self, doc, center)
+                    _draw_pdf_stamp(self, doc, placement)
                 super().showPage()
             super().save()
 
@@ -1262,7 +1315,7 @@ def _build_quote_template_pdf(
     item_rows_per_page = 20
     rows = [["項目", "項目名稱", "規格內容", "單位", "數量", "單價", "合計", "備註"]]
     first_blank_row_written = False
-    item_row_count = max(item_rows_per_page, math.ceil(max(len(display_items), 1) / item_rows_per_page) * item_rows_per_page)
+    item_row_count = _quote_pdf_item_row_count(len(display_items), item_rows_per_page)
     for idx in range(item_row_count):
         item = display_items[idx] if idx < len(display_items) else None
         if item is None:
@@ -1309,7 +1362,7 @@ def _build_quote_template_pdf(
     table = Table(
         rows,
         colWidths=[12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm],
-        rowHeights=([9 * mm] * len(rows) if len(display_items) > item_rows_per_page else None),
+        rowHeights=([9 * mm] * len(rows) if item_row_count > item_rows_per_page else None),
         repeatRows=1,
         hAlign="CENTER",
     )
@@ -1346,35 +1399,61 @@ def _build_quote_template_pdf(
         )
     )
     totals_row_index = len(rows) - 1 if rows else 0
-    stamp_center = None
-    if len(display_items) > item_rows_per_page:
+    stamp_placement = None
+    stamp_path = _resolve_pdf_stamp_path()
+    if stamp_path:
         try:
-            stamp_path = _resolve_pdf_stamp_path()
-            if stamp_path:
-                stamp_image = ImageReader(stamp_path)
-                src_w, src_h = stamp_image.getSize()
-                if src_w and src_h:
-                    col_widths = [12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm]
-                    table_w = sum(col_widths)
-                    table_left = float(doc.leftMargin) + (float(doc.width) - table_w) / 2.0
-                    col_center_x = table_left + sum(col_widths[:6]) + (col_widths[6] / 2.0)
-                    stamp_w = PDF_STAMP_WIDTH_MM * mm
-                    stamp_h = stamp_w * float(src_h) / float(src_w)
-                    rotate_deg = _resolve_pdf_stamp_rotation_deg()
-                    _, bbox_half_h = _rotated_rect_half_extents(stamp_w, stamp_h, rotate_deg)
-                    y_offset = _resolve_pdf_stamp_y_offset_mm() * mm
-                    last_page_item_count = len(display_items) % item_rows_per_page or item_rows_per_page
-                    first_blank_slot = min(last_page_item_count + 1, item_rows_per_page)
-                    blank_slots = max(item_rows_per_page - last_page_item_count, 1)
-                    blank_center_slot = first_blank_slot + (blank_slots - 1) / 2.0
+            stamp_image = ImageReader(stamp_path)
+            src_w, src_h = stamp_image.getSize()
+            if src_w and src_h:
+                col_widths = [12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm]
+                table_w = sum(col_widths)
+                table_left = float(doc.leftMargin) + (float(doc.width) - table_w) / 2.0
+                stamp_w = PDF_STAMP_WIDTH_MM * mm
+                stamp_h = stamp_w * float(src_h) / float(src_w)
+                rotate_deg = _resolve_pdf_stamp_rotation_deg()
+                last_page_item_count = len(display_items) % item_rows_per_page
+                first_blank_slot = last_page_item_count + 1
+                safe_box = None
+                if item_row_count <= item_rows_per_page:
+                    first_blank_row = len(display_items) + 1
+                    last_blank_row = item_row_count
+                    first_box = _estimate_table_cell_box(
+                        doc,
+                        story,
+                        table,
+                        row_index=first_blank_row,
+                        col_index=5,
+                        h_align="CENTER",
+                    )
+                    last_box = _estimate_table_cell_box(
+                        doc,
+                        story,
+                        table,
+                        row_index=last_blank_row,
+                        col_index=7,
+                        h_align="CENTER",
+                    )
+                    if first_box and last_box:
+                        safe_box = {
+                            "left_x": first_box["col_left_x"],
+                            "right_x": last_box["col_right_x"],
+                            "top_y": first_box["row_top_y"],
+                            "bottom_y": last_box["row_bottom_y"],
+                        }
+                else:
                     page_table_top_y = float(doc.pagesize[1]) - float(doc.topMargin)
-                    blank_center_y = page_table_top_y - (blank_center_slot + 0.5) * 9 * mm
-                    total_row_top_y = page_table_top_y - ((1 + item_rows_per_page) * 9 * mm)
-                    min_center_y = float(total_row_top_y) + float(bbox_half_h) + (2 * mm)
-                    stamp_center = (float(col_center_x), max(float(blank_center_y) - float(y_offset), min_center_y))
+                    safe_box = {
+                        "left_x": table_left + sum(col_widths[:5]),
+                        "right_x": table_left + sum(col_widths[:8]),
+                        "top_y": page_table_top_y - (first_blank_slot * 9 * mm),
+                        "bottom_y": page_table_top_y - ((item_rows_per_page + 1) * 9 * mm),
+                    }
+                if safe_box:
+                    stamp_placement = _fit_stamp_in_safe_box(stamp_w, stamp_h, rotate_deg, safe_box)
         except Exception:
-            stamp_center = None
-    if stamp_center is None:
+            stamp_placement = None
+    if stamp_placement is None:
         stamp_cell_box = _estimate_table_cell_box(
             doc,
             story,
@@ -1395,14 +1474,14 @@ def _build_quote_template_pdf(
                         rotate_deg = _resolve_pdf_stamp_rotation_deg()
                         _, bbox_half_h = _rotated_rect_half_extents(stamp_w, stamp_h, rotate_deg)
                         y_offset = _resolve_pdf_stamp_y_offset_mm() * mm
-                        stamp_center = (
+                        stamp_placement = (
                             float(stamp_cell_box["col_center_x"]),
                             float(stamp_cell_box["row_top_y"]) + float(bbox_half_h) - float(y_offset),
                         )
             except Exception:
-                stamp_center = None
-    if stamp_center is None:
-        stamp_center = _estimate_table_cell_center(
+                stamp_placement = None
+    if stamp_placement is None:
+        stamp_placement = _estimate_table_cell_center(
             doc,
             story,
             table,
@@ -1449,7 +1528,7 @@ def _build_quote_template_pdf(
             pass
     story.extend([Spacer(1, 4 * mm), Paragraph("經手人：莊全立", signer_style)])
 
-    doc.build(story, canvasmaker=_make_pdf_stamp_canvasmaker(doc, stamp_center))
+    doc.build(story, canvasmaker=_make_pdf_stamp_canvasmaker(doc, stamp_placement))
     buffer.seek(0)
     return buffer
 
