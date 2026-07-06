@@ -1264,8 +1264,14 @@ const CrmQuotesPage = () => {
                     <button type="button" className="secondary-btn" onClick={() => downloadXlsx(quote)}>
                       XLSX
                     </button>
-                    <button type="button" className="secondary-btn" onClick={() => startEditQuote(quote)}>
-                      編輯
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      onClick={() => startEditQuote(quote)}
+                      disabled={hasActiveInvoice}
+                      title={hasActiveInvoice ? '已轉成請款單，請先取消請款單再編輯' : undefined}
+                    >
+                      {hasActiveInvoice ? '請先取消請款' : '編輯'}
                     </button>
                     <button
                       type="button"
@@ -1649,8 +1655,9 @@ const CrmQuotesPage = () => {
                                 startEditQuote(matchedQuote);
                               }
                             }}
+                            disabled={Boolean(getActiveInvoiceForQuote(quotes.find((quote) => Number(quote.id) === Number(row.quote?.id))))}
                           >
-                            編輯
+                            {getActiveInvoiceForQuote(quotes.find((quote) => Number(quote.id) === Number(row.quote?.id))) ? '請先取消請款' : '編輯'}
                           </button>
                         ) : null}
                       </td>

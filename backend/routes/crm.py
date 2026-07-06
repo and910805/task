@@ -796,6 +796,15 @@ def _invoice_payment_total(invoice: Invoice) -> float:
     return round(sum(float(row.amount or 0.0) for row in (invoice.payment_records or [])), 2)
 
 
+def _active_invoice_for_quote(quote_id: int) -> Invoice | None:
+    return (
+        Invoice.query.filter(Invoice.quote_id == quote_id)
+        .filter(Invoice.status != "cancelled")
+        .order_by(Invoice.created_at.desc(), Invoice.id.desc())
+        .first()
+    )
+
+
 def _recalculate_invoice_payment_status(invoice: Invoice) -> None:
     if (invoice.status or "").strip().lower() == "cancelled":
         return
@@ -2710,6 +2719,18 @@ def create_quote():
 def update_quote(quote_id: int):
     quote = Quote.query.options(selectinload(Quote.items)).get_or_404(quote_id)
     data = request.get_json() or {}
+    active_invoice = _active_invoice_for_quote(quote.id)
+    if active_invoice is not None:
+        return (
+            jsonify(
+                {
+                    "msg": f"此報價單已轉成請款單 {active_invoice.invoice_no}，請先取消請款單再編輯報價單。",
+                    "invoice_id": active_invoice.id,
+                    "invoice_no": active_invoice.invoice_no,
+                }
+            ),
+            409,
+        )
 
     if "status" in data:
         status = (data.get("status") or "").strip().lower()
@@ -2805,12 +2826,7 @@ def delete_quote(quote_id: int):
         selectinload(Quote.invoices),
     ).get_or_404(quote_id)
 
-    related_invoice = (
-        Invoice.query.filter(Invoice.quote_id == quote.id)
-        .filter(Invoice.status != "cancelled")
-        .order_by(Invoice.created_at.desc(), Invoice.id.desc())
-        .first()
-    )
+    related_invoice = _active_invoice_for_quote(quote.id)
     if related_invoice is not None:
         return (
             jsonify(
