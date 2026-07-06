@@ -91,6 +91,9 @@ PDF_STAMP_DEFAULT_Y_OFFSET_MM = 10.0
 PDF_COMPANY_TAX_ID_TEXT = "\u7acb\u7fd4\u6c34\u96fb\u7d71\u7de8 14511159"
 CRM_DOWNLOAD_CACHE_MAX_ITEMS = 32
 CRM_DOWNLOAD_CACHE: OrderedDict[str, tuple[bytes, str, str]] = OrderedDict()
+QUOTE_PDF_STAMP_RESERVED_ROWS = 4
+QUOTE_PDF_BASE_ROW_HEIGHT_MM = 9
+QUOTE_PDF_STAMP_ROW_HEIGHT_MM = 10.6
 
 
 def _normalize_limit_arg(raw_limit, *, default: int = 5, maximum: int = 200) -> int | None:
@@ -350,12 +353,20 @@ def _rotated_rect_half_extents(width: float, height: float, rotate_deg: float) -
     return half_w, half_h
 
 
-def _quote_pdf_item_row_count(item_count: int, rows_per_page: int) -> int:
+def _quote_pdf_item_row_count(
+    item_count: int,
+    rows_per_page: int,
+    *,
+    reserved_blank_rows: int = QUOTE_PDF_STAMP_RESERVED_ROWS,
+) -> int:
     rows_per_page = max(int(rows_per_page or 1), 1)
     item_count = max(int(item_count or 0), 0)
     page_count = max(1, math.ceil(max(item_count, 1) / rows_per_page))
     row_count = page_count * rows_per_page
-    if item_count > 0 and item_count % rows_per_page == 0:
+    last_page_item_count = item_count % rows_per_page
+    if item_count > 0 and last_page_item_count == 0:
+        row_count += rows_per_page
+    elif item_count > 0 and rows_per_page - last_page_item_count < max(int(reserved_blank_rows or 0), 0):
         row_count += rows_per_page
     return row_count
 
@@ -381,13 +392,35 @@ def _fit_stamp_in_safe_box(
     if bbox_half_w <= 0.0 or bbox_half_h <= 0.0:
         return None
 
-    scale = min(1.0, available_w / (2.0 * bbox_half_w), available_h / (2.0 * bbox_half_h))
-    if scale <= 0.0:
+    if available_w < (2.0 * bbox_half_w) or available_h < (2.0 * bbox_half_h):
         return None
 
-    fitted_w = float(stamp_w) * scale
-    fitted_h = float(stamp_h) * scale
+    fitted_w = float(stamp_w)
+    fitted_h = float(stamp_h)
     return (left_x + right_x) / 2.0, (bottom_y + top_y) / 2.0, fitted_w, fitted_h
+
+
+def _quote_pdf_row_heights(
+    item_count: int,
+    item_row_count: int,
+    rows_per_page: int,
+    *,
+    reserved_blank_rows: int = QUOTE_PDF_STAMP_RESERVED_ROWS,
+) -> list[float]:
+    row_heights = [QUOTE_PDF_BASE_ROW_HEIGHT_MM * mm] * (int(item_row_count) + 2)
+    item_count = max(int(item_count or 0), 0)
+    item_row_count = max(int(item_row_count or 0), 0)
+    rows_per_page = max(int(rows_per_page or 1), 1)
+    reserved_blank_rows = max(int(reserved_blank_rows or 0), 0)
+    if not row_heights or item_row_count <= 0 or reserved_blank_rows <= 0:
+        return row_heights
+
+    last_page_start = ((item_row_count - 1) // rows_per_page) * rows_per_page
+    first_blank_item_slot = max(item_count, last_page_start)
+    last_reserved_slot = min(item_row_count, first_blank_item_slot + reserved_blank_rows)
+    for item_slot in range(first_blank_item_slot, last_reserved_slot):
+        row_heights[item_slot + 1] = QUOTE_PDF_STAMP_ROW_HEIGHT_MM * mm
+    return row_heights
 
 
 def _estimate_table_cell_box(doc, flowables_before, table, row_index: int, col_index: int, h_align: str):
@@ -522,7 +555,11 @@ def _make_pdf_stamp_canvasmaker(doc, placement=None):
             total_pages = len(self._saved_page_states)
             for page_index, page_state in enumerate(self._saved_page_states, start=1):
                 self.__dict__.update(page_state)
-                if page_index == total_pages:
+                target_page = None
+                if isinstance(placement, dict):
+                    target_page = placement.get("target_page")
+                should_draw = page_index == total_pages if target_page is None else page_index == int(target_page)
+                if should_draw:
                     _draw_pdf_stamp(self, doc, placement)
                 super().showPage()
             super().save()
@@ -1432,10 +1469,11 @@ def _build_quote_template_pdf(
         rows[row_index][7] = _table_paragraph(rows[row_index][7], alignment=0)
     rows[-1][6] = _fit_numeric_cell(rows[-1][6], width_mm=20)
 
+    table_row_heights = _quote_pdf_row_heights(len(display_items), item_row_count, item_rows_per_page)
     table = Table(
         rows,
         colWidths=[12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm],
-        rowHeights=([9 * mm] * len(rows) if item_row_count > item_rows_per_page else None),
+        rowHeights=table_row_heights,
         repeatRows=1,
         hAlign="CENTER",
     )
@@ -1485,8 +1523,6 @@ def _build_quote_template_pdf(
                 stamp_w = PDF_STAMP_WIDTH_MM * mm
                 stamp_h = stamp_w * float(src_h) / float(src_w)
                 rotate_deg = _resolve_pdf_stamp_rotation_deg()
-                last_page_item_count = len(display_items) % item_rows_per_page
-                first_blank_slot = last_page_item_count + 1
                 safe_box = None
                 if item_row_count <= item_rows_per_page:
                     first_blank_row = len(display_items) + 1
@@ -1515,15 +1551,29 @@ def _build_quote_template_pdf(
                             "bottom_y": last_box["row_bottom_y"],
                         }
                 else:
+                    last_page_start = ((item_row_count - 1) // item_rows_per_page) * item_rows_per_page
+                    first_blank_row = max(len(display_items), last_page_start) + 1
+                    last_blank_row = min(item_row_count, first_blank_row + QUOTE_PDF_STAMP_RESERVED_ROWS - 1)
+                    rows_above_blank = sum(table_row_heights[last_page_start + 1 : first_blank_row])
+                    rows_through_blank = sum(table_row_heights[last_page_start + 1 : last_blank_row + 1])
                     page_table_top_y = float(doc.pagesize[1]) - float(doc.topMargin)
                     safe_box = {
                         "left_x": table_left + sum(col_widths[:5]),
                         "right_x": table_left + sum(col_widths[:8]),
-                        "top_y": page_table_top_y - (first_blank_slot * 9 * mm),
-                        "bottom_y": page_table_top_y - ((item_rows_per_page + 1) * 9 * mm),
+                        "top_y": page_table_top_y - table_row_heights[0] - rows_above_blank,
+                        "bottom_y": page_table_top_y - table_row_heights[0] - rows_through_blank,
                     }
                 if safe_box:
-                    stamp_placement = _fit_stamp_in_safe_box(stamp_w, stamp_h, rotate_deg, safe_box)
+                    stamp_placement = _fit_stamp_in_safe_box(stamp_w, stamp_h, rotate_deg, safe_box, padding=0)
+                    if stamp_placement is not None:
+                        center_x, center_y, fitted_w, fitted_h = stamp_placement
+                        stamp_placement = {
+                            "center_x": center_x,
+                            "center_y": center_y,
+                            "stamp_w": fitted_w,
+                            "stamp_h": fitted_h,
+                            "target_page": max(1, math.ceil(item_row_count / item_rows_per_page)),
+                        }
         except Exception:
             stamp_placement = None
     if stamp_placement is None:
@@ -1566,12 +1616,30 @@ def _build_quote_template_pdf(
 
     expiry_value = getattr(quote, "expiry_date", None) or quote.issue_date
     validity_date_label = "請款日期" if document_label == "請款單" else "報價日期"
-    story.extend(
-        [
-            Spacer(1, 2 * mm),
-            Paragraph(f"{validity_date_label}有效期限至 {_to_month_day_text(expiry_value)}", body_style),
-        ]
-    )
+    footer_date = Paragraph(f"{validity_date_label}有效期限至 {_to_month_day_text(expiry_value)}", body_style)
+    footer_signer = Paragraph("經手人：莊全立", signer_style)
+
+    if not quote.note and signature_image_path is None:
+        footer_table = Table(
+            [[footer_date, footer_signer]],
+            colWidths=[88 * mm, 88 * mm],
+            hAlign="CENTER",
+        )
+        footer_table.setStyle(
+            TableStyle(
+                [
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ]
+            )
+        )
+        story.extend([Spacer(1, 1 * mm), footer_table])
+    else:
+        story.extend([Spacer(1, 2 * mm), footer_date])
 
     if quote.note:
         story.extend([Spacer(1, 4 * mm), Paragraph(f"備註：{quote.note}", body_style)])
@@ -1599,7 +1667,8 @@ def _build_quote_template_pdf(
             story.extend([Spacer(1, 2 * mm), signature_table])
         except Exception:
             pass
-    story.extend([Spacer(1, 4 * mm), Paragraph("經手人：莊全立", signer_style)])
+    if quote.note or signature_image_path is not None:
+        story.extend([Spacer(1, 4 * mm), footer_signer])
 
     doc.build(story, canvasmaker=_make_pdf_stamp_canvasmaker(doc, stamp_placement))
     buffer.seek(0)
