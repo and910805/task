@@ -96,6 +96,7 @@ CRM_DOWNLOAD_CACHE: OrderedDict[str, tuple[bytes, str, str]] = OrderedDict()
 QUOTE_PDF_STAMP_RESERVED_ROWS = 4
 QUOTE_PDF_BASE_ROW_HEIGHT_MM = 9
 QUOTE_PDF_STAMP_ROW_HEIGHT_MM = 10.6
+QUOTE_PDF_MIN_BLANK_ROW_HEIGHT_MM = 5.5
 
 
 def _normalize_limit_arg(raw_limit, *, default: int = 5, maximum: int = 200) -> int | None:
@@ -408,12 +409,15 @@ def _quote_pdf_row_heights(
     rows_per_page: int,
     *,
     reserved_blank_rows: int = QUOTE_PDF_STAMP_RESERVED_ROWS,
+    item_heights: list[float] | None = None,
 ) -> list[float]:
     row_heights = [QUOTE_PDF_BASE_ROW_HEIGHT_MM * mm] * (int(item_row_count) + 2)
     item_count = max(int(item_count or 0), 0)
     item_row_count = max(int(item_row_count or 0), 0)
     rows_per_page = max(int(rows_per_page or 1), 1)
     reserved_blank_rows = max(int(reserved_blank_rows or 0), 0)
+    for item_slot, height in enumerate((item_heights or [])[: min(item_count, item_row_count)]):
+        row_heights[item_slot + 1] = max(row_heights[item_slot + 1], float(height or 0))
     if not row_heights or item_row_count <= 0 or reserved_blank_rows <= 0:
         return row_heights
 
@@ -422,7 +426,129 @@ def _quote_pdf_row_heights(
     last_reserved_slot = min(item_row_count, first_blank_item_slot + reserved_blank_rows)
     for item_slot in range(first_blank_item_slot, last_reserved_slot):
         row_heights[item_slot + 1] = QUOTE_PDF_STAMP_ROW_HEIGHT_MM * mm
+
+    dynamic_extra = sum(
+        max(0.0, row_heights[item_slot + 1] - (QUOTE_PDF_BASE_ROW_HEIGHT_MM * mm))
+        for item_slot in range(min(item_count, item_row_count))
+    )
+    reserved_slots = set(range(first_blank_item_slot, last_reserved_slot))
+    flexible_blank_slots = [
+        item_slot
+        for item_slot in range(item_count, item_row_count)
+        if item_slot not in reserved_slots
+    ]
+    if dynamic_extra > 0 and flexible_blank_slots:
+        max_reduction = (QUOTE_PDF_BASE_ROW_HEIGHT_MM - QUOTE_PDF_MIN_BLANK_ROW_HEIGHT_MM) * mm
+        reduction_per_row = min(max_reduction, dynamic_extra / len(flexible_blank_slots))
+        for item_slot in flexible_blank_slots:
+            row_heights[item_slot + 1] -= reduction_per_row
     return row_heights
+
+
+def _quote_pdf_item_heights(rows: list[list[object]], col_widths: list[float], item_count: int) -> list[float]:
+    item_heights: list[float] = []
+    horizontal_padding = 12.0
+    vertical_padding = 8.0
+    for row_index in range(1, min(item_count, len(rows) - 1) + 1):
+        required_height = QUOTE_PDF_BASE_ROW_HEIGHT_MM * mm
+        for col_index in (1, 2, 7):
+            value = rows[row_index][col_index]
+            if not hasattr(value, "wrap"):
+                continue
+            available_width = max(1.0, float(col_widths[col_index]) - horizontal_padding)
+            _, content_height = value.wrap(available_width, A4[1])
+            required_height = max(required_height, float(content_height) + vertical_padding)
+        item_heights.append(required_height)
+    return item_heights
+
+
+def _table_cell_text(value: object) -> str:
+    if hasattr(value, "getPlainText"):
+        return str(value.getPlainText())
+    return str(value or "")
+
+
+def _table_page_fragments(doc, flowables_before, table) -> list[dict[str, object]]:
+    used_height = 0.0
+    remaining_height = float(doc.height)
+    for flowable in flowables_before:
+        block_h = _flowable_render_height(flowable, float(doc.width), remaining_height)
+        used_height += block_h
+        remaining_height = max(1.0, remaining_height - block_h)
+
+    page_w, page_h = doc.pagesize
+    del page_w
+    pending = table
+    page_index = 1
+    first_page = True
+    fragments: list[dict[str, object]] = []
+    for _ in range(100):
+        available_height = max(1.0, float(doc.height) - used_height) if first_page else float(doc.height)
+        table_top = (
+            float(page_h) - float(doc.topMargin) - used_height
+            if first_page
+            else float(page_h) - float(doc.topMargin)
+        )
+        parts = pending.split(float(doc.width), available_height)
+        if not parts:
+            if first_page and used_height > 0:
+                first_page = False
+                page_index += 1
+                continue
+            return []
+
+        fragment = parts[0]
+        fragment.wrap(float(doc.width), available_height)
+        fragments.append(
+            {
+                "page_index": page_index,
+                "table_top": table_top,
+                "table": fragment,
+            }
+        )
+        if len(parts) == 1:
+            return fragments
+        pending = parts[1]
+        first_page = False
+        page_index += 1
+    return []
+
+
+def _find_table_label_range_box(
+    doc,
+    flowables_before,
+    table,
+    *,
+    first_label: str,
+    last_label: str,
+    first_col: int,
+    last_col: int,
+) -> dict[str, float] | None:
+    for layout in _table_page_fragments(doc, flowables_before, table):
+        fragment = layout["table"]
+        row_heights = [float(v) for v in getattr(fragment, "_rowHeights", [])]
+        col_widths = [float(v) for v in getattr(fragment, "_colWidths", [])]
+        cell_values = list(getattr(fragment, "_cellvalues", []))
+        labels = [_table_cell_text(row[0]) if row else "" for row in cell_values]
+        try:
+            first_row = labels.index(first_label)
+            last_row = labels.index(last_label)
+        except ValueError:
+            continue
+        if last_row < first_row or not row_heights or not col_widths:
+            continue
+
+        table_w = sum(col_widths)
+        table_left = float(doc.leftMargin) + (float(doc.width) - table_w) / 2.0
+        table_top = float(layout["table_top"])
+        return {
+            "left_x": table_left + sum(col_widths[:first_col]),
+            "right_x": table_left + sum(col_widths[: last_col + 1]),
+            "top_y": table_top - sum(row_heights[:first_row]),
+            "bottom_y": table_top - sum(row_heights[: last_row + 1]),
+            "target_page": float(layout["page_index"]),
+        }
+    return None
 
 
 def _estimate_table_cell_box(doc, flowables_before, table, row_index: int, col_index: int, h_align: str):
@@ -483,6 +609,8 @@ def _estimate_table_cell_center(doc, flowables_before, table, row_index: int, co
 
 
 def _draw_pdf_stamp(canvas, doc, placement=None):
+    if isinstance(placement, dict) and placement.get("disabled"):
+        return
     stamp_path = _resolve_pdf_stamp_path()
     if not stamp_path:
         return
@@ -1521,10 +1649,17 @@ def _build_quote_template_pdf(
         rows[row_index][7] = _table_paragraph(rows[row_index][7], alignment=0)
     rows[-1][6] = _fit_numeric_cell(rows[-1][6], width_mm=20)
 
-    table_row_heights = _quote_pdf_row_heights(len(display_items), item_row_count, item_rows_per_page)
+    col_widths = [12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm]
+    item_heights = _quote_pdf_item_heights(rows, col_widths, len(display_items))
+    table_row_heights = _quote_pdf_row_heights(
+        len(display_items),
+        item_row_count,
+        item_rows_per_page,
+        item_heights=item_heights,
+    )
     table = Table(
         rows,
-        colWidths=[12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm],
+        colWidths=col_widths,
         rowHeights=table_row_heights,
         repeatRows=1,
         hAlign="CENTER",
@@ -1561,7 +1696,18 @@ def _build_quote_template_pdf(
             ]
         )
     )
-    totals_row_index = len(rows) - 1 if rows else 0
+    first_blank_row = len(display_items) + 1
+    last_stamp_blank_row = min(
+        item_row_count,
+        first_blank_row + QUOTE_PDF_STAMP_RESERVED_ROWS - 1,
+    )
+    if first_blank_row <= last_stamp_blank_row:
+        table.setStyle(
+            TableStyle(
+                [("NOSPLIT", (0, first_blank_row), (-1, last_stamp_blank_row))]
+            )
+        )
+
     stamp_placement = None
     stamp_path = _resolve_pdf_stamp_path()
     if stamp_path:
@@ -1569,52 +1715,18 @@ def _build_quote_template_pdf(
             stamp_image = ImageReader(stamp_path)
             src_w, src_h = stamp_image.getSize()
             if src_w and src_h:
-                col_widths = [12 * mm, 46 * mm, 28 * mm, 14 * mm, 14 * mm, 20 * mm, 20 * mm, 20 * mm]
-                table_w = sum(col_widths)
-                table_left = float(doc.leftMargin) + (float(doc.width) - table_w) / 2.0
                 stamp_w = PDF_STAMP_WIDTH_MM * mm
                 stamp_h = stamp_w * float(src_h) / float(src_w)
                 rotate_deg = _resolve_pdf_stamp_rotation_deg()
-                safe_box = None
-                if item_row_count <= item_rows_per_page:
-                    first_blank_row = len(display_items) + 1
-                    last_blank_row = item_row_count
-                    first_box = _estimate_table_cell_box(
-                        doc,
-                        story,
-                        table,
-                        row_index=first_blank_row,
-                        col_index=5,
-                        h_align="CENTER",
-                    )
-                    last_box = _estimate_table_cell_box(
-                        doc,
-                        story,
-                        table,
-                        row_index=last_blank_row,
-                        col_index=7,
-                        h_align="CENTER",
-                    )
-                    if first_box and last_box:
-                        safe_box = {
-                            "left_x": first_box["col_left_x"],
-                            "right_x": last_box["col_right_x"],
-                            "top_y": first_box["row_top_y"],
-                            "bottom_y": last_box["row_bottom_y"],
-                        }
-                else:
-                    last_page_start = ((item_row_count - 1) // item_rows_per_page) * item_rows_per_page
-                    first_blank_row = max(len(display_items), last_page_start) + 1
-                    last_blank_row = min(item_row_count, first_blank_row + QUOTE_PDF_STAMP_RESERVED_ROWS - 1)
-                    rows_above_blank = sum(table_row_heights[last_page_start + 1 : first_blank_row])
-                    rows_through_blank = sum(table_row_heights[last_page_start + 1 : last_blank_row + 1])
-                    page_table_top_y = float(doc.pagesize[1]) - float(doc.topMargin)
-                    safe_box = {
-                        "left_x": table_left + sum(col_widths[:5]),
-                        "right_x": table_left + sum(col_widths[:8]),
-                        "top_y": page_table_top_y - table_row_heights[0] - rows_above_blank,
-                        "bottom_y": page_table_top_y - table_row_heights[0] - rows_through_blank,
-                    }
+                safe_box = _find_table_label_range_box(
+                    doc,
+                    story,
+                    table,
+                    first_label=str(first_blank_row),
+                    last_label=str(last_stamp_blank_row),
+                    first_col=5,
+                    last_col=7,
+                )
                 if safe_box:
                     stamp_placement = _fit_stamp_in_safe_box(stamp_w, stamp_h, rotate_deg, safe_box, padding=0)
                     if stamp_placement is not None:
@@ -1624,46 +1736,12 @@ def _build_quote_template_pdf(
                             "center_y": center_y,
                             "stamp_w": fitted_w,
                             "stamp_h": fitted_h,
-                            "target_page": max(1, math.ceil(item_row_count / item_rows_per_page)),
+                            "target_page": int(safe_box["target_page"]),
                         }
         except Exception:
             stamp_placement = None
     if stamp_placement is None:
-        stamp_cell_box = _estimate_table_cell_box(
-            doc,
-            story,
-            table,
-            row_index=totals_row_index,
-            col_index=6,
-            h_align="CENTER",
-        )
-        if stamp_cell_box is not None:
-            try:
-                stamp_path = _resolve_pdf_stamp_path()
-                if stamp_path:
-                    stamp_image = ImageReader(stamp_path)
-                    src_w, src_h = stamp_image.getSize()
-                    if src_w and src_h:
-                        stamp_w = PDF_STAMP_WIDTH_MM * mm
-                        stamp_h = stamp_w * float(src_h) / float(src_w)
-                        rotate_deg = _resolve_pdf_stamp_rotation_deg()
-                        _, bbox_half_h = _rotated_rect_half_extents(stamp_w, stamp_h, rotate_deg)
-                        y_offset = _resolve_pdf_stamp_y_offset_mm() * mm
-                        stamp_placement = (
-                            float(stamp_cell_box["col_center_x"]),
-                            float(stamp_cell_box["row_top_y"]) + float(bbox_half_h) - float(y_offset),
-                        )
-            except Exception:
-                stamp_placement = None
-    if stamp_placement is None:
-        stamp_placement = _estimate_table_cell_center(
-            doc,
-            story,
-            table,
-            row_index=max(1, totals_row_index - 5),
-            col_index=6,
-            h_align="LEFT",
-        )
+        stamp_placement = {"disabled": True}
     story.append(table)
 
     expiry_value = getattr(quote, "expiry_date", None) or quote.issue_date
@@ -3457,7 +3535,7 @@ def quote_pdf(quote_id: int):
     customer = Customer.query.get(quote.customer_id)
     contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
     cache_key = _build_download_cache_key(
-        "quote-pdf-v4",
+        "quote-pdf-v5",
         quote.id,
         quote.updated_at,
         customer.updated_at if customer else None,
@@ -3466,12 +3544,16 @@ def quote_pdf(quote_id: int):
     cached = _get_cached_download(cache_key)
     if cached is not None:
         content, cached_filename, cached_mimetype = cached
-        return send_file(
+        response = send_file(
             BytesIO(content),
             mimetype=cached_mimetype,
-            as_attachment=False,
+            as_attachment=True,
             download_name=cached_filename,
         )
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
 
     try:
         buffer = _build_quote_template_pdf(quote, customer, contact)
@@ -3500,12 +3582,16 @@ def quote_pdf(quote_id: int):
         filename=filename,
         mimetype="application/pdf",
     )
-    return send_file(
+    response = send_file(
         BytesIO(content),
         mimetype="application/pdf",
         as_attachment=True,
         download_name=filename,
     )
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @crm_bp.get("/health/pdf-font")
