@@ -119,6 +119,14 @@ class QuotePdfStampPlacementTest(unittest.TestCase):
         for row_index in range(2, 6):
             self.assertEqual(adjusted[row_index], crm.QUOTE_PDF_STAMP_ROW_HEIGHT_MM * mm)
 
+    def test_full_first_page_reserves_stamp_rows_on_following_page(self):
+        row_heights = crm._quote_pdf_row_heights(18, 40, 20)
+
+        for row_index in range(21, 25):
+            self.assertEqual(row_heights[row_index], crm.QUOTE_PDF_STAMP_ROW_HEIGHT_MM * mm)
+        self.assertEqual(row_heights[19], crm.QUOTE_PDF_BASE_ROW_HEIGHT_MM * mm)
+        self.assertEqual(row_heights[20], crm.QUOTE_PDF_BASE_ROW_HEIGHT_MM * mm)
+
     def test_stamp_box_follows_actual_table_fragment_after_tall_rows(self):
         doc = SimpleDocTemplate(
             BytesIO(),

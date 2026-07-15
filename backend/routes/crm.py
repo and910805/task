@@ -95,7 +95,8 @@ CRM_DOWNLOAD_CACHE_MAX_ITEMS = 32
 CRM_DOWNLOAD_CACHE: OrderedDict[str, tuple[bytes, str, str]] = OrderedDict()
 QUOTE_PDF_STAMP_RESERVED_ROWS = 4
 QUOTE_PDF_BASE_ROW_HEIGHT_MM = 9
-QUOTE_PDF_STAMP_ROW_HEIGHT_MM = 10.6
+QUOTE_PDF_STAMP_ROW_HEIGHT_MM = 11.0
+QUOTE_PDF_STAMP_PADDING_MM = 0.75
 QUOTE_PDF_MIN_BLANK_ROW_HEIGHT_MM = 5.5
 
 
@@ -1696,7 +1697,8 @@ def _build_quote_template_pdf(
             ]
         )
     )
-    first_blank_row = len(display_items) + 1
+    last_page_start = ((item_row_count - 1) // item_rows_per_page) * item_rows_per_page
+    first_blank_row = max(len(display_items), last_page_start) + 1
     last_stamp_blank_row = min(
         item_row_count,
         first_blank_row + QUOTE_PDF_STAMP_RESERVED_ROWS - 1,
@@ -1728,7 +1730,13 @@ def _build_quote_template_pdf(
                     last_col=7,
                 )
                 if safe_box:
-                    stamp_placement = _fit_stamp_in_safe_box(stamp_w, stamp_h, rotate_deg, safe_box, padding=0)
+                    stamp_placement = _fit_stamp_in_safe_box(
+                        stamp_w,
+                        stamp_h,
+                        rotate_deg,
+                        safe_box,
+                        padding=QUOTE_PDF_STAMP_PADDING_MM * mm,
+                    )
                     if stamp_placement is not None:
                         center_x, center_y, fitted_w, fitted_h = stamp_placement
                         stamp_placement = {
@@ -3535,7 +3543,7 @@ def quote_pdf(quote_id: int):
     customer = Customer.query.get(quote.customer_id)
     contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
     cache_key = _build_download_cache_key(
-        "quote-pdf-v5",
+        "quote-pdf-v6",
         quote.id,
         quote.updated_at,
         customer.updated_at if customer else None,
