@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 from io import BytesIO
 from collections import OrderedDict
+from copy import copy
 import glob
 import json
 import math
@@ -10,6 +11,7 @@ import os
 from pathlib import Path
 import re
 from types import SimpleNamespace
+import unicodedata
 from xml.sax.saxutils import escape
 
 from flask import Blueprint, current_app, jsonify, request, send_file
@@ -1133,6 +1135,54 @@ def _find_quote_template_path() -> Path | None:
     return candidates[0] if candidates else None
 
 
+def _excel_text_width_units(value: object) -> int:
+    width = 0
+    for char in str(value or ""):
+        if char == "\t":
+            width += 4
+        elif unicodedata.east_asian_width(char) in {"W", "F", "A"}:
+            width += 2
+        else:
+            width += 1
+    return width
+
+
+def _quote_template_cell_height(ws, cell_ref: str) -> float:
+    cell = ws[cell_ref]
+    font_size = float(cell.font.sz or 11)
+    column_width = float(ws.column_dimensions[cell.column_letter].width or 13)
+    # Excel column widths are based on the default 11 pt font. Allow a small
+    # margin for the cell padding and treat full-width CJK glyphs as two units.
+    line_capacity = max(1.0, (column_width * 11.0 / font_size) - 1.0)
+    line_count = 0
+    for paragraph in str(cell.value or "").split("\n"):
+        line_count += max(1, math.ceil(_excel_text_width_units(paragraph) / line_capacity))
+    return (line_count * font_size * 1.2) + 3.0
+
+
+def _autofit_quote_template_row(ws, row: int, cell_refs: tuple[str, ...] = ("D", "J")) -> None:
+    minimum_height = float(ws.row_dimensions[row].height or ws.sheet_format.defaultRowHeight or 15)
+    required_height = minimum_height
+    for column in cell_refs:
+        cell = ws[f"{column}{row}"]
+        alignment = copy(cell.alignment)
+        alignment.wrap_text = True
+        cell.alignment = alignment
+        if cell.value not in (None, ""):
+            required_height = max(required_height, _quote_template_cell_height(ws, cell.coordinate))
+    ws.row_dimensions[row].height = round(required_height, 2)
+
+
+def _configure_quote_template_print_layout(ws) -> None:
+    # Keep columns on one page, but let long item content continue vertically.
+    # Forcing every row onto one page would make long quotes unreadably small.
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.page_setup.scale = None
+    ws.print_title_rows = "1:6"
+
+
 def _apply_quote_to_template_sheet(ws, quote: Quote, customer: Customer | None, contact: Contact | None) -> None:
     recipient = _resolve_quote_recipient_display(quote, customer, contact)
     site_address = (getattr(quote, "site_address", None) or "").strip()
@@ -1170,6 +1220,7 @@ def _apply_quote_to_template_sheet(ws, quote: Quote, customer: Customer | None, 
         ws[f"H{row}"] = float(item.unit_price or 0)
         ws[f"I{row}"] = float(item.amount or 0)
         ws[f"J{row}"] = item.note or ""
+        _autofit_quote_template_row(ws, row)
 
     total_amount = _quote_display_total_without_tax(quote)
     ws["C27"] = "總計"
@@ -1177,6 +1228,7 @@ def _apply_quote_to_template_sheet(ws, quote: Quote, customer: Customer | None, 
     ws["F27"] = total_amount
     ws["H27"] = "NT$"
     ws["I27"] = total_amount
+    _configure_quote_template_print_layout(ws)
 
 
 def _validate_customer_contact(customer_id, contact_id):
@@ -3332,7 +3384,7 @@ def quote_xlsx(quote_id: int):
     customer = Customer.query.get(quote.customer_id)
     contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
     cache_key = _build_download_cache_key(
-        "quote-xlsx-v2",
+        "quote-xlsx-v3",
         quote.id,
         quote.updated_at,
         customer.updated_at if customer else None,
