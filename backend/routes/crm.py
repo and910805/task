@@ -5,6 +5,7 @@ from io import BytesIO
 from collections import OrderedDict
 from copy import copy
 import glob
+import hashlib
 import json
 import math
 import os
@@ -118,7 +119,7 @@ def _cache_datetime_token(value) -> str:
     if value is None:
         return "-"
     if isinstance(value, datetime):
-        return value.replace(microsecond=0).isoformat()
+        return value.isoformat()
     if isinstance(value, date):
         return value.isoformat()
     return str(value)
@@ -129,6 +130,30 @@ def _build_download_cache_key(prefix: str, *parts: object) -> str:
     for part in parts:
         normalized.append(_cache_datetime_token(part))
     return "|".join(normalized)
+
+
+def _line_items_cache_token(items) -> str:
+    payload = [
+        {
+            "id": item.id,
+            "sort_order": item.sort_order,
+            "description": item.description,
+            "unit": item.unit,
+            "note": getattr(item, "note", None),
+            "quantity": item.quantity,
+            "unit_price": item.unit_price,
+            "amount": item.amount,
+        }
+        for item in sorted(
+            list(items or []),
+            key=lambda item: (
+                item.sort_order if item.sort_order is not None else 10**9,
+                item.id if item.id is not None else 10**9,
+            ),
+        )
+    ]
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _get_cached_download(cache_key: str) -> tuple[bytes, str, str] | None:
@@ -2993,6 +3018,8 @@ def update_quote(quote_id: int):
     if total_err:
         return total_err
 
+    # Item-only edits may not otherwise issue an UPDATE for the quote row.
+    quote.updated_at = datetime.utcnow()
     db.session.flush()
     quote = Quote.query.options(selectinload(Quote.items)).get(quote.id)
     if quote:
@@ -3475,6 +3502,7 @@ def quote_xlsx(quote_id: int):
         quote.updated_at,
         customer.updated_at if customer else None,
         contact.updated_at if contact else None,
+        _line_items_cache_token(quote.items),
     )
     cached = _get_cached_download(cache_key)
     if cached is not None:
@@ -3548,6 +3576,7 @@ def quote_pdf(quote_id: int):
         quote.updated_at,
         customer.updated_at if customer else None,
         contact.updated_at if contact else None,
+        _line_items_cache_token(quote.items),
     )
     cached = _get_cached_download(cache_key)
     if cached is not None:
@@ -3636,6 +3665,7 @@ def invoice_pdf(invoice_id: int):
         invoice.updated_at,
         customer.updated_at if customer else None,
         contact.updated_at if contact else None,
+        _line_items_cache_token(invoice.items),
     )
     cached = _get_cached_download(cache_key)
     if cached is not None:
