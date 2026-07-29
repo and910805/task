@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta
 
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import create_access_token, get_jwt, jwt_required
+from flask_jwt_extended import create_access_token, get_jwt, get_jwt_identity, jwt_required
 
 from decorators import role_required
 from extensions import db
@@ -14,12 +14,16 @@ from sqlalchemy.orm import selectinload
 from models import Attachment, SiteSetting, Task, TaskAssignee, TaskUpdate, User
 
 from utils import get_current_user_id
+from rate_limit import rate_limit
 
 from services.notifications import has_email_config, send_email_async
 from services.line_messaging import has_line_config, push_text
 
 
 VALID_ROLES = {"worker", "site_supervisor", "hq_staff", "admin"}
+MIN_PASSWORD_LENGTH = 10
+MAX_PASSWORD_LENGTH = 256
+MAX_USERNAME_LENGTH = 80
 
 auth_bp = Blueprint("auth", __name__)
 
@@ -29,6 +33,28 @@ def _generate_password() -> str:
 
     # 12-characters token encoded using URL-safe alphabet (~16 bytes entropy)
     return secrets.token_urlsafe(9)
+
+
+def _password_error(password: str) -> str | None:
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return f"Password must be at least {MIN_PASSWORD_LENGTH} characters"
+    if len(password) > MAX_PASSWORD_LENGTH:
+        return f"Password must not exceed {MAX_PASSWORD_LENGTH} characters"
+    return None
+
+
+def _current_user_is_admin() -> bool:
+    try:
+        user_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return False
+    user = db.session.get(User, user_id)
+    return user is not None and user.role == "admin"
+
+
+def _public_registration_enabled() -> bool:
+    value = (os.getenv("ALLOW_PUBLIC_WORKER_REGISTRATION") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 def _normalize_line_id(value) -> str | None:
@@ -47,6 +73,12 @@ def _normalize_line_id(value) -> str | None:
 
 @auth_bp.post("/register")
 @jwt_required(optional=True)
+@rate_limit(
+    "auth-register",
+    limit=5,
+    window_seconds=3600,
+    bypass=_current_user_is_admin,
+)
 def register():
     data = request.get_json() or {}
     username = (data.get("username") or "").strip()
@@ -61,6 +93,8 @@ def register():
 
     if not username:
         return jsonify({"msg": "Username and password are required"}), 400
+    if len(username) > MAX_USERNAME_LENGTH:
+        return jsonify({"msg": f"Username must not exceed {MAX_USERNAME_LENGTH} characters"}), 400
 
     if requested_role not in VALID_ROLES:
         return jsonify({"msg": "Invalid role"}), 400
@@ -71,12 +105,9 @@ def register():
     user_count = User.query.count()
     is_initial_setup = user_count == 0
 
-    try:
-        claims = get_jwt() or {}
-    except RuntimeError:
-        claims = {}
-    current_role = claims.get("role")
-    is_admin = current_role == "admin"
+    is_admin = _current_user_is_admin()
+    if not is_admin and not _public_registration_enabled():
+        return jsonify({"msg": "Public registration is disabled"}), 403
 
     role = requested_role if is_admin else "worker"
 
@@ -87,6 +118,11 @@ def register():
             return jsonify({"msg": "Username and password are required"}), 400
         password = _generate_password()
         generated_password = password
+
+    password = str(password)
+    password_error = _password_error(password)
+    if password_error:
+        return jsonify({"msg": password_error}), 400
 
     if User.query.filter_by(username=username).first():
         return jsonify({"msg": "Username already exists"}), 400
@@ -107,6 +143,12 @@ def register():
 
 
 @auth_bp.post("/login")
+@rate_limit(
+    "auth-login",
+    limit=10,
+    window_seconds=300,
+    identity=lambda: str((request.get_json(silent=True) or {}).get("username") or ""),
+)
 def login():
     data = request.get_json() or {}
     username = (data.get("username") or "").strip()
@@ -114,6 +156,8 @@ def login():
 
     if not username or not password:
         return jsonify({"msg": "Username and password are required"}), 400
+    if len(username) > MAX_USERNAME_LENGTH or len(password) > MAX_PASSWORD_LENGTH:
+        return jsonify({"msg": "Invalid credentials"}), 401
 
     user = User.query.filter_by(username=username).first()
     if not user or not user.check_password(password):
@@ -212,6 +256,10 @@ def update_user(user_id: int):
         user.role = role
 
     if password:
+        password = str(password)
+        password_error = _password_error(password)
+        if password_error:
+            return jsonify({"msg": password_error}), 400
         user.set_password(password)
 
     db.session.commit()
@@ -344,6 +392,10 @@ def change_password():
 
     if current_password == new_password:
         return jsonify({"msg": "新密碼不可與舊密碼相同"}), 400
+
+    password_error = _password_error(new_password)
+    if password_error:
+        return jsonify({"msg": password_error}), 400
 
     user.set_password(new_password)
     db.session.commit()

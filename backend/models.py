@@ -1,10 +1,10 @@
 from datetime import datetime, timedelta
 import json
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 from flask import current_app, has_request_context
-from flask_jwt_extended import create_access_token, get_jwt, get_jwt_identity
+from flask_jwt_extended import create_access_token, get_jwt_identity
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from sqlalchemy import UniqueConstraint
@@ -16,17 +16,22 @@ def _with_download_token(url: str | None) -> str | None:
     if not url or not has_request_context():
         return url
 
+    parsed_url = urlsplit(url)
+    prefix = "/api/upload/files/"
+    if not parsed_url.path.startswith(prefix):
+        return url
+    download_path = unquote(parsed_url.path[len(prefix):]).replace("\\", "/").lstrip("/")
+    if not download_path or ".." in download_path.split("/"):
+        return url
+
     try:
         identity = get_jwt_identity()
         if identity is None:
             return url
 
-        claims = get_jwt() or {}
-        role = claims.get("role")
-        additional_claims = {"role": role} if role else None
         token = create_access_token(
             identity=str(identity),
-            additional_claims=additional_claims,
+            additional_claims={"download_path": download_path},
             expires_delta=timedelta(minutes=15),
         )
     except Exception:

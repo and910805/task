@@ -23,7 +23,9 @@ def _serialize_role_labels():
 DEFAULT_BRANDING_NAME = "立翔水電行"
 BRANDING_NAME_KEY = "branding_name"
 BRANDING_LOGO_KEY = "branding_logo_path"
-LOGO_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+# SVG is deliberately excluded: serving an administrator-uploaded SVG from the
+# application origin can become stored XSS when the file is opened directly.
+LOGO_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 TASK_NOTE_TEMPLATES_KEY = "task_update_note_templates"
 DEFAULT_TASK_NOTE_TEMPLATES = [
     "已到場，開始作業。",
@@ -49,7 +51,7 @@ def _serialize_branding():
     )
 
     logo_url = None
-    if logo_path:
+    if logo_path and os.path.splitext(logo_path)[1].lower() in LOGO_EXTENSIONS:
         try:
             storage = _storage()
         except RuntimeError:
@@ -104,6 +106,8 @@ def serve_branding_logo():
 
     if not logo_path:
         return jsonify({"msg": "Logo not configured"}), 404
+    if os.path.splitext(logo_path)[1].lower() not in LOGO_EXTENSIONS:
+        return jsonify({"msg": "Logo format is not allowed"}), 404
 
     try:
         storage = _storage()

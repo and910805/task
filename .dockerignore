@@ -18,6 +18,13 @@ backend/venv
 *.log
 nohup.out
 
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+
 backend/uploads
 backend/*.db
 backend/instance

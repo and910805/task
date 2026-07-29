@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from decorators import role_required
 from extensions import db
-from models import Task, TaskAssignee, TaskUpdate, User
+from models import Attachment, Task, TaskAssignee, TaskUpdate, User
 from services.attachments import (
     create_file_attachment,
     create_signature_attachment,
@@ -1386,6 +1386,20 @@ def upload_attachment(task_id: int):
 @tasks_bp.get("/attachments/<path:filename>")
 @jwt_required()
 def get_attachment(filename: str):
+    normalized = filename.replace("\\", "/").lstrip("/")
+    attachment = Attachment.query.filter_by(file_path=normalized).first()
+    if attachment is None:
+        return jsonify({"msg": "File not found"}), 404
+
+    permission_error = _ensure_task_permission(
+        attachment.task,
+        (get_jwt() or {}).get("role"),
+        get_current_user_id(),
+        message="You cannot access this attachment",
+    )
+    if permission_error:
+        return permission_error
+
     storage = current_app.extensions.get("storage")
     if storage is None:
         return jsonify({"msg": "Storage backend is not configured"}), 500
@@ -1393,7 +1407,7 @@ def get_attachment(filename: str):
     if hasattr(storage, "local_path"):
         try:
             path = storage.local_path(filename)
-        except FileNotFoundError:
+        except (FileNotFoundError, StorageError):
             return jsonify({"msg": "File not found"}), 404
         return send_file(path)
 

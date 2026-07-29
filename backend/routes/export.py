@@ -10,10 +10,18 @@ from openpyxl import Workbook
 from sqlalchemy.orm import selectinload
 
 from decorators import role_required
-from models import Task, TaskAssignee
+from models import Task, TaskAssignee, _with_download_token
+from storage import StorageError
 
 
 export_bp = Blueprint("export", __name__)
+
+
+def _safe_excel_text(value) -> str:
+    text_value = str(value or "")
+    if text_value.lstrip().startswith(("=", "+", "-", "@")):
+        return "'" + text_value
+    return text_value
 
 
 def _serve_storage_file(filename: str):
@@ -24,7 +32,7 @@ def _serve_storage_file(filename: str):
     if hasattr(storage, "local_path"):
         try:
             path = storage.local_path(filename)
-        except FileNotFoundError:
+        except (FileNotFoundError, StorageError):
             return jsonify({"msg": "File not found"}), 404
         return send_file(path, as_attachment=True)
 
@@ -90,11 +98,11 @@ def export_tasks():
         tasks_sheet.append(
             [
                 task.id,
-                task.title,
-                task.location,
-                task.status,
-                task.assigner.username if task.assigner else "",
-                ", ".join(assigned_names),
+                _safe_excel_text(task.title),
+                _safe_excel_text(task.location),
+                _safe_excel_text(task.status),
+                _safe_excel_text(task.assigner.username if task.assigner else ""),
+                _safe_excel_text(", ".join(assigned_names)),
                 task.expected_time.isoformat() if task.expected_time else "",
                 task.completed_at.isoformat() if task.completed_at else "",
                 task.total_work_hours(),
@@ -113,11 +121,11 @@ def export_tasks():
             attachments_sheet.append(
                 [
                     task.id,
-                    attachment.file_type,
-                    attachment.original_name,
+                    _safe_excel_text(attachment.file_type),
+                    _safe_excel_text(attachment.original_name),
                     attachment.uploaded_at.isoformat() if attachment.uploaded_at else "",
-                    attachment.note or "",
-                    attachment.to_dict().get("url"),
+                    _safe_excel_text(attachment.note),
+                    _safe_excel_text(attachment.to_dict().get("url")),
                 ]
             )
 
@@ -131,7 +139,7 @@ def export_tasks():
                 time_sheet.append(
                     [
                         task.id,
-                        update.author.username if update.author else update.user_id,
+                        _safe_excel_text(update.author.username if update.author else update.user_id),
                         update.start_time.isoformat() if update.start_time else "",
                         update.end_time.isoformat() if update.end_time else "",
                         update.work_hours or 0.0,
@@ -150,7 +158,7 @@ def export_tasks():
         return jsonify({"msg": "Storage backend is not configured"}), 500
 
     storage.save(relative_path, stream)
-    download_url = storage.url_for(relative_path)
+    download_url = _with_download_token(storage.url_for(relative_path))
 
     return jsonify({"url": download_url, "filename": filename})
 

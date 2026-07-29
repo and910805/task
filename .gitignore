@@ -17,4 +17,12 @@ nohup.out
 backend/backend.log
 frontend/nohup.out
 
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
 .DS_Store

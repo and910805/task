@@ -8,12 +8,14 @@ from flask import Blueprint, current_app, jsonify, redirect, request, send_from_
 from flask_jwt_extended import (
     decode_token,
     get_jwt,
+    get_jwt_identity,
     jwt_required,
     verify_jwt_in_request,
 )
 from flask_jwt_extended.exceptions import NoAuthorizationError
 
-from models import Task
+from extensions import db
+from models import Attachment, Invoice, Task, User
 from services.attachments import create_file_attachment, create_signature_attachment
 from utils import get_current_user_id
 from storage import StorageError
@@ -68,7 +70,9 @@ def _serve_file(filename: str):
         path = storage.local_path(filename)
     except FileNotFoundError:
         return jsonify({"msg": "File not found"}), 404
-    except (AttributeError, StorageError):
+    except StorageError:
+        return jsonify({"msg": "File not found"}), 404
+    except AttributeError:
         try:
             if getattr(storage, "use_s3", False):
                 url = storage.url_for(filename, expires_in=3600)
@@ -81,26 +85,56 @@ def _serve_file(filename: str):
     return send_from_directory(path.parent, path.name)
 
 
-def _has_valid_download_token() -> bool:
+def _authenticated_download_user(filename: str) -> User | None:
+    identity = None
     try:
         verify_jwt_in_request()
-        return True
+        identity = get_jwt_identity()
     except NoAuthorizationError:
         token_value = request.args.get("token", type=str)
         if not token_value:
-            return False
+            return None
         try:
             decoded = decode_token(token_value)
         except Exception:
-            return False
+            return None
 
         expiry = decoded.get("exp")
         if expiry is not None:
             expires_at = datetime.fromtimestamp(expiry, tz=timezone.utc)
             if expires_at <= datetime.now(timezone.utc):
-                return False
+                return None
 
-        return True
+        normalized_filename = filename.replace("\\", "/").lstrip("/")
+        if decoded.get("download_path") != normalized_filename:
+            return None
+        identity = decoded.get("sub")
+
+    try:
+        user_id = int(identity)
+    except (TypeError, ValueError):
+        return None
+    return db.session.get(User, user_id)
+
+
+def _can_download_file(user: User, filename: str) -> bool:
+    normalized = filename.replace("\\", "/").lstrip("/")
+    role = user.role
+    manager_roles = {"admin", "site_supervisor", "hq_staff"}
+
+    attachment = Attachment.query.filter_by(file_path=normalized).first()
+    if attachment is not None:
+        if role in manager_roles:
+            return True
+        return role == "worker" and _worker_can_access_task(attachment.task, user.id)
+
+    if Invoice.query.filter_by(customer_signature_path=normalized).first() is not None:
+        return role in manager_roles
+
+    if normalized.startswith("reports/"):
+        return role in manager_roles
+
+    return False
 
 
 @upload_bp.post("/tasks/<int:task_id>/images")
@@ -200,6 +234,9 @@ def upload_signature(task_id: int):
 
 @upload_bp.get("/files/<path:filename>")
 def download_file(filename: str):
-    if not _has_valid_download_token():
+    user = _authenticated_download_user(filename)
+    if user is None:
         return jsonify({"msg": "Missing or invalid authentication token"}), 401
+    if not _can_download_file(user, filename):
+        return jsonify({"msg": "File not found"}), 404
     return _serve_file(filename)

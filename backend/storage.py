@@ -44,11 +44,29 @@ class LocalStorage:
     use_s3: bool = False
 
     def __post_init__(self) -> None:
-        self.base_dir = Path(self.base_dir)
+        self.base_dir = Path(self.base_dir).resolve()
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
+    def _resolve_path(self, relative_path: str) -> Path:
+        raw_path = str(relative_path or "")
+        normalized = _normalise_relative_path(raw_path)
+        candidate = Path(normalized)
+        if (
+            not normalized
+            or candidate.is_absolute()
+            or any(part == ".." for part in candidate.parts)
+        ):
+            raise StorageError("Invalid storage path")
+
+        target = (self.base_dir / candidate).resolve()
+        try:
+            target.relative_to(self.base_dir)
+        except ValueError as exc:
+            raise StorageError("Storage path escapes the configured upload directory") from exc
+        return target
+
     def save(self, relative_path: str, data: bytes | BinaryIO) -> str:
-        target = self.base_dir / Path(relative_path)
+        target = self._resolve_path(relative_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         payload = _read_bytes(data)
         with open(target, "wb") as handle:
@@ -57,7 +75,7 @@ class LocalStorage:
         return relative_path
 
     def delete(self, relative_path: str) -> None:
-        target = self.base_dir / Path(relative_path)
+        target = self._resolve_path(relative_path)
         try:
             target.unlink(missing_ok=True)
         except (TypeError, OSError):
@@ -68,7 +86,7 @@ class LocalStorage:
                     pass
 
     def local_path(self, relative_path: str) -> Path:
-        path = self.base_dir / Path(relative_path)
+        path = self._resolve_path(relative_path)
         if not path.exists():
             raise FileNotFoundError(relative_path)
         return path

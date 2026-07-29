@@ -7,6 +7,9 @@ import LoginPixelDino from '../components/LoginPixelDino.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useBranding } from '../context/BrandingContext.jsx';
 
+const PUBLIC_REGISTRATION_ENABLED =
+  String(import.meta.env.VITE_ALLOW_PUBLIC_REGISTRATION || '').toLowerCase() === 'true';
+
 const LoginPixelShowcase = () => (
   <section className="login-showcase" aria-hidden="true">
     <div className="login-showcase__panel">
@@ -53,6 +56,12 @@ const LoginPage = () => {
         await login({ username: form.username, password: form.password });
         refreshBranding().catch(() => {});
         navigate('/app');
+        return;
+      }
+
+      if (!PUBLIC_REGISTRATION_ENABLED) {
+        toast.error('目前不開放自行註冊，請聯絡管理員建立帳號。');
+        setMode('login');
         return;
       }
 
@@ -131,12 +140,14 @@ const LoginPage = () => {
             {mode === 'login' ? '登入' : '建立帳號'}
           </button>
 
+          {PUBLIC_REGISTRATION_ENABLED ? (
           <p className="login-switch">
             {mode === 'login' ? '沒有帳號？' : '已有帳號？'}{' '}
             <button type="button" onClick={switchMode}>
               {mode === 'login' ? '建立新帳號' : '返回登入'}
             </button>
           </p>
+          ) : null}
         </form>
       </div>
     </div>

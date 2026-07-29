@@ -280,12 +280,13 @@ def _verify_request(channel: str = "worker") -> bool:
     More stable:
     - Prefer current_app.config['LINE_CHANNEL_SECRET'] if present
     - Fallback to env
-    - If secret is empty -> skip verification (useful for local dev)
+    - Missing secrets fail closed. Local development can explicitly opt in with
+      ALLOW_UNSIGNED_LINE_WEBHOOKS=1.
     """
     secret = (line_channel_secret(channel=channel) or "").strip()
     if not secret:
-        # local dev / intentionally disabled
-        return True
+        allow_unsigned = (os.getenv("ALLOW_UNSIGNED_LINE_WEBHOOKS") or "").strip().lower()
+        return allow_unsigned in {"1", "true", "yes", "on"}
 
     signature = request.headers.get("X-Line-Signature", "")
     body = request.get_data() or b""

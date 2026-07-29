@@ -8,9 +8,9 @@ ENV CI=true \
     npm_config_audit=false
 
 COPY frontend/package.json frontend/package-lock.json ./
-# npm optional deps (esbuild platform package) may be skipped on some builders.
-# Use npm install with optional deps explicitly enabled for best cross-platform compatibility.
-RUN npm cache clean --force && npm install --include=dev --include=optional
+# Reproducible install from the committed lockfile, including the platform-specific
+# optional package used by esbuild.
+RUN npm cache clean --force && npm ci --include=dev --include=optional
 
 COPY frontend/ ./
 

@@ -163,6 +163,16 @@ def create_app() -> Flask:
     db.init_app(app)
     jwt.init_app(app)
 
+    from decorators import jwt_user_claims_are_current
+
+    @jwt.token_verification_loader
+    def _verify_jwt_user_claims(_jwt_header, jwt_payload):
+        return jwt_user_claims_are_current(jwt_payload)
+
+    @jwt.token_verification_failed_loader
+    def _jwt_user_claims_rejected(_jwt_header, _jwt_payload):
+        return jsonify({"msg": "Authentication token is no longer valid"}), 401
+
     try:
         storage_backend = create_storage(app.config)
     except StorageError as exc:
@@ -195,9 +205,26 @@ def create_app() -> Flask:
             db.session.execute(text("SELECT 1"))
             db.session.remove()
             return jsonify({"status": "ok", "database": "ok"}), 200
-        except SQLAlchemyError as exc:
+        except SQLAlchemyError:
             db.session.remove()
-            return jsonify({"status": "degraded", "database": "error", "error": str(exc)}), 503
+            app.logger.exception("Database health check failed")
+            return jsonify({"status": "degraded", "database": "error"}), 503
+
+    @app.after_request
+    def _set_security_headers(response):
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault(
+            "Permissions-Policy",
+            "camera=(), geolocation=(), microphone=(self)",
+        )
+        if request.is_secure:
+            response.headers.setdefault(
+                "Strict-Transport-Security",
+                "max-age=31536000; includeSubDomains",
+            )
+        return response
 
     @app.before_request
     def _check_auth_and_redirect():

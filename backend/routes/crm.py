@@ -40,6 +40,7 @@ from models import (
 )
 from utils import get_current_user_id
 from services.attachments import replace_signature_file
+from rate_limit import rate_limit
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -492,6 +493,13 @@ def _table_cell_text(value: object) -> str:
     if hasattr(value, "getPlainText"):
         return str(value.getPlainText())
     return str(value or "")
+
+
+def _xlsx_safe_text(value: object) -> str:
+    text_value = str(value or "")
+    if text_value.lstrip().startswith(("=", "+", "-", "@")):
+        return "'" + text_value
+    return text_value
 
 
 def _table_page_fragments(doc, flowables_before, table) -> list[dict[str, object]]:
@@ -1343,10 +1351,14 @@ def _apply_quote_to_template_sheet(ws, quote: Quote, customer: Customer | None, 
 
     ws["D2"] = "立翔水電行"
     ws["D3"] = "估價單"
-    ws["D4"] = recipient
+    ws["D4"] = _xlsx_safe_text(recipient)
     ws["E4"] = "台照"
     ws["D5"] = _to_roc_date_text(quote.issue_date)
-    ws["D6"] = f"施工地點：{site_address}" if site_address else "施工地點：__________________________"
+    ws["D6"] = (
+        _xlsx_safe_text(f"施工地點：{site_address}")
+        if site_address
+        else "施工地點：__________________________"
+    )
 
     # Template reserves rows 7-26 for up to 20 line items.
     for idx, row in enumerate(range(7, 27), start=1):
@@ -1368,12 +1380,12 @@ def _apply_quote_to_template_sheet(ws, quote: Quote, customer: Customer | None, 
     )
     for index, item in enumerate(ordered_items[:20]):
         row = 7 + index
-        ws[f"D{row}"] = item.description or ""
-        ws[f"F{row}"] = item.unit or "式"
+        ws[f"D{row}"] = _xlsx_safe_text(item.description)
+        ws[f"F{row}"] = _xlsx_safe_text(item.unit or "式")
         ws[f"G{row}"] = float(item.quantity or 0)
         ws[f"H{row}"] = float(item.unit_price or 0)
         ws[f"I{row}"] = float(item.amount or 0)
-        ws[f"J{row}"] = item.note or ""
+        ws[f"J{row}"] = _xlsx_safe_text(item.note)
         _autofit_quote_template_row(ws, row)
 
     total_amount = _quote_display_total_without_tax(quote)
@@ -2116,6 +2128,7 @@ def _website_booking_status_counts(rows: list[WebsiteBooking]) -> dict[str, int]
 
 
 @crm_bp.post("/public/bookings")
+@rate_limit("public-booking", limit=10, window_seconds=3600)
 def create_public_booking():
     _ensure_website_booking_table()
     data = request.get_json(silent=True) or {}
@@ -2132,6 +2145,27 @@ def create_public_booking():
     source_channel = _trim(data.get("source_channel")) or "website"
     user_agent = _trim(request.headers.get("User-Agent"))
     client_ip = _trim((request.headers.get("X-Forwarded-For") or "").split(",")[0]) or _trim(request.remote_addr)
+
+    field_limits = {
+        "name": (name, 255),
+        "phone": (phone, 64),
+        "email": (email, 255),
+        "service": (service, 255),
+        "preferred_time": (preferred_time, 120),
+        "budget_range": (budget_range, 120),
+        "source_channel": (source_channel, 64),
+        "message": (message, 4000),
+        "address": (address, 2000),
+    }
+    for field_name, (value, maximum) in field_limits.items():
+        if len(value) > maximum:
+            return jsonify({"msg": f"{field_name} must not exceed {maximum} characters"}), 400
+
+    # Request metadata is diagnostic only; bound it instead of allowing spoofed
+    # headers to cause database errors or unbounded storage growth.
+    source_url = source_url[:2048]
+    user_agent = user_agent[:512]
+    client_ip = client_ip[:64]
 
     if not name:
         return jsonify({"msg": "name is required"}), 400
