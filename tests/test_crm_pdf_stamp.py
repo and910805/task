@@ -75,6 +75,49 @@ class QuotePdfStampPlacementTest(unittest.TestCase):
         self.assertEqual(crm._quote_pdf_item_row_count(15, 20), 20)
         self.assertEqual(crm._quote_pdf_item_row_count(21, 20), 40)
 
+    def test_trailing_zero_amount_row_can_prevent_an_extra_page(self):
+        self.assertEqual(
+            crm._quote_pdf_item_row_count(17, 20, trailing_stamp_safe_rows=1),
+            20,
+        )
+        self.assertEqual(
+            crm._quote_pdf_stamp_row_range(
+                17,
+                20,
+                20,
+                trailing_stamp_safe_rows=1,
+            ),
+            (16, 19),
+        )
+
+    def test_only_contiguous_zero_amount_rows_without_notes_are_stamp_safe(self):
+        items = [
+            {"unit_price": 8500, "amount": 535500, "note": ""},
+            {"unit_price": 0, "amount": 0, "note": ""},
+            {"unit_price": 0, "amount": 0, "note": None},
+        ]
+        self.assertEqual(crm._quote_pdf_trailing_stamp_safe_rows(items), 2)
+
+        items[-1]["note"] = "keep visible"
+        self.assertEqual(crm._quote_pdf_trailing_stamp_safe_rows(items), 0)
+
+    def test_nonzero_estimate_row_is_not_included_in_stamp_range(self):
+        items = [
+            {"unit_price": 8500, "amount": 535500, "note": ""},
+            {"unit_price": 0, "amount": 0, "note": ""},
+            {"unit_price": 0, "amount": 0, "note": ""},
+        ]
+        trailing_rows = crm._quote_pdf_trailing_stamp_safe_rows(items)
+        first_slot, last_slot = crm._quote_pdf_stamp_row_range(
+            17,
+            20,
+            20,
+            trailing_stamp_safe_rows=trailing_rows,
+        )
+
+        self.assertEqual((first_slot, last_slot), (16, 19))
+        self.assertGreater(first_slot, 14)
+
     def test_reserved_blank_rows_are_taller_for_stamp(self):
         row_heights = crm._quote_pdf_row_heights(16, 20, 20)
 

@@ -388,17 +388,77 @@ def _quote_pdf_item_row_count(
     rows_per_page: int,
     *,
     reserved_blank_rows: int = QUOTE_PDF_STAMP_RESERVED_ROWS,
+    trailing_stamp_safe_rows: int = 0,
 ) -> int:
     rows_per_page = max(int(rows_per_page or 1), 1)
     item_count = max(int(item_count or 0), 0)
+    reserved_blank_rows = max(int(reserved_blank_rows or 0), 0)
+    trailing_stamp_safe_rows = max(int(trailing_stamp_safe_rows or 0), 0)
     page_count = max(1, math.ceil(max(item_count, 1) / rows_per_page))
     row_count = page_count * rows_per_page
-    last_page_item_count = item_count % rows_per_page
-    if item_count > 0 and last_page_item_count == 0:
-        row_count += rows_per_page
-    elif item_count > 0 and rows_per_page - last_page_item_count < max(int(reserved_blank_rows or 0), 0):
+    if item_count <= 0 or reserved_blank_rows <= 0:
+        return row_count
+
+    last_page_item_count = item_count % rows_per_page or rows_per_page
+    usable_stamp_rows = (
+        rows_per_page
+        - last_page_item_count
+        + min(trailing_stamp_safe_rows, last_page_item_count)
+    )
+    if usable_stamp_rows < reserved_blank_rows:
         row_count += rows_per_page
     return row_count
+
+
+def _quote_pdf_trailing_stamp_safe_rows(items: list[object]) -> int:
+    safe_rows = 0
+    for item in reversed(items):
+        if isinstance(item, dict):
+            unit_price = item.get("unit_price")
+            amount = item.get("amount")
+            note = item.get("note")
+        else:
+            unit_price = getattr(item, "unit_price", None)
+            amount = getattr(item, "amount", None)
+            note = getattr(item, "note", None)
+        try:
+            has_value = abs(float(unit_price or 0)) > 0.0001 or abs(float(amount or 0)) > 0.0001
+        except (TypeError, ValueError):
+            has_value = True
+        if has_value or str(note or "").strip():
+            break
+        safe_rows += 1
+    return safe_rows
+
+
+def _quote_pdf_stamp_row_range(
+    item_count: int,
+    item_row_count: int,
+    rows_per_page: int,
+    *,
+    reserved_rows: int = QUOTE_PDF_STAMP_RESERVED_ROWS,
+    trailing_stamp_safe_rows: int = 0,
+) -> tuple[int, int]:
+    item_count = max(int(item_count or 0), 0)
+    item_row_count = max(int(item_row_count or 0), 0)
+    rows_per_page = max(int(rows_per_page or 1), 1)
+    reserved_rows = max(int(reserved_rows or 0), 0)
+    trailing_stamp_safe_rows = max(int(trailing_stamp_safe_rows or 0), 0)
+    if item_row_count <= 0 or reserved_rows <= 0:
+        return 0, -1
+
+    last_page_start = ((item_row_count - 1) // rows_per_page) * rows_per_page
+    last_page_end = min(item_row_count, last_page_start + rows_per_page)
+    blank_rows = max(0, last_page_end - max(item_count, last_page_start))
+    rows_needed_from_items = max(0, reserved_rows - blank_rows)
+    usable_trailing_rows = min(
+        trailing_stamp_safe_rows,
+        rows_needed_from_items,
+        max(0, item_count - last_page_start),
+    )
+    first_slot = max(last_page_start, item_count - usable_trailing_rows)
+    last_slot = min(item_row_count, first_slot + reserved_rows) - 1
+    return first_slot, last_slot
 
 
 def _fit_stamp_in_safe_box(
@@ -436,6 +496,7 @@ def _quote_pdf_row_heights(
     rows_per_page: int,
     *,
     reserved_blank_rows: int = QUOTE_PDF_STAMP_RESERVED_ROWS,
+    trailing_stamp_safe_rows: int = 0,
     item_heights: list[float] | None = None,
 ) -> list[float]:
     row_heights = [QUOTE_PDF_BASE_ROW_HEIGHT_MM * mm] * (int(item_row_count) + 2)
@@ -448,17 +509,21 @@ def _quote_pdf_row_heights(
     if not row_heights or item_row_count <= 0 or reserved_blank_rows <= 0:
         return row_heights
 
-    last_page_start = ((item_row_count - 1) // rows_per_page) * rows_per_page
-    first_blank_item_slot = max(item_count, last_page_start)
-    last_reserved_slot = min(item_row_count, first_blank_item_slot + reserved_blank_rows)
-    for item_slot in range(first_blank_item_slot, last_reserved_slot):
+    first_reserved_slot, last_reserved_slot = _quote_pdf_stamp_row_range(
+        item_count,
+        item_row_count,
+        rows_per_page,
+        reserved_rows=reserved_blank_rows,
+        trailing_stamp_safe_rows=trailing_stamp_safe_rows,
+    )
+    for item_slot in range(first_reserved_slot, last_reserved_slot + 1):
         row_heights[item_slot + 1] = QUOTE_PDF_STAMP_ROW_HEIGHT_MM * mm
 
     dynamic_extra = sum(
         max(0.0, row_heights[item_slot + 1] - (QUOTE_PDF_BASE_ROW_HEIGHT_MM * mm))
         for item_slot in range(min(item_count, item_row_count))
     )
-    reserved_slots = set(range(first_blank_item_slot, last_reserved_slot))
+    reserved_slots = set(range(first_reserved_slot, last_reserved_slot + 1))
     flexible_blank_slots = [
         item_slot
         for item_slot in range(item_count, item_row_count)
@@ -1643,7 +1708,12 @@ def _build_quote_template_pdf(
     item_rows_per_page = 20
     rows = [["項目", "項目名稱", "規格內容", "單位", "數量", "單價", "合計", "備註"]]
     first_blank_row_written = False
-    item_row_count = _quote_pdf_item_row_count(len(display_items), item_rows_per_page)
+    trailing_stamp_safe_rows = _quote_pdf_trailing_stamp_safe_rows(display_items)
+    item_row_count = _quote_pdf_item_row_count(
+        len(display_items),
+        item_rows_per_page,
+        trailing_stamp_safe_rows=trailing_stamp_safe_rows,
+    )
     for idx in range(item_row_count):
         item = display_items[idx] if idx < len(display_items) else None
         if item is None:
@@ -1693,6 +1763,7 @@ def _build_quote_template_pdf(
         len(display_items),
         item_row_count,
         item_rows_per_page,
+        trailing_stamp_safe_rows=trailing_stamp_safe_rows,
         item_heights=item_heights,
     )
     table = Table(
@@ -1734,16 +1805,18 @@ def _build_quote_template_pdf(
             ]
         )
     )
-    last_page_start = ((item_row_count - 1) // item_rows_per_page) * item_rows_per_page
-    first_blank_row = max(len(display_items), last_page_start) + 1
-    last_stamp_blank_row = min(
+    first_stamp_slot, last_stamp_slot = _quote_pdf_stamp_row_range(
+        len(display_items),
         item_row_count,
-        first_blank_row + QUOTE_PDF_STAMP_RESERVED_ROWS - 1,
+        item_rows_per_page,
+        trailing_stamp_safe_rows=trailing_stamp_safe_rows,
     )
-    if first_blank_row <= last_stamp_blank_row:
+    first_stamp_row = first_stamp_slot + 1
+    last_stamp_row = last_stamp_slot + 1
+    if first_stamp_row <= last_stamp_row:
         table.setStyle(
             TableStyle(
-                [("NOSPLIT", (0, first_blank_row), (-1, last_stamp_blank_row))]
+                [("NOSPLIT", (0, first_stamp_row), (-1, last_stamp_row))]
             )
         )
 
@@ -1761,8 +1834,8 @@ def _build_quote_template_pdf(
                     doc,
                     story,
                     table,
-                    first_label=str(first_blank_row),
-                    last_label=str(last_stamp_blank_row),
+                    first_label=str(first_stamp_row),
+                    last_label=str(last_stamp_row),
                     first_col=5,
                     last_col=7,
                 )
@@ -3605,7 +3678,7 @@ def quote_pdf(quote_id: int):
     customer = Customer.query.get(quote.customer_id)
     contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
     cache_key = _build_download_cache_key(
-        "quote-pdf-v6",
+        "quote-pdf-v7",
         quote.id,
         quote.updated_at,
         customer.updated_at if customer else None,
