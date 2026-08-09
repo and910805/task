@@ -277,7 +277,7 @@ const MaterialsPurchasesPage = () => {
         actions={(
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <Link className="secondary-button" to="/materials/reports">月結報表</Link>
-            <Link className="secondary-button" to="/app">回任務</Link>
+            <Link className="secondary-button" to="/tasks">回任務</Link>
           </div>
         )}
       />

@@ -4,6 +4,8 @@ import { Link } from 'react-router-dom';
 import api from '../api/client.js';
 
 const shortcutItems = [
+  { id: 'shortcut-operations', type: '捷徑', title: '營運工作台', subtitle: '今日工作與待處理總覽', href: '/app' },
+  { id: 'shortcut-tasks', type: '捷徑', title: '任務清單', subtitle: '派工、進度與現場紀錄', href: '/tasks' },
   { id: 'shortcut-crm', type: '捷徑', title: '經營管理', subtitle: 'CRM 系統首頁', href: '/crm' },
   { id: 'shortcut-attendance', type: '捷徑', title: '出勤中心', subtitle: '工時與異常檢視', href: '/attendance' },
   { id: 'shortcut-reports', type: '捷徑', title: '報表中心', subtitle: '匯出與營運指標', href: '/reports' },

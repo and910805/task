@@ -547,7 +547,7 @@ def build_default_rich_menu(
             col_widths[0],
             row_heights[1],
             (
-                {"type": "uri", "label": "任務頁面", "uri": f"{base}/app"}
+                {"type": "uri", "label": "任務頁面", "uri": f"{base}/tasks"}
                 if has_base
                 else {"type": "message", "label": "任務頁面", "text": "tasks"}
             ),

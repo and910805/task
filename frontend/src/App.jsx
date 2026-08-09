@@ -7,6 +7,7 @@ import { BrandingProvider } from './context/BrandingContext.jsx';
 import { RoleLabelProvider } from './context/RoleLabelContext.jsx';
 import { ThemeProvider } from './context/ThemeContext.jsx';
 import LoginPage from './pages/LoginPage.jsx';
+import OperationsDashboardPage from './pages/OperationsDashboardPage.jsx';
 import TaskDetailPage from './pages/TaskDetailPage.jsx';
 import TaskListPage from './pages/TaskListPage.jsx';
 import AdminPage from './pages/AdminPage.jsx';
@@ -48,6 +49,14 @@ const AppRoutes = () => (
     <Route path="/login" element={<LoginPage />} />
     <Route
       path="/app"
+      element={(
+        <PrivateRoute>
+          <OperationsDashboardPage />
+        </PrivateRoute>
+      )}
+    />
+    <Route
+      path="/tasks"
       element={(
         <PrivateRoute>
           <TaskListPage />

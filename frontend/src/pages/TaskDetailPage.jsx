@@ -849,12 +849,12 @@ const TaskDetailPage = () => {
   return (
     <div className="page task-detail-page mobile-tabs">
       <AppHeader title={task.title} subtitle={`任務編號：${task.id}`}>
-        <Link to="/app" className="link-button">
+        <Link to="/tasks" className="link-button">
           ← 返回任務列表
         </Link>
       </AppHeader>
       <header className="mobile-task-detail-header">
-        <Link to="/app" className="mobile-task-back">‹</Link>
+        <Link to="/tasks" className="mobile-task-back">‹</Link>
         <div>
           <span>TaskGo 現場版</span>
           <strong>{task.title}</strong>

@@ -30,6 +30,13 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
         items: [
           {
             to: '/app',
+            label: '\u71df\u904b\u5de5\u4f5c\u53f0',
+            desc: '\u5f59\u6574\u4eca\u65e5\u5de5\u4f5c\u3001\u7570\u5e38\u3001\u4eba\u529b\u8207\u5f85\u6536\u6b3e\u9805\u3002',
+            tag: 'Overview',
+            exact: true,
+          },
+          {
+            to: '/tasks',
             label: '\u4efb\u52d9\u6e05\u55ae',
             desc: '\u67e5\u770b\u6307\u6d3e\u4efb\u52d9\u3001\u8655\u7406\u9032\u5ea6\u8207\u73fe\u5834\u66f4\u65b0\u3002',
             tag: 'Field Ops',

@@ -955,7 +955,7 @@ def get_rich_menu_template():
                 "任務列表 (tasks)",
                 "本週行程 (本週)",
                 "功能說明 (help)",
-                "任務頁面 (/app)",
+                "任務頁面 (/tasks)",
                 "個人資料 (/profile)",
                 "行事曆 (/calendar)",
             ],

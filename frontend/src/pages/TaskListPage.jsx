@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import Select from 'react-select';
 import CreatableSelect from 'react-select/creatable';
 
@@ -67,6 +67,7 @@ const getMonthAnchor = (value = new Date()) => {
 };
 
 const TaskListPage = () => {
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const { labels } = useRoleLabels();
   const [tasks, setTasks] = useState([]);
@@ -74,7 +75,7 @@ const TaskListPage = () => {
   const [form, setForm] = useState(initialForm);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(() => searchParams.get('new') === '1');
   const [siteLocations, setSiteLocations] = useState([]);
   const [loadingLocations, setLoadingLocations] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -906,16 +907,6 @@ const TaskListPage = () => {
                     查看 Google Maps
                   </a>
                 ) : null}
-              </label>
-              <label>
-                地圖連結
-                <input
-                  type="url"
-                  name="location_url"
-                  value={form.location_url}
-                  onChange={handleChange}
-                  placeholder="可貼上 Google 地圖連結"
-                />
               </label>
               <label>
                 地圖連結
