@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy import inspect
 from sqlalchemy.exc import SQLAlchemyError
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, redirect, request, send_from_directory
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 # Ensure local imports work when gunicorn --chdir backend
@@ -265,9 +265,11 @@ def create_app() -> Flask:
         sale_dir = os.path.join(dist_dir, "salesite")
         sale_entry = os.path.join(sale_dir, "sale.html")
 
-        # Make public marketing site the root entry.
-        # Keep aliases: "/", "/salesite", "/salesite/", "/sale".
-        if path in {"", "sale", "salesite", "salesite/"}:
+        if path == "":
+            return redirect("/login")
+
+        # Keep the public marketing site on explicit aliases only.
+        if path in {"sale", "salesite", "salesite/"}:
             if os.path.exists(sale_entry):
                 return send_from_directory(sale_dir, "sale.html")
 

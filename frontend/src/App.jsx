@@ -22,7 +22,6 @@ import AttendancePage from './pages/AttendancePage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
 import MaterialsPurchasesPage from './pages/MaterialsPurchasesPage.jsx';
 import MaterialsMonthlyReportPage from './pages/MaterialsMonthlyReportPage.jsx';
-import LandingPage from './pages/LandingPage.jsx';
 import './App.css';
 
 const managerOnlyRouteRoles = ['site_supervisor', 'hq_staff', 'admin'];
@@ -45,8 +44,7 @@ const PrivateRoute = ({ children, roles }) => {
 
 const AppRoutes = () => (
   <Routes>
-    <Route path="/" element={<LandingPage />} />
-    <Route path="/sale" element={<LandingPage />} />
+    <Route path="/" element={<Navigate to="/login" replace />} />
     <Route path="/login" element={<LoginPage />} />
     <Route
       path="/app"
@@ -168,7 +166,7 @@ const AppRoutes = () => (
         </PrivateRoute>
       )}
     />
-    <Route path="*" element={<Navigate to="/" replace />} />
+    <Route path="*" element={<Navigate to="/login" replace />} />
   </Routes>
 );
 
