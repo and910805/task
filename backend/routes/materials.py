@@ -19,7 +19,7 @@ from models import (
     TaskAssignee,
     TaskMaterialUsage,
 )
-from utils import get_current_user_id
+from utils import get_current_user_id, task_is_accessible
 
 
 materials_bp = Blueprint("materials", __name__)
@@ -121,21 +121,7 @@ def _current_role() -> str | None:
 
 
 def _task_accessible(task: Task, role: str | None, user_id: int | None) -> bool:
-    if task is None:
-        return False
-    if role in {"admin", "hq_staff"}:
-        return True
-    if user_id is None:
-        return False
-    assigned_ids = {task.assigned_to_id} if task.assigned_to_id else set()
-    for assignment in task.assignees or []:
-        if assignment.user_id:
-            assigned_ids.add(assignment.user_id)
-    if role == "worker":
-        return user_id in assigned_ids
-    if role == "site_supervisor":
-        return task.assigned_by_id == user_id or user_id in assigned_ids
-    return False
+    return task_is_accessible(task, role, user_id)
 
 
 def _get_task_or_403(task_id: int):

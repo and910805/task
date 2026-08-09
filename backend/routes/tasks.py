@@ -20,7 +20,7 @@ from services import (
     notify_task_status_change,
 )
 from storage import StorageError
-from utils import get_current_user_id
+from utils import get_current_user_id, task_is_accessible
 
 
 tasks_bp = Blueprint("tasks", __name__)
@@ -49,7 +49,7 @@ def _task_assigned_user_ids(task: Task) -> set[int]:
 def _ensure_task_permission(task: Task, role: str | None, user_id: int | None, *, message: str = "You do not have access to this task"):
     if user_id is None:
         return jsonify({"msg": "Invalid authentication token"}), 401
-    if role == "worker" and user_id not in _task_assigned_user_ids(task):
+    if not task_is_accessible(task, role, user_id):
         return jsonify({"msg": message}), 403
     return None
 
@@ -61,9 +61,9 @@ def _is_manager_role(role: str | None) -> bool:
 def _ensure_task_assignee_add_permission(task: Task, role: str | None, user_id: int | None):
     if user_id is None:
         return jsonify({"msg": "Invalid authentication token"}), 401
-    if _is_manager_role(role):
+    if role in {"admin", "hq_staff"}:
         return None
-    if role == "worker" and user_id in _task_assigned_user_ids(task):
+    if task_is_accessible(task, role, user_id):
         return None
     return jsonify({"msg": "You do not have permission to add assignees"}), 403
 
@@ -71,9 +71,9 @@ def _ensure_task_assignee_add_permission(task: Task, role: str | None, user_id: 
 def _ensure_time_manage_permission(task: Task, role: str | None, user_id: int | None):
     if user_id is None:
         return jsonify({"msg": "Invalid authentication token"}), 401
-    if _is_manager_role(role):
+    if role in {"admin", "hq_staff"}:
         return None
-    if role == "worker" and user_id in _task_assigned_user_ids(task):
+    if task_is_accessible(task, role, user_id):
         return None
     return jsonify({"msg": "You do not have permission to manage time entries"}), 403
 
@@ -970,6 +970,7 @@ def _apply_task_updates(task: Task, data: dict):
 @role_required("site_supervisor", "hq_staff")
 def update_task(task_id: int):
     actor_id = get_current_user_id()
+    role = (get_jwt() or {}).get("role")
     task = (
         Task.query.options(
             selectinload(Task.assignees).selectinload(TaskAssignee.user),
@@ -977,6 +978,11 @@ def update_task(task_id: int):
         )
         .get_or_404(task_id)
     )
+    permission_error = _ensure_task_permission(
+        task, role, actor_id, message="You cannot update this task"
+    )
+    if permission_error:
+        return permission_error
     data = request.get_json() or {}
     error, summary = _apply_task_updates(task, data)
     if error:
@@ -992,6 +998,7 @@ def update_task(task_id: int):
 @role_required("site_supervisor", "hq_staff")
 def update_task_patch(task_id: int):
     actor_id = get_current_user_id()
+    role = (get_jwt() or {}).get("role")
     task = (
         Task.query.options(
             selectinload(Task.assignees).selectinload(TaskAssignee.user),
@@ -999,6 +1006,11 @@ def update_task_patch(task_id: int):
         )
         .get_or_404(task_id)
     )
+    permission_error = _ensure_task_permission(
+        task, role, actor_id, message="You cannot update this task"
+    )
+    if permission_error:
+        return permission_error
     data = request.get_json() or {}
     error, summary = _apply_task_updates(task, data)
     if error:
@@ -1013,6 +1025,8 @@ def update_task_patch(task_id: int):
 @tasks_bp.delete("/<int:task_id>")
 @role_required("site_supervisor", "hq_staff")
 def delete_task(task_id: int):
+    actor_id = get_current_user_id()
+    role = (get_jwt() or {}).get("role")
     task = (
         Task.query.options(
             selectinload(Task.assignees).selectinload(TaskAssignee.user),
@@ -1022,6 +1036,11 @@ def delete_task(task_id: int):
         )
         .get_or_404(task_id)
     )
+    permission_error = _ensure_task_permission(
+        task, role, actor_id, message="You cannot delete this task"
+    )
+    if permission_error:
+        return permission_error
 
     storage = current_app.extensions.get("storage")
     if storage:
@@ -1409,7 +1428,7 @@ def get_attachment(filename: str):
             path = storage.local_path(filename)
         except (FileNotFoundError, StorageError):
             return jsonify({"msg": "File not found"}), 404
-        return send_file(path)
+        return send_file(path, as_attachment=attachment.file_type == "other")
 
     try:
         url = storage.url_for(filename)

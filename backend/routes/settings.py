@@ -8,6 +8,7 @@ from flask_jwt_extended import jwt_required
 from decorators import role_required
 from extensions import db
 from models import ROLE_LABEL_DEFAULTS, RoleLabel, SiteSetting
+from services.attachments import validate_upload_content
 from storage import StorageError
 
 
@@ -160,9 +161,13 @@ def upload_branding_logo():
 
     if ext not in LOGO_EXTENSIONS:
         return (
-            jsonify({"msg": "僅支援 PNG、JPG、JPEG、GIF、WEBP 或 SVG 檔案"}),
+            jsonify({"msg": "僅支援 PNG、JPG、JPEG、GIF 或 WEBP 檔案"}),
             400,
         )
+    try:
+        validate_upload_content(file, file_type="image", ext=ext)
+    except ValueError as exc:
+        return jsonify({"msg": str(exc)}), 400
 
     try:
         storage = _storage()

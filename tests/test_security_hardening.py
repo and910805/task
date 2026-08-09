@@ -1,3 +1,4 @@
+import base64
 import io
 import os
 import sys
@@ -19,7 +20,7 @@ if str(BACKEND) not in sys.path:
 from decorators import jwt_user_claims_are_current, role_required
 from extensions import db, jwt
 from models import Attachment, Task, User
-from routes import auth, crm, export, line
+from routes import auth, crm, export, line, tasks
 from routes.uploads import upload_bp
 from rate_limit import _BUCKETS, _LOCK, rate_limit
 from storage import LocalStorage, StorageError
@@ -220,6 +221,7 @@ class DownloadAuthorizationSecurityTest(unittest.TestCase):
         db.init_app(self.app)
         jwt.init_app(self.app)
         self.app.register_blueprint(upload_bp, url_prefix="/api/upload")
+        self.app.register_blueprint(tasks.tasks_bp, url_prefix="/api/tasks")
         self.app.extensions["storage"] = LocalStorage(Path(self.temp_dir.name) / "uploads")
 
         with self.app.app_context():
@@ -228,7 +230,9 @@ class DownloadAuthorizationSecurityTest(unittest.TestCase):
             assigned.set_password("irrelevant-test-password")
             other = User(username="other", role="worker")
             other.set_password("irrelevant-test-password")
-            db.session.add_all([assigned, other])
+            supervisor = User(username="unrelated-supervisor", role="site_supervisor")
+            supervisor.set_password("irrelevant-test-password")
+            db.session.add_all([assigned, other, supervisor])
             db.session.flush()
 
             task = Task(
@@ -249,18 +253,36 @@ class DownloadAuthorizationSecurityTest(unittest.TestCase):
                     file_path="images/example.png",
                 )
             )
+            db.session.add(
+                Attachment(
+                    task_id=task.id,
+                    uploaded_by_id=assigned.id,
+                    file_type="other",
+                    original_name="readme.txt",
+                    file_path="other/readme.txt",
+                )
+            )
             db.session.commit()
 
             self.assigned_id = assigned.id
             self.other_id = other.id
+            self.task_id = task.id
             self.path_token = create_access_token(
                 identity=str(assigned.id),
                 additional_claims={"download_path": "images/example.png"},
             )
-            self.general_token = create_access_token(identity=str(assigned.id))
+            self.general_token = create_access_token(
+                identity=str(assigned.id),
+                additional_claims={"role": assigned.role},
+            )
             self.other_token = create_access_token(identity=str(other.id))
+            self.supervisor_token = create_access_token(
+                identity=str(supervisor.id),
+                additional_claims={"role": supervisor.role},
+            )
 
         self.app.extensions["storage"].save("images/example.png", io.BytesIO(b"image"))
+        self.app.extensions["storage"].save("other/readme.txt", io.BytesIO(b"notes"))
 
     def tearDown(self):
         with self.app.app_context():
@@ -295,6 +317,161 @@ class DownloadAuthorizationSecurityTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 404)
+
+    def test_supervisor_cannot_download_unrelated_task_attachment(self):
+        response = self.app.test_client().get(
+            "/api/upload/files/images/example.png",
+            headers={"Authorization": f"Bearer {self.supervisor_token}"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_script_disguised_as_jpeg_is_rejected(self):
+        response = self.app.test_client().post(
+            f"/api/upload/tasks/{self.task_id}/images",
+            data={"file": (io.BytesIO(b"<script>alert(1)</script>"), "payload.jpg")},
+            headers={"Authorization": f"Bearer {self.general_token}"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_non_png_signature_payload_is_rejected(self):
+        encoded = base64.b64encode(b"<script>alert(1)</script>").decode("ascii")
+        response = self.app.test_client().post(
+            f"/api/upload/tasks/{self.task_id}/signature",
+            json={"data_url": f"data:image/png;base64,{encoded}"},
+            headers={"Authorization": f"Bearer {self.general_token}"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_executable_other_attachment_is_rejected(self):
+        response = self.app.test_client().post(
+            f"/api/tasks/{self.task_id}/attachments",
+            data={
+                "file": (io.BytesIO(b"<script>alert(1)</script>"), "payload.html"),
+                "file_type": "other",
+            },
+            headers={"Authorization": f"Bearer {self.general_token}"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_other_attachment_is_forced_to_download(self):
+        response = self.app.test_client().get(
+            "/api/tasks/attachments/other/readme.txt",
+            headers={"Authorization": f"Bearer {self.general_token}"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("attachment", response.headers.get("Content-Disposition", ""))
+
+
+class TaskOwnershipSecurityTest(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.app = Flask(__name__)
+        self.app.config.update(
+            TESTING=True,
+            SQLALCHEMY_DATABASE_URI="sqlite://",
+            SECRET_KEY="test-secret",
+            JWT_SECRET_KEY="test-jwt-secret",
+        )
+        db.init_app(self.app)
+        jwt.init_app(self.app)
+        self.app.register_blueprint(tasks.tasks_bp, url_prefix="/api/tasks")
+        self.app.extensions["storage"] = LocalStorage(Path(self.temp_dir.name) / "uploads")
+
+        with self.app.app_context():
+            db.create_all()
+            owner = User(username="task-owner", role="site_supervisor")
+            owner.set_password("irrelevant-test-password")
+            intruder = User(username="other-supervisor", role="site_supervisor")
+            intruder.set_password("irrelevant-test-password")
+            db.session.add_all([owner, intruder])
+            db.session.flush()
+            task = Task(
+                title="Private task",
+                description="Owner only",
+                location="Test",
+                expected_time=datetime.utcnow(),
+                assigned_by_id=owner.id,
+            )
+            db.session.add(task)
+            db.session.commit()
+            self.task_id = task.id
+            self.intruder_token = create_access_token(
+                identity=str(intruder.id),
+                additional_claims={"role": intruder.role},
+            )
+
+    def tearDown(self):
+        with self.app.app_context():
+            db.session.remove()
+            db.drop_all()
+        self.temp_dir.cleanup()
+
+    def test_supervisor_cannot_read_update_or_delete_another_supervisors_task(self):
+        client = self.app.test_client()
+        headers = {"Authorization": f"Bearer {self.intruder_token}"}
+
+        self.assertEqual(client.get(f"/api/tasks/{self.task_id}", headers=headers).status_code, 403)
+        self.assertEqual(
+            client.put(f"/api/tasks/{self.task_id}", json={}, headers=headers).status_code,
+            403,
+        )
+        self.assertEqual(
+            client.delete(f"/api/tasks/{self.task_id}", headers=headers).status_code,
+            403,
+        )
+
+
+class CrmAuthorizationSecurityTest(unittest.TestCase):
+    def setUp(self):
+        self.app = Flask(__name__)
+        self.app.config.update(
+            TESTING=True,
+            SQLALCHEMY_DATABASE_URI="sqlite://",
+            SECRET_KEY="test-secret",
+            JWT_SECRET_KEY="test-jwt-secret",
+        )
+        db.init_app(self.app)
+        jwt.init_app(self.app)
+        self.app.register_blueprint(crm.crm_bp, url_prefix="/api/crm")
+
+        with self.app.app_context():
+            db.create_all()
+            worker = User(username="crm-worker", role="worker")
+            worker.set_password("irrelevant-test-password")
+            manager = User(username="crm-manager", role="hq_staff")
+            manager.set_password("irrelevant-test-password")
+            db.session.add_all([worker, manager])
+            db.session.commit()
+            self.worker_token = create_access_token(
+                identity=str(worker.id), additional_claims={"role": worker.role}
+            )
+            self.manager_token = create_access_token(
+                identity=str(manager.id), additional_claims={"role": manager.role}
+            )
+
+    def tearDown(self):
+        with self.app.app_context():
+            db.session.remove()
+            db.drop_all()
+
+    def test_crm_bootstrap_rejects_workers_and_allows_managers(self):
+        client = self.app.test_client()
+        worker_response = client.get(
+            "/api/crm/boot",
+            headers={"Authorization": f"Bearer {self.worker_token}"},
+        )
+        manager_response = client.get(
+            "/api/crm/boot",
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+
+        self.assertEqual(worker_response.status_code, 403)
+        self.assertEqual(manager_response.status_code, 200)
 
 
 if __name__ == "__main__":

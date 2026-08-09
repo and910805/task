@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import api from '../api/client.js';
+import { useAuth } from '../context/AuthContext.jsx';
 
 const shortcutItems = [
   { id: 'shortcut-operations', type: '捷徑', title: '營運工作台', subtitle: '今日工作與待處理總覽', href: '/app' },
@@ -11,7 +12,11 @@ const shortcutItems = [
   { id: 'shortcut-reports', type: '捷徑', title: '報表中心', subtitle: '匯出與營運指標', href: '/reports' },
 ];
 
+const managerShortcutIds = new Set(['shortcut-crm', 'shortcut-reports']);
+
 const GlobalSearch = () => {
+  const { user } = useAuth();
+  const isManager = ['site_supervisor', 'hq_staff', 'admin'].includes(user?.role);
   const [query, setQuery] = useState('');
   const [indexLoaded, setIndexLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -49,7 +54,8 @@ const GlobalSearch = () => {
       href: '/crm/quotes',
     }));
 
-    return [...shortcutItems, ...taskItems, ...customerItems, ...contactItems, ...quoteItems];
+    const allowedShortcuts = shortcutItems.filter((item) => isManager || !managerShortcutIds.has(item.id));
+    return [...allowedShortcuts, ...taskItems, ...customerItems, ...contactItems, ...quoteItems];
   };
 
   const ensureIndex = async () => {
@@ -57,8 +63,10 @@ const GlobalSearch = () => {
     setLoading(true);
     setError('');
     try {
-      const [taskRes, bootRes] = await Promise.all([api.get('tasks/'), api.get('crm/boot')]);
-      const nextItems = buildItems(taskRes.data, bootRes.data);
+      const requests = [api.get('tasks/')];
+      if (isManager) requests.push(api.get('crm/boot'));
+      const [taskRes, bootRes] = await Promise.all(requests);
+      const nextItems = buildItems(taskRes.data, bootRes?.data || {});
       setItems(nextItems);
       setIndexLoaded(true);
     } catch (err) {

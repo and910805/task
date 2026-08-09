@@ -60,6 +60,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
       },
       {
         id: 'crm',
+        managerOnly: true,
         label: 'CRM / \u696d\u52d9',
         hint: '\u5ba2\u6236\u8207\u5831\u50f9',
         items: [
@@ -109,6 +110,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
       },
       {
         id: 'reports',
+        managerOnly: true,
         label: '\u5831\u8868 / \u5eab\u5b58',
         hint: '\u5206\u6790\u8207\u6750\u6599',
         items: [
@@ -168,7 +170,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
       navGroups
         .map((group) => ({
           ...group,
-          items: group.items.filter((item) => {
+          items: group.managerOnly && user?.role === 'worker' ? [] : group.items.filter((item) => {
             if (item.adminOnly && !isAdmin) return false;
             if (item.managerOnly && user?.role === 'worker') return false;
             return true;

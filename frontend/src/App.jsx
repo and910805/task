@@ -90,7 +90,7 @@ const AppRoutes = () => (
     <Route
       path="/crm"
       element={(
-        <PrivateRoute>
+        <PrivateRoute roles={managerOnlyRouteRoles}>
           <CrmDashboardPage />
         </PrivateRoute>
       )}
@@ -98,7 +98,7 @@ const AppRoutes = () => (
     <Route
       path="/crm/customers"
       element={(
-        <PrivateRoute>
+        <PrivateRoute roles={managerOnlyRouteRoles}>
           <CrmCustomersPage />
         </PrivateRoute>
       )}
@@ -106,7 +106,7 @@ const AppRoutes = () => (
     <Route
       path="/crm/contacts"
       element={(
-        <PrivateRoute>
+        <PrivateRoute roles={managerOnlyRouteRoles}>
           <CrmContactsPage />
         </PrivateRoute>
       )}
@@ -114,7 +114,7 @@ const AppRoutes = () => (
     <Route
       path="/crm/quotes"
       element={(
-        <PrivateRoute>
+        <PrivateRoute roles={managerOnlyRouteRoles}>
           <CrmQuotesPage />
         </PrivateRoute>
       )}
@@ -122,7 +122,7 @@ const AppRoutes = () => (
     <Route
       path="/crm/catalog"
       element={(
-        <PrivateRoute>
+        <PrivateRoute roles={managerOnlyRouteRoles}>
           <CrmCatalogPage />
         </PrivateRoute>
       )}
@@ -130,7 +130,7 @@ const AppRoutes = () => (
     <Route
       path="/crm/bookings"
       element={(
-        <PrivateRoute>
+        <PrivateRoute roles={managerOnlyRouteRoles}>
           <CrmPublicBookingsPage />
         </PrivateRoute>
       )}
@@ -146,7 +146,7 @@ const AppRoutes = () => (
     <Route
       path="/reports"
       element={(
-        <PrivateRoute>
+        <PrivateRoute roles={managerOnlyRouteRoles}>
           <ReportsPage />
         </PrivateRoute>
       )}

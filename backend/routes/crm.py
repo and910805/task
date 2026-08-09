@@ -3457,6 +3457,8 @@ def upload_invoice_signature(invoice_id: int):
             existing_path=invoice.customer_signature_path,
             data_url=data_url,
         )
+    except ValueError as exc:
+        return jsonify({"msg": str(exc)}), 400
     except Exception as exc:
         current_app.logger.error("Invoice signature upload failed: %s", exc)
         return jsonify({"msg": "Signature upload failed"}), 500
@@ -3821,7 +3823,7 @@ def invoice_pdf(invoice_id: int):
 
 
 @crm_bp.get("/boot")
-@jwt_required()
+@role_required(*READ_ROLES)
 def crm_bootstrap():
     customers = Customer.query.order_by(Customer.updated_at.desc()).limit(50).all()
     contacts = Contact.query.order_by(Contact.updated_at.desc()).limit(100).all()

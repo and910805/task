@@ -17,24 +17,11 @@ from flask_jwt_extended.exceptions import NoAuthorizationError
 from extensions import db
 from models import Attachment, Invoice, Task, User
 from services.attachments import create_file_attachment, create_signature_attachment
-from utils import get_current_user_id
+from utils import get_current_user_id, task_is_accessible
 from storage import StorageError
 
 
 upload_bp = Blueprint("upload", __name__)
-
-
-def _worker_can_access_task(task: Task, user_id: int) -> bool:
-    # 單一指派
-    if getattr(task, "assigned_to_id", None) == user_id:
-        return True
-
-    # 多重指派（task.assignees: List[TaskAssignee]）
-    for a in (getattr(task, "assignees", None) or []):
-        if getattr(a, "user_id", None) == user_id:
-            return True
-
-    return False
 
 
 def _check_task_permission(task: Task, *, message: str):
@@ -43,18 +30,13 @@ def _check_task_permission(task: Task, *, message: str):
     if user_id is None:
         return None, jsonify({"msg": "Invalid authentication token"}), 401
 
-    # admin 直接放行
-    if role == "admin":
-        return user_id, None, None
-
-    # worker：單一指派 or 多重指派
-    if role == "worker" and not _worker_can_access_task(task, user_id):
+    if not task_is_accessible(task, role, user_id):
         return None, jsonify({"msg": message}), 403
 
     return user_id, None, None
 
 
-def _serve_file(filename: str):
+def _serve_file(filename: str, *, as_attachment: bool = False):
     storage = current_app.extensions.get("storage")
     if storage is None:
         return jsonify({"msg": "Storage backend is not configured"}), 500
@@ -82,7 +64,7 @@ def _serve_file(filename: str):
             return jsonify({"msg": "Unable to generate download link"}), 500
         return redirect(url)
 
-    return send_from_directory(path.parent, path.name)
+    return send_from_directory(path.parent, path.name, as_attachment=as_attachment)
 
 
 def _authenticated_download_user(filename: str) -> User | None:
@@ -124,9 +106,7 @@ def _can_download_file(user: User, filename: str) -> bool:
 
     attachment = Attachment.query.filter_by(file_path=normalized).first()
     if attachment is not None:
-        if role in manager_roles:
-            return True
-        return role == "worker" and _worker_can_access_task(attachment.task, user.id)
+        return task_is_accessible(attachment.task, role, user.id)
 
     if Invoice.query.filter_by(customer_signature_path=normalized).first() is not None:
         return role in manager_roles
@@ -225,7 +205,9 @@ def upload_signature(task_id: int):
         attachment = create_signature_attachment(
             task, user_id=user_id, data_url=data_url, note=note
         )
-    except (ValueError, RuntimeError) as exc:
+    except ValueError as exc:
+        return jsonify({"msg": str(exc)}), 400
+    except RuntimeError as exc:
         current_app.logger.error("Signature upload failed: %s", exc)
         return jsonify({"msg": "簽名上傳失敗"}), 500
 
@@ -239,4 +221,6 @@ def download_file(filename: str):
         return jsonify({"msg": "Missing or invalid authentication token"}), 401
     if not _can_download_file(user, filename):
         return jsonify({"msg": "File not found"}), 404
-    return _serve_file(filename)
+    normalized = filename.replace("\\", "/").lstrip("/")
+    attachment = Attachment.query.filter_by(file_path=normalized).first()
+    return _serve_file(filename, as_attachment=bool(attachment and attachment.file_type == "other"))

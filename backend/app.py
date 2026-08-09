@@ -158,7 +158,7 @@ def create_app() -> Flask:
     for folder in (uploads_path, reports_path, images_path, audio_path, signature_path, other_path):
         os.makedirs(folder, exist_ok=True)
 
-    CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": app.config["CORS_ORIGINS"]}})
+    CORS(app, supports_credentials=False, resources={r"/api/*": {"origins": app.config["CORS_ORIGINS"]}})
 
     db.init_app(app)
     jwt.init_app(app)
@@ -215,6 +215,25 @@ def create_app() -> Flask:
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
+        script_source = "'self' 'unsafe-inline'" if request.path.startswith("/salesite/") else "'self'"
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "; ".join(
+                (
+                    "default-src 'self'",
+                    "base-uri 'self'",
+                    "frame-ancestors 'none'",
+                    "object-src 'none'",
+                    "form-action 'self'",
+                    f"script-src {script_source}",
+                    "style-src 'self' 'unsafe-inline'",
+                    "img-src 'self' data: blob: https:",
+                    "media-src 'self' blob: https:",
+                    "connect-src 'self' https:",
+                    "font-src 'self' data:",
+                )
+            ),
+        )
         response.headers.setdefault(
             "Permissions-Policy",
             "camera=(), geolocation=(), microphone=(self)",
@@ -545,4 +564,5 @@ app = create_app()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    # Container ingress requires the development entry point to listen on all interfaces.
+    app.run(host="0.0.0.0", port=port, debug=debug)  # nosec B104
