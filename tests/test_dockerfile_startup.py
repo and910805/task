@@ -12,14 +12,15 @@ class DockerfileStartupTest(unittest.TestCase):
         self.assertIn("*[!0-9]*", content)
         self.assertIn("0.0.0.0:${APP_PORT}", content)
 
-    def test_build_uses_single_stable_downloaded_pdf_font(self):
+    def test_build_uses_stable_downloaded_pdf_fonts(self):
         dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
         content = dockerfile.read_text(encoding="utf-8")
 
         self.assertIn("NotoSansTC-wght.ttf", content)
-        self.assertNotIn("notoseriftc", content)
-        self.assertNotIn("NotoSerifTC-wght.ttf", content)
+        self.assertIn("notoseriftc", content)
+        self.assertIn("NotoSerifTC-wght.ttf", content)
         self.assertIn("ENV PDF_FONT_PATH=/usr/local/share/fonts/NotoSansTC-wght.ttf", content)
+        self.assertIn("ENV CONTRACT_PDF_FONT_PATH=/usr/local/share/fonts/NotoSerifTC-wght.ttf", content)
 
 
 if __name__ == "__main__":

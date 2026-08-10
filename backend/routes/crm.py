@@ -69,6 +69,13 @@ DEFAULT_QUOTE_VALID_DAYS = 10
 
 PDF_FONT_NAME = "Helvetica"
 PDF_FONT_ENV = "PDF_FONT_PATH"
+CONTRACT_PDF_FONT_NAME = "ContractSerif"
+CONTRACT_PDF_FONT_ENV = "CONTRACT_PDF_FONT_PATH"
+CONTRACT_PDF_FONT_CANDIDATES = (
+    "/usr/local/share/fonts/NotoSerifTC-wght.ttf",
+    "C:/Windows/Fonts/NotoSerifTC-VF.ttf",
+    "C:/Windows/Fonts/kaiu.ttf",
+)
 PDF_FONT_CANDIDATES = (
     "/usr/local/share/fonts/NotoSerifTC-wght.ttf",
     "/usr/local/share/fonts/NotoSansTC-wght.ttf",
@@ -1044,6 +1051,28 @@ def _append_quote_version_snapshot(quote: Quote, *, action: str, summary: str | 
             changed_by_id=get_current_user_id(),
         )
     )
+
+
+def _contract_pdf_font_name() -> str:
+    """Return an embedded Traditional Chinese serif font for formal contracts."""
+    _require_embedded_pdf_font()
+    if _font_supports_traditional_chinese(CONTRACT_PDF_FONT_NAME):
+        return CONTRACT_PDF_FONT_NAME
+
+    configured = (os.environ.get(CONTRACT_PDF_FONT_ENV) or "").strip()
+    candidates = [configured, *CONTRACT_PDF_FONT_CANDIDATES]
+    for font_path in candidates:
+        if not font_path or not os.path.exists(font_path):
+            continue
+        ttc_indices = (3, 4, 2, 1, 0) if font_path.lower().endswith(".ttc") else (0,)
+        for idx in ttc_indices:
+            try:
+                pdfmetrics.registerFont(TTFont(CONTRACT_PDF_FONT_NAME, font_path, subfontIndex=idx))
+                if _font_supports_traditional_chinese(CONTRACT_PDF_FONT_NAME):
+                    return CONTRACT_PDF_FONT_NAME
+            except Exception:
+                continue
+    return PDF_FONT_NAME
 
 
 def _next_contract_no(reference_date: date | None = None) -> str:
@@ -4002,7 +4031,7 @@ def quote_xlsx(quote_id: int):
 
 
 def _build_contract_pdf(contract: Contract) -> BytesIO:
-    _require_embedded_pdf_font()
+    font_name = _contract_pdf_font_name()
     try:
         snapshot = json.loads(contract.quote_snapshot_json or "{}")
     except json.JSONDecodeError:
@@ -4015,72 +4044,116 @@ def _build_contract_pdf(contract: Contract) -> BytesIO:
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
-        leftMargin=16 * mm,
-        rightMargin=16 * mm,
-        topMargin=14 * mm,
-        bottomMargin=14 * mm,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=22 * mm,
+        bottomMargin=19 * mm,
         title=f"工程承攬契約-{contract.contract_no}",
+        author=contract.party_b_name,
+        subject=f"{contract.project_name}工程承攬契約",
     )
     styles = getSampleStyleSheet()
     title_style = styles["Heading1"].clone("ContractTitle")
-    title_style.fontName = PDF_FONT_NAME
-    title_style.fontSize = 20
-    title_style.leading = 25
+    title_style.fontName = font_name
+    title_style.fontSize = 24
+    title_style.leading = 32
     title_style.alignment = 1
+    title_style.textColor = colors.black
+    subtitle_style = title_style.clone("ContractSubtitle")
+    subtitle_style.fontSize = 15
+    subtitle_style.leading = 23
     body_style = styles["BodyText"].clone("ContractBody")
-    body_style.fontName = PDF_FONT_NAME
-    body_style.fontSize = 10.5
-    body_style.leading = 16
+    body_style.fontName = font_name
+    body_style.fontSize = 11.2
+    body_style.leading = 19
     body_style.wordWrap = "CJK"
+    body_style.textColor = colors.black
+    body_style.firstLineIndent = 22.4
+    body_style.alignment = 4
     clause_title_style = body_style.clone("ContractClauseTitle")
-    clause_title_style.fontSize = 11.5
-    clause_title_style.leading = 17
-    clause_title_style.spaceBefore = 4
-    clause_title_style.textColor = colors.HexColor("#0f172a")
+    clause_title_style.fontSize = 12.3
+    clause_title_style.leading = 20
+    clause_title_style.firstLineIndent = 0
+    clause_title_style.alignment = 0
+    clause_title_style.spaceBefore = 7
+    clause_title_style.spaceAfter = 1
+    clause_title_style.keepWithNext = True
     warning_style = body_style.clone("ContractWarning")
-    warning_style.fontSize = 8.5
-    warning_style.leading = 12
-    warning_style.textColor = colors.HexColor("#9a3412")
+    warning_style.fontSize = 8.2
+    warning_style.leading = 13
+    warning_style.firstLineIndent = 0
+    warning_style.alignment = 0
+    warning_style.textColor = colors.HexColor("#444444")
     small_style = body_style.clone("ContractSmall")
-    small_style.fontSize = 8.5
-    small_style.leading = 12
+    small_style.fontSize = 8.6
+    small_style.leading = 13
+    small_style.firstLineIndent = 0
+    small_style.alignment = 0
+    label_style = body_style.clone("ContractLabel")
+    label_style.fontSize = 10.2
+    label_style.leading = 15
+    label_style.firstLineIndent = 0
+    label_style.alignment = 0
+    center_style = label_style.clone("ContractCenter")
+    center_style.alignment = 1
 
     def paragraph(value, style=body_style):
         return Paragraph(escape(str(value or "")).replace("\n", "<br />"), style)
 
-    party_rows = [
-        [paragraph("甲方（定作人）"), paragraph(contract.party_a_name)],
-        [paragraph("甲方統編／身分識別"), paragraph(contract.party_a_tax_id or "________________")],
-        [paragraph("甲方電話"), paragraph(contract.party_a_phone or "________________")],
-        [paragraph("甲方地址"), paragraph(contract.party_a_address or "________________")],
-        [paragraph("乙方（承攬人）"), paragraph(contract.party_b_name)],
-        [paragraph("乙方統一編號"), paragraph(contract.party_b_tax_id or "________________")],
-        [paragraph("乙方電話"), paragraph(contract.party_b_phone or "________________")],
-        [paragraph("乙方地址"), paragraph(contract.party_b_address or "________________")],
-    ]
-    party_table = Table(party_rows, colWidths=[43 * mm, 119 * mm])
-    party_table.setStyle(
+    def roc_date_text(value: date | None) -> str:
+        if not value:
+            return "中華民國　　　年　　　月　　　日"
+        return f"中華民國 {value.year - 1911} 年 {value.month} 月 {value.day} 日"
+
+    def formal_table(rows, widths, *, header_rows=0, align_right_from=None):
+        table = Table(rows, colWidths=widths, repeatRows=header_rows)
+        commands = [
+            ("FONTNAME", (0, 0), (-1, -1), font_name),
+            ("GRID", (0, 0), (-1, -1), 0.55, colors.HexColor("#555555")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]
+        if header_rows:
+            commands.extend(
+                [
+                    ("BACKGROUND", (0, 0), (-1, header_rows - 1), colors.HexColor("#eeeeee")),
+                    ("ALIGN", (0, 0), (-1, header_rows - 1), "CENTER"),
+                ]
+            )
+        if align_right_from is not None:
+            commands.append(("ALIGN", (align_right_from, header_rows), (-1, -1), "RIGHT"))
+        table.setStyle(TableStyle(commands))
+        return table
+
+    cover_party_table = Table(
+        [
+            [paragraph("甲方（定作人）", label_style), paragraph(contract.party_a_name, label_style)],
+            [paragraph("乙方（承攬人）", label_style), paragraph(contract.party_b_name, label_style)],
+        ],
+        colWidths=[42 * mm, 114 * mm],
+    )
+    cover_party_table.setStyle(
         TableStyle(
             [
-                ("FONTNAME", (0, 0), (-1, -1), PDF_FONT_NAME),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
-                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f1f5f9")),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("FONTNAME", (0, 0), (-1, -1), font_name),
+                ("LINEBELOW", (0, 0), (-1, -1), 0.7, colors.HexColor("#666666")),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
             ]
         )
     )
 
-    contract_date_text = contract.contract_date.isoformat() if contract.contract_date else "________________"
-    start_text = contract.start_date.isoformat() if contract.start_date else "雙方另行書面確認"
-    end_text = contract.end_date.isoformat() if contract.end_date else "雙方另行書面確認"
-    amount_text = f"NT$ {_format_amount_number(float(contract.total_amount or 0))}"
+    contract_date_text = roc_date_text(contract.contract_date)
+    start_text = roc_date_text(contract.start_date) if contract.start_date else "雙方另行書面確認"
+    end_text = roc_date_text(contract.end_date) if contract.end_date else "雙方另行書面確認"
+    amount_text = f"新臺幣 {_format_amount_number(float(contract.total_amount or 0))} 元整"
     special_terms = contract.special_terms or "無；如有追加減工程，應另以書面確認。"
     clauses = [
-        ("第一條　契約文件與工程範圍", f"本契約、附件一估價單（{quote_payload.get('quote_no') or '-'}，版本 {contract.quote_version_no}）及雙方書面確認之追加減工程單，均為契約之一部分。乙方應依附件所列品項、規格、數量及施工地點完成工作。"),
+        ("第一條　契約文件及工程範圍", f"本契約、附件一工程估價明細（估價單號：{quote_payload.get('quote_no') or '-'}；版本：{contract.quote_version_no}）及雙方書面確認之追加減工程單，均為本契約之一部分。乙方應依附件所列品項、規格、數量及施工地點完成工作。"),
         ("第二條　契約價金", f"本契約總價為 {amount_text}（幣別：{contract.currency}）。材料由乙方供給者，其價額已包含於附件所列報酬；未列項目須另行報價並經雙方書面同意。"),
         ("第三條　付款方式", contract.payment_terms),
         ("第四條　施工期間", f"預定開工日：{start_text}；預定完工日：{end_text}。因甲方需求變更、現場條件、天候、不可抗力或非可歸責於乙方之事由影響工期時，雙方應書面調整工期。"),
@@ -4094,50 +4167,102 @@ def _build_contract_pdf(contract: Contract) -> BytesIO:
         ("第十二條　契約份數", "本契約及附件由雙方各執一份為憑；電子檔與經雙方確認之紙本具有相同內容時，均應妥善保存。"),
     ]
 
+    snapshot_digest = hashlib.sha256((contract.quote_snapshot_json or "").encode("utf-8")).hexdigest()[:16].upper()
+    review_box = formal_table(
+        [
+            [paragraph("契約審閱確認", label_style), paragraph("本契約於中華民國　　　年　　　月　　　日交付甲方攜回審閱。", label_style)],
+            [paragraph("甲方簽章", label_style), paragraph("　　　　　　　　　　　　　　　　", label_style)],
+        ],
+        [35 * mm, 121 * mm],
+    )
+    cover_meta = formal_table(
+        [
+            [paragraph("契約編號", label_style), paragraph(contract.contract_no, label_style), paragraph("契約日期", label_style), paragraph(contract_date_text, label_style)],
+            [paragraph("估價單號", label_style), paragraph(quote_payload.get("quote_no") or "-", label_style), paragraph("綁定版本", label_style), paragraph(f"第 {contract.quote_version_no} 版", label_style)],
+        ],
+        [27 * mm, 51 * mm, 27 * mm, 51 * mm],
+    )
     story = [
-        Paragraph("工程承攬契約書", title_style),
-        Spacer(1, 2 * mm),
-        paragraph(f"契約編號：{contract.contract_no}　　契約日期：{contract_date_text}", small_style),
-        paragraph("本文件為系統提供之契約範本，正式使用前應由具台灣法律資格之律師或法務依個案審閱。", warning_style),
-        Spacer(1, 3 * mm),
-        party_table,
+        review_box,
+        Spacer(1, 18 * mm),
+        Paragraph("水電工程承攬契約書", title_style),
+        Spacer(1, 8 * mm),
+        Paragraph(escape(contract.project_name), subtitle_style),
+        Spacer(1, 20 * mm),
+        cover_party_table,
+        Spacer(1, 13 * mm),
+        cover_meta,
+        Spacer(1, 18 * mm),
+        paragraph("本契約本文、估價明細附件及雙方後續書面確認文件，應合併保存。", center_style),
+        Spacer(1, 7 * mm),
+        paragraph("範本提示：正式使用前，應由具台灣法律資格之律師依實際交易對象、工程性質與付款條件完成審閱。", warning_style),
+        PageBreak(),
+        Paragraph("水電工程承攬契約書", subtitle_style),
         Spacer(1, 4 * mm),
-        paragraph(f"工程名稱：{contract.project_name}"),
-        paragraph(f"施工地點：{contract.site_address or '________________'}"),
-        Spacer(1, 2 * mm),
+        paragraph(f"立契約書人：甲方（定作人）{contract.party_a_name}；乙方（承攬人）{contract.party_b_name}。雙方就下列工程承攬事項達成合意，共同遵守本契約各條款。"),
+        Spacer(1, 5 * mm),
     ]
+
+    party_rows = [
+        [paragraph("當事人", label_style), paragraph("名稱", label_style), paragraph("統編／識別", label_style), paragraph("電話", label_style)],
+        [paragraph("甲方（定作人）", label_style), paragraph(contract.party_a_name, label_style), paragraph(contract.party_a_tax_id or "＿＿＿＿＿＿", label_style), paragraph(contract.party_a_phone or "＿＿＿＿＿＿", label_style)],
+        [paragraph("乙方（承攬人）", label_style), paragraph(contract.party_b_name, label_style), paragraph(contract.party_b_tax_id or "＿＿＿＿＿＿", label_style), paragraph(contract.party_b_phone or "＿＿＿＿＿＿", label_style)],
+        [paragraph("甲方地址", label_style), paragraph(contract.party_a_address or "＿＿＿＿＿＿＿＿＿＿＿＿", label_style), "", ""],
+        [paragraph("乙方地址", label_style), paragraph(contract.party_b_address or "＿＿＿＿＿＿＿＿＿＿＿＿", label_style), "", ""],
+    ]
+    party_table = formal_table(party_rows, [31 * mm, 55 * mm, 35 * mm, 35 * mm], header_rows=1)
+    party_table.setStyle(TableStyle([("SPAN", (1, 3), (3, 3)), ("SPAN", (1, 4), (3, 4))]))
+    summary_rows = [
+        [paragraph("工程名稱", label_style), paragraph(contract.project_name, label_style)],
+        [paragraph("施工地點", label_style), paragraph(contract.site_address or "________________", label_style)],
+        [paragraph("契約總價", label_style), paragraph(amount_text, label_style)],
+        [paragraph("施工期間", label_style), paragraph(f"{start_text} 起至 {end_text} 止", label_style)],
+        [paragraph("付款方式", label_style), paragraph(contract.payment_terms, label_style)],
+        [paragraph("保固期間", label_style), paragraph(f"驗收完成日起 {int(contract.warranty_months or 0)} 個月", label_style)],
+    ]
+    summary_table = formal_table(summary_rows, [31 * mm, 125 * mm])
+    story.extend([party_table, Spacer(1, 5 * mm), summary_table, Spacer(1, 5 * mm)])
     for heading, content in clauses:
         story.append(Paragraph(escape(heading), clause_title_style))
         story.append(paragraph(content))
 
+    story.extend([PageBreak(), Paragraph("立契約書人", subtitle_style), Spacer(1, 8 * mm)])
     signature_table = Table(
         [
-            [paragraph("甲方簽章"), paragraph("乙方簽章")],
-            [paragraph("姓名／名稱：________________________"), paragraph(f"名稱：{contract.party_b_name}")],
-            [paragraph("代表人：____________________________"), paragraph("代表人：____________________________")],
-            [paragraph("日期：______________________________"), paragraph("日期：______________________________")],
-            [Spacer(1, 22 * mm), Spacer(1, 22 * mm)],
+            [paragraph("甲方（定作人）", label_style), paragraph("乙方（承攬人）", label_style)],
+            [paragraph(f"姓名／名稱：{contract.party_a_name}", label_style), paragraph(f"名稱：{contract.party_b_name}", label_style)],
+            [paragraph("代表人：____________________________", label_style), paragraph("代表人：____________________________", label_style)],
+            [paragraph(f"統編／身分識別：{contract.party_a_tax_id or '________________'}", label_style), paragraph(f"統一編號：{contract.party_b_tax_id or '________________'}", label_style)],
+            [paragraph(f"地址：{contract.party_a_address or '________________'}", label_style), paragraph(f"地址：{contract.party_b_address or '________________'}", label_style)],
+            [paragraph(f"電話：{contract.party_a_phone or '________________'}", label_style), paragraph(f"電話：{contract.party_b_phone or '________________'}", label_style)],
+            [paragraph("簽章處", center_style), paragraph("簽章處", center_style)],
+            [Spacer(1, 30 * mm), Spacer(1, 30 * mm)],
         ],
-        colWidths=[81 * mm, 81 * mm],
+        colWidths=[78 * mm, 78 * mm],
     )
     signature_table.setStyle(
         TableStyle(
             [
-                ("FONTNAME", (0, 0), (-1, -1), PDF_FONT_NAME),
-                ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#64748b")),
-                ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+                ("FONTNAME", (0, 0), (-1, -1), font_name),
+                ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#555555")),
+                ("INNERGRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#888888")),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("TOPPADDING", (0, 0), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
             ]
         )
     )
-    story.extend([Spacer(1, 5 * mm), signature_table, PageBreak()])
     story.extend(
         [
-            Paragraph("附件一　工程估價明細", title_style),
-            paragraph(f"來源估價單：{quote_payload.get('quote_no') or '-'}　　綁定版本：{contract.quote_version_no}", small_style),
+            signature_table,
+            Spacer(1, 10 * mm),
+            paragraph(f"簽約日期：{contract_date_text}", center_style),
+            PageBreak(),
+            Paragraph("附件一　工程估價明細", subtitle_style),
             Spacer(1, 3 * mm),
+            paragraph(f"來源估價單：{quote_payload.get('quote_no') or '-'}　｜　綁定版本：第 {contract.quote_version_no} 版　｜　快照識別碼：{snapshot_digest}", small_style),
+            paragraph("本附件內容於契約建立時凍結；後續修改估價單不會改變本附件。", small_style),
+            Spacer(1, 4 * mm),
         ]
     )
     item_rows = [[paragraph("項次", small_style), paragraph("品項／規格", small_style), paragraph("單位", small_style), paragraph("數量", small_style), paragraph("單價", small_style), paragraph("金額", small_style)]]
@@ -4159,14 +4284,14 @@ def _build_contract_pdf(contract: Contract) -> BytesIO:
             ]
         )
     item_rows.append(["", paragraph("契約總價", small_style), "", "", "", paragraph(_format_amount_number(float(contract.total_amount or 0)), small_style)])
-    item_table = Table(item_rows, colWidths=[12 * mm, 74 * mm, 15 * mm, 18 * mm, 22 * mm, 24 * mm], repeatRows=1)
+    item_table = Table(item_rows, colWidths=[11 * mm, 70 * mm, 15 * mm, 18 * mm, 25 * mm, 27 * mm], repeatRows=1)
     item_table.setStyle(
         TableStyle(
             [
-                ("FONTNAME", (0, 0), (-1, -1), PDF_FONT_NAME),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#94a3b8")),
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
-                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f8fafc")),
+                ("FONTNAME", (0, 0), (-1, -1), font_name),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#555555")),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8e8e8")),
+                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f3f3f3")),
                 ("SPAN", (1, -1), (4, -1)),
                 ("ALIGN", (0, 0), (0, -1), "CENTER"),
                 ("ALIGN", (2, 1), (-1, -1), "RIGHT"),
@@ -4176,8 +4301,43 @@ def _build_contract_pdf(contract: Contract) -> BytesIO:
             ]
         )
     )
-    story.append(item_table)
-    doc.build(story)
+    story.extend([item_table, Spacer(1, 4 * mm), paragraph("附件完", center_style)])
+
+    company_name = contract.party_b_name or "承攬人"
+
+    class ContractNumberedCanvas(pdf_canvas.Canvas):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._saved_page_states = []
+
+        def showPage(self):
+            self._saved_page_states.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            page_count = len(self._saved_page_states)
+            for state in self._saved_page_states:
+                self.__dict__.update(state)
+                page_number = int(self._pageNumber)
+                self.saveState()
+                self.setStrokeColor(colors.HexColor("#777777"))
+                self.setLineWidth(0.35)
+                if page_number > 1:
+                    self.setFont(font_name, 8)
+                    self.setFillColor(colors.HexColor("#444444"))
+                    self.drawString(18 * mm, A4[1] - 12 * mm, f"{company_name}　水電工程承攬契約書")
+                    self.drawRightString(A4[0] - 18 * mm, A4[1] - 12 * mm, f"契約編號：{contract.contract_no}")
+                    self.line(18 * mm, A4[1] - 14 * mm, A4[0] - 18 * mm, A4[1] - 14 * mm)
+                self.line(18 * mm, 14 * mm, A4[0] - 18 * mm, 14 * mm)
+                self.setFont(font_name, 7.8)
+                self.setFillColor(colors.HexColor("#555555"))
+                self.drawString(18 * mm, 9.5 * mm, "本契約應連同附件一併保存")
+                self.drawRightString(A4[0] - 18 * mm, 9.5 * mm, f"第 {page_number} 頁，共 {page_count} 頁")
+                self.restoreState()
+                pdf_canvas.Canvas.showPage(self)
+            pdf_canvas.Canvas.save(self)
+
+    doc.build(story, canvasmaker=ContractNumberedCanvas)
     buffer.seek(0)
     return buffer
 

@@ -34,6 +34,9 @@ RUN apt-get update \
 RUN mkdir -p /usr/local/share/fonts \
     && python -c "from urllib.request import urlopen; u='https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC%5Bwght%5D.ttf'; o='/usr/local/share/fonts/NotoSansTC-wght.ttf'; open(o,'wb').write(urlopen(u, timeout=60).read()); print('downloaded', o)"
 
+# Formal contracts use a serif face while estimates keep the existing sans face.
+RUN python -c "from urllib.request import urlopen; u='https://raw.githubusercontent.com/google/fonts/main/ofl/notoseriftc/NotoSerifTC%5Bwght%5D.ttf'; o='/usr/local/share/fonts/NotoSerifTC-wght.ttf'; open(o,'wb').write(urlopen(u, timeout=60).read()); print('downloaded', o)"
+
 COPY backend/requirements.txt ./backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
@@ -47,6 +50,7 @@ RUN mkdir -p /app/backend/uploads
 ENV PYTHONUNBUFFERED=1
 ENV UPLOAD_FOLDER=/app/backend/uploads
 ENV PDF_FONT_PATH=/usr/local/share/fonts/NotoSansTC-wght.ttf
+ENV CONTRACT_PDF_FONT_PATH=/usr/local/share/fonts/NotoSerifTC-wght.ttf
 ENV PDF_REQUIRE_EMBEDDED_FONT=1
 ENV INIT_DB_ON_STARTUP=1
 
