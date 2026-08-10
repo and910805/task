@@ -158,6 +158,9 @@ const CrmQuotesPage = () => {
   const [versionsForContractId, setVersionsForContractId] = useState(null);
   const [contractVersions, setContractVersions] = useState([]);
   const [contractVersionsLoading, setContractVersionsLoading] = useState(false);
+  const contractFormOpenKey = contractForm
+    ? `${editingContractId || 'new'}:${contractForm.quote_id || ''}`
+    : '';
   const [catalogPick, setCatalogPick] = useState('');
   const [catalogQuery, setCatalogQuery] = useState('');
   const [catalogOpen, setCatalogOpen] = useState(false);
@@ -172,6 +175,7 @@ const CrmQuotesPage = () => {
   const [invoicePaymentForm, setInvoicePaymentForm] = useState(() => defaultInvoicePaymentForm(null));
   const invoiceSignatureSectionRef = useRef(null);
   const invoiceListSectionRef = useRef(null);
+  const contractFormSectionRef = useRef(null);
 
   const [form, setForm] = useState(() => ({
     customer_id: '',
@@ -330,6 +334,12 @@ const CrmQuotesPage = () => {
     if (!paymentPanelInvoiceId || !invoiceSignatureSectionRef.current) return;
     invoiceSignatureSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [paymentPanelInvoiceId]);
+
+  useEffect(() => {
+    if (!contractFormOpenKey || !contractFormSectionRef.current) return;
+    contractFormSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    contractFormSectionRef.current.focus({ preventScroll: true });
+  }, [contractFormOpenKey]);
 
   const contactOptions = useMemo(
     () => contacts.filter((contact) => String(contact.customer_id) === String(form.customer_id)),
@@ -1290,7 +1300,7 @@ const CrmQuotesPage = () => {
       ) : null}
 
       {contractForm ? (
-        <section className="panel">
+        <section ref={contractFormSectionRef} className="panel crm-contract-editor" tabIndex="-1">
           <div className="panel-header">
             <div>
               <h2>{editingContractId ? '編輯工程承攬契約' : '建立工程承攬契約'}</h2>

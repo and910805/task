@@ -6729,3 +6729,11 @@ button:disabled {
     align-items: flex-start;
   }
 }
+.crm-contract-editor {
+  scroll-margin-top: 88px;
+}
+
+.crm-contract-editor:focus {
+  outline: 3px solid rgba(37, 99, 235, 0.2);
+  outline-offset: 3px;
+}
