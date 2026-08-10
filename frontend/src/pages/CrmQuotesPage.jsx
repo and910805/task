@@ -41,6 +41,12 @@ const STATUS_LABELS = {
     paid: '已收款',
     cancelled: '已取消',
   },
+  contract: {
+    draft: '草稿',
+    ready: '待簽署',
+    signed: '已簽署',
+    cancelled: '已取消',
+  },
 };
 const crmStatusLabel = (type, status) => {
   const raw = String(status || '').trim().toLowerCase();
@@ -75,6 +81,7 @@ const defaultQuoteDateFields = () => {
   return { issue_date, expiry_date, quote_valid_days };
 };
 const todayDateValue = () => new Date().toISOString().slice(0, 10);
+const DEFAULT_CONTRACT_PAYMENT_TERMS = '簽約訂金 30%；工程進度款 40%；驗收完成後支付尾款 30%。';
 const defaultInvoicePaymentForm = (invoice) => ({
   payment_date: todayDateValue(),
   amount:
@@ -99,11 +106,11 @@ const getFilenameFromDisposition = (contentDisposition) => {
   if (utf8Match?.[1]) {
     try {
       return decodeURIComponent(utf8Match[1]);
-    } catch (err) {
+    } catch {
       return utf8Match[1];
     }
   }
-  const basicMatch = /filename=\"?([^\";]+)\"?/i.exec(contentDisposition);
+  const basicMatch = /filename="?([^";]+)"?/i.exec(contentDisposition);
   return basicMatch?.[1] || '';
 };
 const withAuthToken = (rawUrl) => {
@@ -122,6 +129,7 @@ const CrmQuotesPage = () => {
   const [contacts, setContacts] = useState([]);
   const [catalogItems, setCatalogItems] = useState([]);
   const [quotes, setQuotes] = useState([]);
+  const [contracts, setContracts] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [history, setHistory] = useState({ quotes: [] });
   const [loading, setLoading] = useState(true);
@@ -130,6 +138,7 @@ const CrmQuotesPage = () => {
   const [copyingQuoteId, setCopyingQuoteId] = useState(null);
   const [deletingQuoteId, setDeletingQuoteId] = useState(null);
   const [downloadingQuotePdfId, setDownloadingQuotePdfId] = useState(null);
+  const [downloadingContractPdfId, setDownloadingContractPdfId] = useState(null);
   const [pendingDeleteQuoteId, setPendingDeleteQuoteId] = useState(null);
   const [cancellingInvoiceId, setCancellingInvoiceId] = useState(null);
   const [downloadingInvoicePdfId, setDownloadingInvoicePdfId] = useState(null);
@@ -143,6 +152,12 @@ const CrmQuotesPage = () => {
   const [versionsForQuoteId, setVersionsForQuoteId] = useState(null);
   const [quoteVersions, setQuoteVersions] = useState([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
+  const [contractForm, setContractForm] = useState(null);
+  const [editingContractId, setEditingContractId] = useState(null);
+  const [savingContract, setSavingContract] = useState(false);
+  const [versionsForContractId, setVersionsForContractId] = useState(null);
+  const [contractVersions, setContractVersions] = useState([]);
+  const [contractVersionsLoading, setContractVersionsLoading] = useState(false);
   const [catalogPick, setCatalogPick] = useState('');
   const [catalogQuery, setCatalogQuery] = useState('');
   const [catalogOpen, setCatalogOpen] = useState(false);
@@ -210,9 +225,16 @@ const CrmQuotesPage = () => {
     return invoiceRows;
   };
 
+  const loadContracts = async () => {
+    const { data } = await api.get('crm/contracts');
+    const rows = Array.isArray(data) ? data : [];
+    setContracts(rows);
+    return rows;
+  };
+
   const reloadManagedLists = async () => {
     const quoteRows = await loadQuotes();
-    await loadInvoices(quoteRows);
+    await Promise.all([loadInvoices(quoteRows), loadContracts()]);
   };
 
   const loadHistory = async (customerId) => {
@@ -336,6 +358,17 @@ const CrmQuotesPage = () => {
     });
     return mapping;
   }, [invoices]);
+  const contractsByQuoteId = useMemo(() => {
+    const mapping = new Map();
+    contracts.forEach((contract) => {
+      const quoteId = Number(contract?.quote_id || 0);
+      if (!quoteId) return;
+      const rows = mapping.get(quoteId) || [];
+      rows.push(contract);
+      mapping.set(quoteId, rows);
+    });
+    return mapping;
+  }, [contracts]);
   const activeInvoices = useMemo(
     () => invoices.filter((invoice) => String(invoice?.status || '').trim().toLowerCase() !== 'cancelled'),
     [invoices],
@@ -581,7 +614,8 @@ const CrmQuotesPage = () => {
     setSaving(true);
     setError('');
     try {
-      const { quote_valid_days, ...payloadForm } = form;
+      const payloadForm = { ...form };
+      delete payloadForm.quote_valid_days;
       const payload = {
         ...payloadForm,
         customer_id: Number(form.customer_id),
@@ -608,6 +642,102 @@ const CrmQuotesPage = () => {
       setError(err?.response?.data?.msg || (editingQuoteId ? '更新報價失敗' : '新增報價失敗'));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const openContractEditor = (quote, contract = null) => {
+    const customer = customerMap.get(String(quote?.customer_id || '')) || {};
+    setEditingContractId(contract?.id || null);
+    setContractForm({
+      quote_id: Number(contract?.quote_id || quote?.id || 0),
+      quote_no: quote?.quote_no || contract?.quote_no || '',
+      contract_date: contract?.contract_date || todayDateValue(),
+      status: contract?.status || 'draft',
+      project_name: contract?.project_name || `${quote?.customer_name || customer.name || quote?.quote_no || '客戶'} 水電工程`,
+      site_address: contract?.site_address || quote?.site_address || customer.address || '',
+      party_a_name: contract?.party_a_name || quote?.recipient_name || quote?.customer_name || customer.name || '',
+      party_a_tax_id: contract?.party_a_tax_id || customer.tax_id || '',
+      party_a_phone: contract?.party_a_phone || customer.phone || '',
+      party_a_address: contract?.party_a_address || customer.address || '',
+      party_b_name: contract?.party_b_name || '立翔水電行',
+      party_b_tax_id: contract?.party_b_tax_id || '14511159',
+      party_b_phone: contract?.party_b_phone || '',
+      party_b_address: contract?.party_b_address || '',
+      start_date: contract?.start_date || '',
+      end_date: contract?.end_date || '',
+      payment_terms: contract?.payment_terms || DEFAULT_CONTRACT_PAYMENT_TERMS,
+      warranty_months: contract?.warranty_months ?? 12,
+      special_terms: contract?.special_terms || '',
+      version_summary: '',
+    });
+  };
+
+  const saveContract = async (event) => {
+    event.preventDefault();
+    if (!contractForm?.quote_id) return;
+    setSavingContract(true);
+    setError('');
+    try {
+      const payload = { ...contractForm, warranty_months: Number(contractForm.warranty_months || 0) };
+      if (editingContractId) {
+        await api.put(`crm/contracts/${editingContractId}`, payload);
+      } else {
+        await api.post(`crm/quotes/${contractForm.quote_id}/contracts`, payload);
+      }
+      setContractForm(null);
+      setEditingContractId(null);
+      await loadContracts();
+    } catch (err) {
+      setError(err?.networkMessage || err?.response?.data?.msg || '儲存工程契約失敗');
+    } finally {
+      setSavingContract(false);
+    }
+  };
+
+  const loadContractVersions = async (contractId) => {
+    setVersionsForContractId(contractId);
+    setContractVersionsLoading(true);
+    setError('');
+    try {
+      const { data } = await api.get(`crm/contracts/${contractId}/versions`);
+      setContractVersions(Array.isArray(data?.versions) ? data.versions : []);
+    } catch (err) {
+      setContractVersions([]);
+      setError(err?.networkMessage || err?.response?.data?.msg || '讀取契約版本失敗');
+    } finally {
+      setContractVersionsLoading(false);
+    }
+  };
+
+  const openContractPdf = async (contractId) => {
+    if (!contractId) return;
+    setDownloadingContractPdfId(contractId);
+    setError('');
+    try {
+      const response = await api.get(`crm/contracts/${contractId}/pdf`, { responseType: 'blob', timeout: 60000 });
+      const filenameFromHeader = getFilenameFromDisposition(response.headers?.['content-disposition']);
+      const blobUrl = URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filenameFromHeader || `contract-${contractId}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (err) {
+      const blobPayload = err?.response?.data;
+      if (typeof Blob !== 'undefined' && blobPayload instanceof Blob) {
+        try {
+          const parsed = JSON.parse(await blobPayload.text());
+          setError([parsed?.msg, parsed?.detail].filter(Boolean).join(' / ') || '下載契約 PDF 失敗');
+          return;
+        } catch {
+          // Fall through to the generic message.
+        }
+      }
+      setError(err?.networkMessage || err?.response?.data?.msg || '下載契約 PDF 失敗');
+    } finally {
+      setDownloadingContractPdfId(null);
     }
   };
 
@@ -1159,6 +1289,219 @@ const CrmQuotesPage = () => {
         </section>
       ) : null}
 
+      {contractForm ? (
+        <section className="panel">
+          <div className="panel-header">
+            <div>
+              <h2>{editingContractId ? '編輯工程承攬契約' : '建立工程承攬契約'}</h2>
+              <p className="hint-text">
+                來源估價單 {contractForm.quote_no}；建立時會鎖定當下估價單版本與品項快照。
+              </p>
+            </div>
+            <span className="panel-tag">範本請交由台灣律師／法務確認</span>
+          </div>
+          <form className="stack" onSubmit={saveContract}>
+            <div className="crm-form-grid">
+              <label>
+                契約日期
+                <input
+                  type="date"
+                  value={contractForm.contract_date}
+                  onChange={(event) => setContractForm((prev) => ({ ...prev, contract_date: event.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                契約狀態
+                <select
+                  value={contractForm.status}
+                  onChange={(event) => setContractForm((prev) => ({ ...prev, status: event.target.value }))}
+                >
+                  <option value="draft">草稿</option>
+                  <option value="ready">待簽署</option>
+                  <option value="signed">已簽署</option>
+                  <option value="cancelled">已取消</option>
+                </select>
+              </label>
+              <label>
+                工程名稱
+                <input
+                  value={contractForm.project_name}
+                  onChange={(event) => setContractForm((prev) => ({ ...prev, project_name: event.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                施工地點
+                <input
+                  value={contractForm.site_address}
+                  onChange={(event) => setContractForm((prev) => ({ ...prev, site_address: event.target.value }))}
+                />
+              </label>
+              <label>
+                預定開工日
+                <input
+                  type="date"
+                  value={contractForm.start_date}
+                  onChange={(event) => setContractForm((prev) => ({ ...prev, start_date: event.target.value }))}
+                />
+              </label>
+              <label>
+                預定完工日
+                <input
+                  type="date"
+                  value={contractForm.end_date}
+                  onChange={(event) => setContractForm((prev) => ({ ...prev, end_date: event.target.value }))}
+                />
+              </label>
+              <label>
+                甲方名稱
+                <input
+                  value={contractForm.party_a_name}
+                  onChange={(event) => setContractForm((prev) => ({ ...prev, party_a_name: event.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                甲方統編／識別資料
+                <input
+                  value={contractForm.party_a_tax_id}
+                  onChange={(event) => setContractForm((prev) => ({ ...prev, party_a_tax_id: event.target.value }))}
+                />
+              </label>
+              <label>
+                甲方電話
+                <input
+                  value={contractForm.party_a_phone}
+                  onChange={(event) => setContractForm((prev) => ({ ...prev, party_a_phone: event.target.value }))}
+                />
+              </label>
+              <label>
+                甲方地址
+                <input
+                  value={contractForm.party_a_address}
+                  onChange={(event) => setContractForm((prev) => ({ ...prev, party_a_address: event.target.value }))}
+                />
+              </label>
+              <label>
+                乙方名稱
+                <input
+                  value={contractForm.party_b_name}
+                  onChange={(event) => setContractForm((prev) => ({ ...prev, party_b_name: event.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                乙方統一編號
+                <input
+                  value={contractForm.party_b_tax_id}
+                  onChange={(event) => setContractForm((prev) => ({ ...prev, party_b_tax_id: event.target.value }))}
+                />
+              </label>
+              <label>
+                乙方電話
+                <input
+                  value={contractForm.party_b_phone}
+                  onChange={(event) => setContractForm((prev) => ({ ...prev, party_b_phone: event.target.value }))}
+                />
+              </label>
+              <label>
+                乙方地址
+                <input
+                  value={contractForm.party_b_address}
+                  onChange={(event) => setContractForm((prev) => ({ ...prev, party_b_address: event.target.value }))}
+                />
+              </label>
+              <label>
+                保固（月）
+                <input
+                  type="number"
+                  min="0"
+                  max="120"
+                  value={contractForm.warranty_months}
+                  onChange={(event) => setContractForm((prev) => ({ ...prev, warranty_months: event.target.value }))}
+                />
+              </label>
+            </div>
+            <label>
+              付款方式
+              <textarea
+                value={contractForm.payment_terms}
+                onChange={(event) => setContractForm((prev) => ({ ...prev, payment_terms: event.target.value }))}
+                rows="3"
+                required
+              />
+            </label>
+            <label>
+              特別約定
+              <textarea
+                value={contractForm.special_terms}
+                onChange={(event) => setContractForm((prev) => ({ ...prev, special_terms: event.target.value }))}
+                rows="4"
+                placeholder="例如進場時間、材料指定、停水停電配合方式；沒有可留白。"
+              />
+            </label>
+            {editingContractId ? (
+              <label>
+                本次修改摘要
+                <input
+                  value={contractForm.version_summary}
+                  onChange={(event) => setContractForm((prev) => ({ ...prev, version_summary: event.target.value }))}
+                  placeholder="例如：調整付款比例與完工日期"
+                />
+              </label>
+            ) : null}
+            <div className="crm-form-actions">
+              <button
+                type="button"
+                className="secondary-btn"
+                onClick={() => {
+                  setContractForm(null);
+                  setEditingContractId(null);
+                }}
+                disabled={savingContract}
+              >
+                取消
+              </button>
+              <button type="submit" disabled={savingContract}>
+                {savingContract ? '儲存中...' : editingContractId ? '儲存並建立新版本' : '建立契約'}
+              </button>
+            </div>
+          </form>
+        </section>
+      ) : null}
+
+      {versionsForContractId ? (
+        <section className="panel panel--table">
+          <div className="panel-header">
+            <h2>契約版本紀錄</h2>
+            <span className="panel-tag">契約 #{versionsForContractId}</span>
+          </div>
+          <div className="table-wrapper">
+            <table className="data-table">
+              <thead>
+                <tr><th>版本</th><th>動作</th><th>時間</th><th>人員</th><th>摘要</th></tr>
+              </thead>
+              <tbody>
+                {contractVersions.map((version) => (
+                  <tr key={version.id}>
+                    <td>v{version.version_no}</td>
+                    <td>{version.action || '-'}</td>
+                    <td>{version.created_at || '-'}</td>
+                    <td>{version.changed_by_username || '-'}</td>
+                    <td>{version.summary || '-'}</td>
+                  </tr>
+                ))}
+                {!contractVersionsLoading && contractVersions.length === 0 ? (
+                  <tr><td colSpan="5">尚無契約版本紀錄</td></tr>
+                ) : null}
+                {contractVersionsLoading ? <tr><td colSpan="5">載入中...</td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+
       <section className="panel panel--table">
         <div className="panel-header">
           <h2>客戶歷史施工紀錄</h2>
@@ -1225,6 +1568,8 @@ const CrmQuotesPage = () => {
                   {(() => {
                     const activeInvoice = getActiveInvoiceForQuote(quote);
                     const hasActiveInvoice = Boolean(activeInvoice?.id);
+                    const quoteContracts = contractsByQuoteId.get(Number(quote.id)) || [];
+                    const latestContract = quoteContracts[0] || null;
                     return (
                       <>
                   <td>
@@ -1261,6 +1606,20 @@ const CrmQuotesPage = () => {
                     >
                       {downloadingQuotePdfId === quote.id ? 'PDF產生中...' : 'PDF下載'}
                     </button>
+                    {latestContract ? (
+                      <button
+                        type="button"
+                        className="secondary-btn"
+                        onClick={() => openContractPdf(latestContract.id)}
+                        disabled={downloadingContractPdfId === latestContract.id}
+                      >
+                        {downloadingContractPdfId === latestContract.id ? '契約產生中...' : '契約 PDF'}
+                      </button>
+                    ) : (
+                      <button type="button" className="secondary-btn" onClick={() => openContractEditor(quote)}>
+                        建立契約
+                      </button>
+                    )}
                     <button type="button" className="secondary-btn" onClick={() => downloadXlsx(quote)}>
                       XLSX
                     </button>
@@ -1312,6 +1671,94 @@ const CrmQuotesPage = () => {
                   <td colSpan="4">載入中...</td>
                 </tr>
               ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel panel--table">
+        <div className="panel-header">
+          <div>
+            <h2>工程承攬契約</h2>
+            <p className="muted-text">契約由個案手動建立，並固定綁定建立當下的估價單版本。</p>
+          </div>
+          <span className="panel-tag">{contracts.length} 份</span>
+        </div>
+        <div className="table-wrapper">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>契約編號</th>
+                <th>來源估價單</th>
+                <th>甲方／工程</th>
+                <th>狀態</th>
+                <th>金額</th>
+                <th>版本</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {contracts.map((contract) => {
+                const sourceQuote = quotes.find((quote) => Number(quote.id) === Number(contract.quote_id));
+                const isSigned = String(contract.status || '').toLowerCase() === 'signed';
+                return (
+                  <tr key={contract.id}>
+                    <td>
+                      <div style={{ display: 'grid', gap: 4 }}>
+                        <strong>{contract.contract_no || '-'}</strong>
+                        <span style={{ fontSize: '0.86rem', color: '#7a8797' }}>
+                          {formatListDate(contract.contract_date || contract.created_at)}
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <div style={{ display: 'grid', gap: 4 }}>
+                        <span>{contract.quote_no || '-'}</span>
+                        <span style={{ fontSize: '0.86rem', color: '#7a8797' }}>
+                          綁定 v{contract.quote_version_no || 1}
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <div style={{ display: 'grid', gap: 4 }}>
+                        <strong>{contract.party_a_name || '-'}</strong>
+                        <span style={{ fontSize: '0.86rem', color: '#7a8797' }}>
+                          {contract.project_name || '-'}
+                        </span>
+                      </div>
+                    </td>
+                    <td>{crmStatusLabel('contract', contract.status)}</td>
+                    <td>{quoteDisplayAmount(contract)}</td>
+                    <td>v{contract.version_count || 1}</td>
+                    <td className="crm-actions-cell">
+                      <button
+                        type="button"
+                        className="secondary-btn"
+                        onClick={() => openContractPdf(contract.id)}
+                        disabled={downloadingContractPdfId === contract.id}
+                      >
+                        {downloadingContractPdfId === contract.id ? 'PDF產生中...' : 'PDF下載'}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-btn"
+                        onClick={() => openContractEditor(sourceQuote || contract, contract)}
+                        disabled={isSigned}
+                        title={isSigned ? '已簽署契約不可直接覆寫，請建立補充協議或新契約' : undefined}
+                      >
+                        {isSigned ? '已鎖定' : '編輯'}
+                      </button>
+                      <button type="button" className="secondary-btn" onClick={() => loadContractVersions(contract.id)}>
+                        版本
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {!loading && contracts.length === 0 ? (
+                <tr><td colSpan="7">尚無工程契約；請從報價單選擇個案建立。</td></tr>
+              ) : null}
+              {loading ? <tr><td colSpan="7">載入中...</td></tr> : null}
             </tbody>
           </table>
         </div>

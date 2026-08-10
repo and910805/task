@@ -36,6 +36,23 @@ const sortOptions = [
   { value: 'created_desc', label: '最新建立' },
 ];
 
+const taskScopeOptions = [
+  { value: 'recent_30', label: '近 30 天' },
+  { value: 'all', label: '全部任務' },
+  { value: 'overdue', label: '全部逾期' },
+  { value: 'completed', label: '已完成' },
+  { value: 'archived', label: '已封存' },
+];
+
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
+
+const getTaskReferenceTimestamp = (task) => {
+  const rawDate = task?.due_date || task?.expected_time || task?.created_at;
+  if (!rawDate) return Number.POSITIVE_INFINITY;
+  const parsed = new Date(rawDate).getTime();
+  return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+};
+
 const calendarWeekLabels = ['日', '一', '二', '三', '四', '五', '六'];
 
 const toDateOnlyKey = (value) => {
@@ -84,9 +101,11 @@ const TaskListPage = () => {
   const [availableTasks, setAvailableTasks] = useState([]);
   const [loadingAvailable, setLoadingAvailable] = useState(false);
   const [locationFilter, setLocationFilter] = useState('');
-  const [sortOption, setSortOption] = useState('due_soon');
+  const [sortOption, setSortOption] = useState('created_desc');
+  const [taskScope, setTaskScope] = useState('recent_30');
   const [assigningTaskId, setAssigningTaskId] = useState(null);
   const [deletingTaskId, setDeletingTaskId] = useState(null);
+  const [archivingTaskId, setArchivingTaskId] = useState(null);
   const [acceptingTaskId, setAcceptingTaskId] = useState(null);
   const hasNotificationPreference = user?.notification_type && user?.notification_type !== 'none';
   const [showOverdue, setShowOverdue] = useState(Boolean(hasNotificationPreference));
@@ -135,7 +154,9 @@ const TaskListPage = () => {
     }
     setError('');
     try {
-      const { data } = await api.get('tasks/');
+      const { data } = await api.get('tasks/', {
+        params: isManager ? { include_archived: 1 } : undefined,
+      });
       setTasks(data);
     } catch (err) {
       const message = getErrorMessage(err, '無法取得任務列表。');
@@ -334,7 +355,33 @@ const TaskListPage = () => {
     }
   };
 
-  const filteredTasks = useMemo(() => {
+  const handleArchiveTask = async (taskId) => {
+    setError('');
+    setArchivingTaskId(taskId);
+    try {
+      await api.post(`tasks/${taskId}/archive`);
+      await loadTasks({ showLoading: false });
+    } catch (err) {
+      setError(getErrorMessage(err, '封存任務失敗。'));
+    } finally {
+      setArchivingTaskId(null);
+    }
+  };
+
+  const handleRestoreTask = async (taskId) => {
+    setError('');
+    setArchivingTaskId(taskId);
+    try {
+      await api.post(`tasks/${taskId}/restore`);
+      await loadTasks({ showLoading: false });
+    } catch (err) {
+      setError(getErrorMessage(err, '還原任務失敗。'));
+    } finally {
+      setArchivingTaskId(null);
+    }
+  };
+
+  const filteredTaskResult = useMemo(() => {
     const locationQuery = locationFilter.trim().toLowerCase();
     let result = availableOnly ? availableTasks : tasks;
 
@@ -346,6 +393,28 @@ const TaskListPage = () => {
       result = result.filter((task) =>
         (task.location || '').toLowerCase().includes(locationQuery),
       );
+    }
+
+    const now = Date.now();
+    const recentCutoff = now - 30 * DAY_IN_MS;
+    const activeTasks = result.filter((task) => !task.archived_at);
+    let hiddenOldCount = 0;
+
+    if (taskScope === 'archived') {
+      result = result.filter((task) => Boolean(task.archived_at));
+    } else if (taskScope === 'overdue') {
+      result = activeTasks.filter(
+        (task) =>
+          task.status !== '已完成' &&
+          getTaskReferenceTimestamp(task) < now,
+      );
+    } else if (taskScope === 'completed') {
+      result = activeTasks.filter((task) => task.status === '已完成');
+    } else if (taskScope === 'recent_30') {
+      result = activeTasks.filter((task) => getTaskReferenceTimestamp(task) >= recentCutoff);
+      hiddenOldCount = activeTasks.length - result.length;
+    } else {
+      result = activeTasks;
     }
 
     const getDueTimestamp = (task) => {
@@ -368,15 +437,19 @@ const TaskListPage = () => {
       return getDueTimestamp(a) - getDueTimestamp(b);
     });
 
-    return sorted;
+    return { tasks: sorted, hiddenOldCount };
   }, [
     availableOnly,
     availableTasks,
     locationFilter,
     sortOption,
     statusFilter,
+    taskScope,
     tasks,
   ]);
+
+  const filteredTasks = filteredTaskResult.tasks;
+  const hiddenOldTaskCount = filteredTaskResult.hiddenOldCount;
 
   const tasksByCalendarDate = useMemo(() => {
     const map = new Map();
@@ -514,6 +587,18 @@ const TaskListPage = () => {
 
   const toolbarFilters = (
     <>
+      <label>
+        時間範圍
+        <select value={taskScope} onChange={(event) => setTaskScope(event.target.value)}>
+          {taskScopeOptions
+            .filter((option) => isManager || option.value !== 'archived')
+            .map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+        </select>
+      </label>
       <label>
         檢視模式
         <select
@@ -812,6 +897,39 @@ const TaskListPage = () => {
           <strong>TaskGo 現場版</strong>
           <button type="button" className="mobile-icon-button" aria-label="更多">...</button>
         </div>
+        <div className="mobile-task-filters">
+          <label>
+            顯示
+            <select value={taskScope} onChange={(event) => setTaskScope(event.target.value)}>
+              {taskScopeOptions
+                .filter((option) => isManager || option.value !== 'archived')
+                .map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label>
+            排序
+            <select value={sortOption} onChange={(event) => setSortOption(event.target.value)}>
+              {sortOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {taskScope === 'recent_30' && hiddenOldTaskCount > 0 ? (
+          <button
+            type="button"
+            className="mobile-hidden-task-note"
+            onClick={() => setTaskScope('all')}
+          >
+            另有 {hiddenOldTaskCount} 筆較舊任務已隱藏，點此查看全部
+          </button>
+        ) : null}
         <div className="mobile-metric-grid">
           <article className="mobile-metric mobile-metric--blue">
             <span>□</span>
@@ -974,7 +1092,14 @@ const TaskListPage = () => {
         </div>
       )}
       <section className="panel task-dispatch-panel">
-        <h2>任務列表</h2>
+        <div className="task-list-heading">
+          <h2>任務列表</h2>
+          {taskScope === 'recent_30' && hiddenOldTaskCount > 0 ? (
+            <button type="button" className="secondary-button" onClick={() => setTaskScope('all')}>
+              已隱藏 {hiddenOldTaskCount} 筆舊任務
+            </button>
+          ) : null}
+        </div>
         {loading || (availableOnly && loadingAvailable) ? (
           <p>載入中...</p>
         ) : filteredTasks.length === 0 ? (
@@ -992,10 +1117,10 @@ const TaskListPage = () => {
                 taskAssigneeIds.includes(option.value),
               );
               const isOverdue =
-                task.is_overdue ||
+                !task.archived_at && (task.is_overdue ||
                 (task.due_date &&
                   task.status !== '已完成' &&
-                  new Date(task.due_date).getTime() < Date.now());
+                  new Date(task.due_date).getTime() < Date.now()));
               const showOverdueIndicator = showOverdue && isOverdue;
               const canAccept =
                 isWorker && task.status === '尚未接單' && !task.assigned_to_id;
@@ -1008,6 +1133,7 @@ const TaskListPage = () => {
               const dueDateText = dueDateLabel
                 ? new Date(dueDateLabel).toLocaleString()
                 : '未設定';
+              const displayStatus = task.archived_at ? '已封存' : task.status;
               return (
                 <li
                   key={task.id}
@@ -1019,8 +1145,8 @@ const TaskListPage = () => {
                         <Link to={`/tasks/${task.id}`}>{task.title}</Link>
                       </h3>
                       <div className="task-card__status">
-                        <span className={statusBadgeClass[task.status] || 'status-badge'}>
-                          ● {task.status}
+                        <span className={statusBadgeClass[displayStatus] || 'status-badge'}>
+                          ● {displayStatus}
                         </span>
                         {showOverdueIndicator && (
                           <span className="status-badge status-overdue">⚠️ 逾期</span>
@@ -1032,19 +1158,38 @@ const TaskListPage = () => {
                       <span>截止日期：{dueDateText}</span>
                     </div>
                     <div className="task-card__cta">
-                      {isManager ? (
-                        <select
-                          value={task.status}
-                          onChange={(event) =>
-                            handleStatusChange(task.id, event.target.value)
-                          }
+                      {isManager && task.archived_at ? (
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => handleRestoreTask(task.id)}
+                          disabled={archivingTaskId === task.id}
                         >
-                          {statusOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
+                          {archivingTaskId === task.id ? '還原中…' : '還原任務'}
+                        </button>
+                      ) : isManager ? (
+                        <>
+                          <select
+                            value={task.status}
+                            onChange={(event) =>
+                              handleStatusChange(task.id, event.target.value)
+                            }
+                          >
+                            {statusOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => handleArchiveTask(task.id)}
+                            disabled={archivingTaskId === task.id}
+                          >
+                            {archivingTaskId === task.id ? '封存中…' : '封存'}
+                          </button>
+                        </>
                       ) : canAccept ? (
                         <button
                           type="button"
@@ -1074,7 +1219,11 @@ const TaskListPage = () => {
                     </p>
                     <p className="task-status-row">
                       任務進度：
-                      {isManager ? (
+                      {isManager && task.archived_at ? (
+                        <span className="task-status-control">
+                          <span className="status-badge">● 已封存</span>
+                        </span>
+                      ) : isManager ? (
                         <span className="task-status-control">
                           <span className={statusBadgeClass[task.status] || 'status-badge'}>
                             ● {task.status}
@@ -1155,6 +1304,24 @@ const TaskListPage = () => {
                             />
                           </div>
                           {isManager && (
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() =>
+                              task.archived_at
+                                ? handleRestoreTask(task.id)
+                                : handleArchiveTask(task.id)
+                            }
+                            disabled={archivingTaskId === task.id}
+                          >
+                            {archivingTaskId === task.id
+                              ? '處理中…'
+                              : task.archived_at
+                                ? '還原任務'
+                                : '封存任務'}
+                          </button>
+                          )}
+                          {user?.role === 'admin' && (
                           <button
                             type="button"
                             className="danger-button"

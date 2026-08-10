@@ -321,6 +321,7 @@ def create_app() -> Flask:
             db.create_all()
             _ensure_user_reminder_frequency_column()
             _ensure_task_location_url_column()
+            _ensure_task_archived_at_column()
             _ensure_website_booking_columns()
             _ensure_quote_recipient_name_column()
             _ensure_quote_site_address_column()
@@ -348,6 +349,7 @@ def create_app() -> Flask:
         db.create_all()
         _ensure_user_reminder_frequency_column()
         _ensure_task_location_url_column()
+        _ensure_task_archived_at_column()
         _ensure_website_booking_columns()
         _ensure_quote_recipient_name_column()
         _ensure_quote_site_address_column()
@@ -412,6 +414,19 @@ def _ensure_task_location_url_column() -> None:
     db.session.execute(
         text("ALTER TABLE task ADD COLUMN location_url VARCHAR(500)")
     )
+    db.session.commit()
+
+
+def _ensure_task_archived_at_column() -> None:
+    inspector = inspect(db.engine)
+    if "task" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("task")}
+    if "archived_at" in columns:
+        return
+    if db.engine.dialect.name not in {"sqlite", "postgresql"}:
+        return
+    db.session.execute(text("ALTER TABLE task ADD COLUMN archived_at TIMESTAMP"))
     db.session.commit()
 
 

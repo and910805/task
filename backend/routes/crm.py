@@ -26,6 +26,8 @@ from decorators import role_required
 from extensions import db
 from models import (
     Contact,
+    Contract,
+    ContractVersion,
     Customer,
     AuditLog,
     Invoice,
@@ -35,6 +37,7 @@ from models import (
     QuoteItem,
     QuoteVersion,
     ServiceCatalogItem,
+    SiteSetting,
     Task,
     WebsiteBooking,
 )
@@ -51,7 +54,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as pdf_canvas
-from reportlab.platypus import Image, KeepInFrame, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import Image, KeepInFrame, PageBreak, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 crm_bp = Blueprint("crm", __name__)
 
@@ -59,6 +62,7 @@ READ_ROLES = ("site_supervisor", "hq_staff", "admin")
 WRITE_ROLES = ("site_supervisor", "hq_staff", "admin")
 VALID_QUOTE_STATUS = {"draft", "sent", "accepted", "rejected", "expired"}
 VALID_INVOICE_STATUS = {"draft", "issued", "partially_paid", "paid", "cancelled"}
+VALID_CONTRACT_STATUS = {"draft", "ready", "signed", "cancelled"}
 VALID_WEBSITE_BOOKING_TYPES = {"booking", "quote", "contact"}
 VALID_WEBSITE_BOOKING_STATUS = {"pending", "contacted", "quoted", "converted", "closed"}
 DEFAULT_QUOTE_VALID_DAYS = 10
@@ -93,6 +97,8 @@ PDF_STAMP_WIDTH_MM = 24.0 * 1.35 * 1.30
 PDF_STAMP_Y_OFFSET_ENV = "PDF_STAMP_Y_OFFSET_MM"
 PDF_STAMP_DEFAULT_Y_OFFSET_MM = 10.0
 PDF_COMPANY_TAX_ID_TEXT = "\u7acb\u7fd4\u6c34\u96fb\u7d71\u7de8 14511159"
+DEFAULT_CONTRACT_PAYMENT_TERMS = "簽約訂金 30%；工程進度款 40%；驗收完成後支付尾款 30%。"
+DEFAULT_CONTRACT_WARRANTY_MONTHS = 12
 CRM_DOWNLOAD_CACHE_MAX_ITEMS = 32
 CRM_DOWNLOAD_CACHE: OrderedDict[str, tuple[bytes, str, str]] = OrderedDict()
 QUOTE_PDF_STAMP_RESERVED_ROWS = 4
@@ -1038,6 +1044,148 @@ def _append_quote_version_snapshot(quote: Quote, *, action: str, summary: str | 
             changed_by_id=get_current_user_id(),
         )
     )
+
+
+def _next_contract_no(reference_date: date | None = None) -> str:
+    contract_date = reference_date or date.today()
+    prefix = f"CT-{contract_date.strftime('%Y%m%d')}-"
+    rows = Contract.query.with_entities(Contract.contract_no).filter(
+        Contract.contract_no.like(f"{prefix}%")
+    ).all()
+    max_seq = 0
+    for (contract_no,) in rows:
+        suffix = contract_no[len(prefix):] if isinstance(contract_no, str) and contract_no.startswith(prefix) else ""
+        if suffix.isdigit():
+            max_seq = max(max_seq, int(suffix))
+    return f"{prefix}{max_seq + 1:03d}"
+
+
+def _latest_quote_version_no(quote: Quote) -> int:
+    latest = (
+        QuoteVersion.query.with_entities(QuoteVersion.version_no)
+        .filter(QuoteVersion.quote_id == quote.id)
+        .order_by(QuoteVersion.version_no.desc())
+        .first()
+    )
+    if latest:
+        return int(latest[0])
+    _append_quote_version_snapshot(
+        quote,
+        action="contract_snapshot",
+        summary="Snapshot created before contract",
+    )
+    db.session.flush()
+    return _next_quote_version_no(quote.id) - 1
+
+
+def _contract_quote_snapshot(quote: Quote, customer: Customer | None, contact: Contact | None) -> str:
+    return json.dumps(
+        {
+            "quote": quote.to_dict(),
+            "customer": customer.to_dict() if customer else None,
+            "contact": contact.to_dict() if contact else None,
+        },
+        ensure_ascii=False,
+    )
+
+
+def _next_contract_version_no(contract_id: int) -> int:
+    latest = (
+        ContractVersion.query.with_entities(ContractVersion.version_no)
+        .filter(ContractVersion.contract_id == contract_id)
+        .order_by(ContractVersion.version_no.desc())
+        .first()
+    )
+    return int(latest[0]) + 1 if latest else 1
+
+
+def _contract_version_snapshot(contract: Contract) -> str:
+    payload = contract.to_dict()
+    try:
+        payload["quote_snapshot"] = json.loads(contract.quote_snapshot_json)
+    except (TypeError, json.JSONDecodeError):
+        payload["quote_snapshot"] = None
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _append_contract_version(
+    contract: Contract,
+    *,
+    action: str,
+    summary: str | None = None,
+) -> None:
+    db.session.add(
+        ContractVersion(
+            contract_id=contract.id,
+            version_no=_next_contract_version_no(contract.id),
+            action=(action or "update").strip().lower() or "update",
+            summary=(summary or "").strip()[:255] or None,
+            snapshot_json=_contract_version_snapshot(contract),
+            changed_by_id=get_current_user_id(),
+        )
+    )
+
+
+def _contract_text(value, *, maximum: int, required: bool = False) -> tuple[str | None, tuple | None]:
+    text_value = str(value or "").strip()
+    if required and not text_value:
+        return None, (jsonify({"msg": "Required contract field is missing"}), 400)
+    if len(text_value) > maximum:
+        return None, (jsonify({"msg": f"Contract field must be at most {maximum} characters"}), 400)
+    return text_value or None, None
+
+
+def _apply_contract_payload(contract: Contract, data: dict) -> tuple | None:
+    text_fields = {
+        "project_name": (255, True),
+        "site_address": (500, False),
+        "party_a_name": (255, True),
+        "party_a_tax_id": (64, False),
+        "party_a_phone": (64, False),
+        "party_a_address": (1000, False),
+        "party_b_name": (255, True),
+        "party_b_tax_id": (64, False),
+        "party_b_phone": (64, False),
+        "party_b_address": (1000, False),
+        "payment_terms": (2000, True),
+        "special_terms": (4000, False),
+    }
+    for field, (maximum, required) in text_fields.items():
+        if field not in data:
+            continue
+        value, error = _contract_text(data.get(field), maximum=maximum, required=required)
+        if error:
+            return error
+        setattr(contract, field, value)
+
+    for field in ("contract_date", "start_date", "end_date"):
+        if field not in data:
+            continue
+        parsed, error = _parse_date(data.get(field), field)
+        if error:
+            return error
+        if field == "contract_date" and parsed is None:
+            return jsonify({"msg": "contract_date is required"}), 400
+        setattr(contract, field, parsed)
+
+    if "status" in data:
+        status = str(data.get("status") or "").strip().lower()
+        if status not in VALID_CONTRACT_STATUS:
+            return jsonify({"msg": "Invalid contract status"}), 400
+        contract.status = status
+
+    if "warranty_months" in data:
+        try:
+            warranty_months = int(data.get("warranty_months"))
+        except (TypeError, ValueError):
+            return jsonify({"msg": "warranty_months must be an integer"}), 400
+        if warranty_months < 0 or warranty_months > 120:
+            return jsonify({"msg": "warranty_months must be between 0 and 120"}), 400
+        contract.warranty_months = warranty_months
+
+    if contract.start_date and contract.end_date and contract.end_date < contract.start_date:
+        return jsonify({"msg": "end_date cannot be earlier than start_date"}), 400
+    return None
 
 
 def _invoice_module_disabled():
@@ -3180,6 +3328,19 @@ def delete_quote(quote_id: int):
             400,
         )
 
+    related_contract = Contract.query.filter(Contract.quote_id == quote.id).order_by(Contract.id.desc()).first()
+    if related_contract is not None:
+        return (
+            jsonify(
+                {
+                    "msg": "此報價單已建立工程契約，為保留契約版本與稽核紀錄，無法刪除",
+                    "contract_id": related_contract.id,
+                    "contract_no": related_contract.contract_no,
+                }
+            ),
+            409,
+        )
+
     cancelled_invoices = Invoice.query.filter(
         Invoice.quote_id == quote.id,
         Invoice.status == "cancelled",
@@ -3229,6 +3390,173 @@ def quote_versions(quote_id: int):
             "versions": [row.to_dict() for row in rows],
         }
     )
+
+
+@crm_bp.get("/contracts")
+@role_required(*READ_ROLES)
+def list_contracts():
+    query = Contract.query.options(
+        selectinload(Contract.quote),
+        selectinload(Contract.created_by),
+        selectinload(Contract.versions),
+    ).order_by(Contract.updated_at.desc(), Contract.id.desc())
+    quote_id = request.args.get("quote_id", type=int)
+    if quote_id:
+        query = query.filter(Contract.quote_id == quote_id)
+    return jsonify([row.to_dict() for row in query.limit(200).all()])
+
+
+@crm_bp.post("/quotes/<int:quote_id>/contracts")
+@role_required(*WRITE_ROLES)
+def create_contract(quote_id: int):
+    quote = Quote.query.options(
+        selectinload(Quote.items),
+        selectinload(Quote.customer),
+        selectinload(Quote.contact),
+    ).get_or_404(quote_id)
+    data = request.get_json() or {}
+    customer = quote.customer
+    contact = quote.contact
+    contract_date, date_error = _parse_date(data.get("contract_date") or date.today(), "contract_date")
+    if date_error:
+        return date_error
+
+    party_a_name = (
+        str(data.get("party_a_name") or "").strip()
+        or (quote.recipient_name or "").strip()
+        or (customer.name if customer else "")
+    )
+    project_name = str(data.get("project_name") or "").strip() or f"{party_a_name or quote.quote_no} 水電工程"
+    branding_name = SiteSetting.get_value("branding_name", "立翔水電行") or "立翔水電行"
+    quote_version_no = _latest_quote_version_no(quote)
+    contract = Contract(
+        contract_no=_next_contract_no(contract_date),
+        quote_id=quote.id,
+        quote_version_no=quote_version_no,
+        status="draft",
+        contract_date=contract_date,
+        project_name=project_name,
+        site_address=(quote.site_address or (customer.address if customer else None)),
+        party_a_name=party_a_name,
+        party_a_tax_id=customer.tax_id if customer else None,
+        party_a_phone=(contact.phone if contact and contact.phone else (customer.phone if customer else None)),
+        party_a_address=customer.address if customer else None,
+        party_b_name=branding_name,
+        party_b_tax_id="14511159",
+        party_b_phone=None,
+        party_b_address=None,
+        start_date=None,
+        end_date=None,
+        currency=(quote.currency or "TWD").upper(),
+        total_amount=float(quote.total_amount or 0.0),
+        payment_terms=DEFAULT_CONTRACT_PAYMENT_TERMS,
+        warranty_months=DEFAULT_CONTRACT_WARRANTY_MONTHS,
+        special_terms=None,
+        quote_snapshot_json=_contract_quote_snapshot(quote, customer, contact),
+        created_by_id=get_current_user_id(),
+    )
+    payload_error = _apply_contract_payload(contract, data)
+    if payload_error:
+        return payload_error
+    if not contract.party_a_name:
+        return jsonify({"msg": "party_a_name is required"}), 400
+
+    db.session.add(contract)
+    try:
+        db.session.flush()
+        _append_contract_version(contract, action="create", summary="Contract created from quote snapshot")
+        _append_audit_log(
+            action="contract_create",
+            entity_type="contract",
+            entity_id=contract.id,
+            entity_label=contract.contract_no,
+            details={"quote_id": quote.id, "quote_no": quote.quote_no, "quote_version_no": quote_version_no},
+        )
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"msg": "契約編號建立衝突，請重新操作"}), 409
+    return jsonify(contract.to_dict()), 201
+
+
+@crm_bp.put("/contracts/<int:contract_id>")
+@role_required(*WRITE_ROLES)
+def update_contract(contract_id: int):
+    contract = Contract.query.options(
+        selectinload(Contract.quote),
+        selectinload(Contract.versions),
+    ).get_or_404(contract_id)
+    if contract.status == "signed":
+        return jsonify({"msg": "已簽署契約不可直接修改，請建立補充協議或新契約"}), 409
+    before = contract.to_dict()
+    data = request.get_json() or {}
+    payload_error = _apply_contract_payload(contract, data)
+    if payload_error:
+        return payload_error
+    contract.updated_at = datetime.utcnow()
+    db.session.flush()
+    _append_contract_version(
+        contract,
+        action="update",
+        summary=str(data.get("version_summary") or "Contract updated")[:255],
+    )
+    _append_audit_log(
+        action="contract_update",
+        entity_type="contract",
+        entity_id=contract.id,
+        entity_label=contract.contract_no,
+        details=_audit_field_changes(before, contract.to_dict()),
+    )
+    db.session.commit()
+    return jsonify(contract.to_dict())
+
+
+@crm_bp.get("/contracts/<int:contract_id>/versions")
+@role_required(*READ_ROLES)
+def contract_versions(contract_id: int):
+    contract = Contract.query.get_or_404(contract_id)
+    rows = (
+        ContractVersion.query.options(selectinload(ContractVersion.changed_by))
+        .filter(ContractVersion.contract_id == contract.id)
+        .order_by(ContractVersion.version_no.desc(), ContractVersion.id.desc())
+        .all()
+    )
+    return jsonify(
+        {
+            "contract_id": contract.id,
+            "contract_no": contract.contract_no,
+            "quote_id": contract.quote_id,
+            "quote_version_no": contract.quote_version_no,
+            "versions": [row.to_dict() for row in rows],
+        }
+    )
+
+
+@crm_bp.get("/contracts/<int:contract_id>/pdf")
+@role_required(*READ_ROLES)
+def contract_pdf(contract_id: int):
+    contract = Contract.query.options(selectinload(Contract.quote)).get_or_404(contract_id)
+    try:
+        buffer = _build_contract_pdf(contract)
+    except RuntimeError as exc:
+        return jsonify(
+            {
+                "msg": "契約 PDF 產生失敗",
+                "detail": str(exc),
+                "font_health": _pdf_font_health_payload(),
+            }
+        ), 500
+    filename = f"{_safe_download_filename_part(contract.contract_no, fallback='contract')}_工程承攬契約.pdf"
+    response = send_file(
+        buffer,
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=filename,
+    )
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @crm_bp.post("/quotes/<int:quote_id>/convert-to-invoice")
@@ -3671,6 +3999,187 @@ def quote_xlsx(quote_id: int):
         as_attachment=True,
         download_name=filename,
     )
+
+
+def _build_contract_pdf(contract: Contract) -> BytesIO:
+    _require_embedded_pdf_font()
+    try:
+        snapshot = json.loads(contract.quote_snapshot_json or "{}")
+    except json.JSONDecodeError:
+        snapshot = {}
+    quote_payload = snapshot.get("quote") if isinstance(snapshot, dict) else {}
+    quote_payload = quote_payload if isinstance(quote_payload, dict) else {}
+    quote_items = quote_payload.get("items") if isinstance(quote_payload.get("items"), list) else []
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=16 * mm,
+        rightMargin=16 * mm,
+        topMargin=14 * mm,
+        bottomMargin=14 * mm,
+        title=f"工程承攬契約-{contract.contract_no}",
+    )
+    styles = getSampleStyleSheet()
+    title_style = styles["Heading1"].clone("ContractTitle")
+    title_style.fontName = PDF_FONT_NAME
+    title_style.fontSize = 20
+    title_style.leading = 25
+    title_style.alignment = 1
+    body_style = styles["BodyText"].clone("ContractBody")
+    body_style.fontName = PDF_FONT_NAME
+    body_style.fontSize = 10.5
+    body_style.leading = 16
+    body_style.wordWrap = "CJK"
+    clause_title_style = body_style.clone("ContractClauseTitle")
+    clause_title_style.fontSize = 11.5
+    clause_title_style.leading = 17
+    clause_title_style.spaceBefore = 4
+    clause_title_style.textColor = colors.HexColor("#0f172a")
+    warning_style = body_style.clone("ContractWarning")
+    warning_style.fontSize = 8.5
+    warning_style.leading = 12
+    warning_style.textColor = colors.HexColor("#9a3412")
+    small_style = body_style.clone("ContractSmall")
+    small_style.fontSize = 8.5
+    small_style.leading = 12
+
+    def paragraph(value, style=body_style):
+        return Paragraph(escape(str(value or "")).replace("\n", "<br />"), style)
+
+    party_rows = [
+        [paragraph("甲方（定作人）"), paragraph(contract.party_a_name)],
+        [paragraph("甲方統編／身分識別"), paragraph(contract.party_a_tax_id or "________________")],
+        [paragraph("甲方電話"), paragraph(contract.party_a_phone or "________________")],
+        [paragraph("甲方地址"), paragraph(contract.party_a_address or "________________")],
+        [paragraph("乙方（承攬人）"), paragraph(contract.party_b_name)],
+        [paragraph("乙方統一編號"), paragraph(contract.party_b_tax_id or "________________")],
+        [paragraph("乙方電話"), paragraph(contract.party_b_phone or "________________")],
+        [paragraph("乙方地址"), paragraph(contract.party_b_address or "________________")],
+    ]
+    party_table = Table(party_rows, colWidths=[43 * mm, 119 * mm])
+    party_table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, -1), PDF_FONT_NAME),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f1f5f9")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]
+        )
+    )
+
+    contract_date_text = contract.contract_date.isoformat() if contract.contract_date else "________________"
+    start_text = contract.start_date.isoformat() if contract.start_date else "雙方另行書面確認"
+    end_text = contract.end_date.isoformat() if contract.end_date else "雙方另行書面確認"
+    amount_text = f"NT$ {_format_amount_number(float(contract.total_amount or 0))}"
+    special_terms = contract.special_terms or "無；如有追加減工程，應另以書面確認。"
+    clauses = [
+        ("第一條　契約文件與工程範圍", f"本契約、附件一估價單（{quote_payload.get('quote_no') or '-'}，版本 {contract.quote_version_no}）及雙方書面確認之追加減工程單，均為契約之一部分。乙方應依附件所列品項、規格、數量及施工地點完成工作。"),
+        ("第二條　契約價金", f"本契約總價為 {amount_text}（幣別：{contract.currency}）。材料由乙方供給者，其價額已包含於附件所列報酬；未列項目須另行報價並經雙方書面同意。"),
+        ("第三條　付款方式", contract.payment_terms),
+        ("第四條　施工期間", f"預定開工日：{start_text}；預定完工日：{end_text}。因甲方需求變更、現場條件、天候、不可抗力或非可歸責於乙方之事由影響工期時，雙方應書面調整工期。"),
+        ("第五條　追加減工程", "任何品項、數量、材料、施工方式或價金之變更，應先以追加減工程單、電子訊息或其他可保存之書面方式確認；未經確認者，任一方不得逕自認定已包含於原契約。"),
+        ("第六條　驗收與瑕疵處理", "工程完成後由雙方辦理驗收。甲方發現瑕疵時，應具體通知乙方並給予合理修補期間；乙方應於合理期間內處理。雙方對瑕疵或改善方式有爭議時，應先保存照片、紀錄及相關證據。"),
+        ("第七條　保固", f"自驗收完成日起保固 {int(contract.warranty_months or 0)} 個月。保固不包含正常耗損、甲方或第三人不當使用、未經乙方同意之改裝、天然災害或其他不可歸責於乙方之原因。個別設備之原廠保固依原廠條件辦理。"),
+        ("第八條　雙方配合事項", "甲方應提供合法、安全且可施工之場所、必要之進場權限及水電使用條件；乙方應依專業方式施工並遵守必要之安全規範。涉及申請、停電、停水或第三方配合者，雙方應事先協調。"),
+        ("第九條　停工、終止與結算", "任一方因重大事由需停工或終止契約時，應以可保存之方式通知他方。雙方應依已完成工作、已進場材料、必要費用及可歸責事由辦理結算；有爭議時先行協商。"),
+        ("第十條　爭議處理", "本契約依中華民國法律處理。發生爭議時，雙方應先本於誠信協商；協商不成時，依法律所定之管轄法院或雙方另行合法約定之程序處理。"),
+        ("第十一條　特別約定", special_terms),
+        ("第十二條　契約份數", "本契約及附件由雙方各執一份為憑；電子檔與經雙方確認之紙本具有相同內容時，均應妥善保存。"),
+    ]
+
+    story = [
+        Paragraph("工程承攬契約書", title_style),
+        Spacer(1, 2 * mm),
+        paragraph(f"契約編號：{contract.contract_no}　　契約日期：{contract_date_text}", small_style),
+        paragraph("本文件為系統提供之契約範本，正式使用前應由具台灣法律資格之律師或法務依個案審閱。", warning_style),
+        Spacer(1, 3 * mm),
+        party_table,
+        Spacer(1, 4 * mm),
+        paragraph(f"工程名稱：{contract.project_name}"),
+        paragraph(f"施工地點：{contract.site_address or '________________'}"),
+        Spacer(1, 2 * mm),
+    ]
+    for heading, content in clauses:
+        story.append(Paragraph(escape(heading), clause_title_style))
+        story.append(paragraph(content))
+
+    signature_table = Table(
+        [
+            [paragraph("甲方簽章"), paragraph("乙方簽章")],
+            [paragraph("姓名／名稱：________________________"), paragraph(f"名稱：{contract.party_b_name}")],
+            [paragraph("代表人：____________________________"), paragraph("代表人：____________________________")],
+            [paragraph("日期：______________________________"), paragraph("日期：______________________________")],
+            [Spacer(1, 22 * mm), Spacer(1, 22 * mm)],
+        ],
+        colWidths=[81 * mm, 81 * mm],
+    )
+    signature_table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, -1), PDF_FONT_NAME),
+                ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#64748b")),
+                ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]
+        )
+    )
+    story.extend([Spacer(1, 5 * mm), signature_table, PageBreak()])
+    story.extend(
+        [
+            Paragraph("附件一　工程估價明細", title_style),
+            paragraph(f"來源估價單：{quote_payload.get('quote_no') or '-'}　　綁定版本：{contract.quote_version_no}", small_style),
+            Spacer(1, 3 * mm),
+        ]
+    )
+    item_rows = [[paragraph("項次", small_style), paragraph("品項／規格", small_style), paragraph("單位", small_style), paragraph("數量", small_style), paragraph("單價", small_style), paragraph("金額", small_style)]]
+    for index, item in enumerate(quote_items, start=1):
+        if not isinstance(item, dict):
+            continue
+        description = str(item.get("description") or "")
+        note = str(item.get("note") or "").strip()
+        if note:
+            description = f"{description}\n{note}"
+        item_rows.append(
+            [
+                paragraph(index, small_style),
+                paragraph(description, small_style),
+                paragraph(item.get("unit") or "", small_style),
+                paragraph(_format_amount_number(float(item.get("quantity") or 0)), small_style),
+                paragraph(_format_amount_number(float(item.get("unit_price") or 0)), small_style),
+                paragraph(_format_amount_number(float(item.get("amount") or 0)), small_style),
+            ]
+        )
+    item_rows.append(["", paragraph("契約總價", small_style), "", "", "", paragraph(_format_amount_number(float(contract.total_amount or 0)), small_style)])
+    item_table = Table(item_rows, colWidths=[12 * mm, 74 * mm, 15 * mm, 18 * mm, 22 * mm, 24 * mm], repeatRows=1)
+    item_table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, -1), PDF_FONT_NAME),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#94a3b8")),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
+                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f8fafc")),
+                ("SPAN", (1, -1), (4, -1)),
+                ("ALIGN", (0, 0), (0, -1), "CENTER"),
+                ("ALIGN", (2, 1), (-1, -1), "RIGHT"),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]
+        )
+    )
+    story.append(item_table)
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
 
 
 @crm_bp.get("/quotes/<int:quote_id>/pdf")

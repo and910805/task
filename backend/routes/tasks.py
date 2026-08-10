@@ -386,6 +386,7 @@ def _find_schedule_conflicts(
             selectinload(Task.assignee),
         )
         .outerjoin(TaskAssignee, TaskAssignee.task_id == Task.id)
+        .filter(Task.archived_at.is_(None))
         .filter(Task.status != "已完成")
         .filter(
             or_(Task.assigned_to_id.in_(assignee_set), TaskAssignee.user_id.in_(assignee_set))
@@ -474,7 +475,7 @@ def _append_assignee_update(task: Task, actor_id: int | None, summary: dict):
 def _build_worker_load_summary(tasks: list[Task]) -> dict[int, dict[str, float]]:
     summary: dict[int, dict[str, float]] = {}
     for task in tasks:
-        if task.status == "已完成":
+        if task.archived_at or task.status == "已完成":
             continue
         assignee_ids = _task_assigned_user_ids(task)
         for assignee_id in assignee_ids:
@@ -556,8 +557,16 @@ def list_tasks():
         "true",
         "yes",
     }
+    include_archived = (
+        _is_manager_role(role)
+        and str(request.args.get("include_archived") or "").strip().lower()
+        in {"1", "true", "yes"}
+    )
+    if not include_archived:
+        query = query.filter(Task.archived_at.is_(None))
     if available_only:
         query = query.filter(
+            Task.archived_at.is_(None),
             Task.status == "尚未接單",
             Task.assigned_to_id.is_(None),
             TaskAssignee.user_id.is_(None),
@@ -728,6 +737,7 @@ def get_task(task_id: int):
                 selectinload(Task.assignee),
             )
             .outerjoin(TaskAssignee, TaskAssignee.task_id == Task.id)
+            .filter(Task.archived_at.is_(None))
             .filter(Task.status != "已完成")
             .filter(
                 or_(
@@ -808,6 +818,7 @@ def accept_task(task_id: int):
     updated = (
         Task.query.filter(
             Task.id == task_id,
+            Task.archived_at.is_(None),
             Task.status == "尚未接單",
             Task.assigned_to_id.is_(None),
         )
@@ -1022,8 +1033,44 @@ def update_task_patch(task_id: int):
     return jsonify(task.to_dict())
 
 
+@tasks_bp.post("/<int:task_id>/archive")
+@role_required("admin", "site_supervisor", "hq_staff")
+def archive_task(task_id: int):
+    actor_id = get_current_user_id()
+    role = (get_jwt() or {}).get("role")
+    task = Task.query.get_or_404(task_id)
+    permission_error = _ensure_task_permission(
+        task, role, actor_id, message="You cannot archive this task"
+    )
+    if permission_error:
+        return permission_error
+    if task.archived_at is None:
+        task.archived_at = datetime.utcnow()
+        task.updated_at = datetime.utcnow()
+        db.session.commit()
+    return jsonify(task.to_dict())
+
+
+@tasks_bp.post("/<int:task_id>/restore")
+@role_required("admin", "site_supervisor", "hq_staff")
+def restore_task(task_id: int):
+    actor_id = get_current_user_id()
+    role = (get_jwt() or {}).get("role")
+    task = Task.query.get_or_404(task_id)
+    permission_error = _ensure_task_permission(
+        task, role, actor_id, message="You cannot restore this task"
+    )
+    if permission_error:
+        return permission_error
+    if task.archived_at is not None:
+        task.archived_at = None
+        task.updated_at = datetime.utcnow()
+        db.session.commit()
+    return jsonify(task.to_dict())
+
+
 @tasks_bp.delete("/<int:task_id>")
-@role_required("site_supervisor", "hq_staff")
+@role_required("admin")
 def delete_task(task_id: int):
     actor_id = get_current_user_id()
     role = (get_jwt() or {}).get("role")

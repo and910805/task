@@ -45,7 +45,7 @@ def run_due_task_reminders(now: datetime | None = None) -> int:
             joinedload(Task.assignee),
             joinedload(Task.assignees).joinedload(TaskAssignee.user),
         )
-        .filter(Task.status != "已完成")
+        .filter(Task.archived_at.is_(None), Task.status != "已完成")
         .filter(or_(Task.due_date.isnot(None), Task.expected_time.isnot(None)))
         .all()
     )

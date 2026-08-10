@@ -127,6 +127,7 @@ class Task(db.Model):
     location_url = db.Column(db.String(500))
     expected_time = db.Column(db.DateTime, nullable=False)
     completed_at = db.Column(db.DateTime)
+    archived_at = db.Column(db.DateTime, nullable=True, index=True)
     assigned_to_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
     assigned_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
     due_date = db.Column(db.DateTime)
@@ -175,6 +176,8 @@ class Task(db.Model):
         )
 
     def is_overdue(self, now: datetime | None = None) -> bool:
+        if self.archived_at:
+            return False
         if not self.due_date:
             return False
         if self.status == "已完成":
@@ -215,6 +218,7 @@ class Task(db.Model):
             "location_url": self.location_url,
             "expected_time": self.expected_time.isoformat() if self.expected_time else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "archived_at": self.archived_at.isoformat() if self.archived_at else None,
             "assigned_to": self.assignee.username if self.assignee else None,
             "assigned_to_id": self.assigned_to_id,
             "assigned_by": self.assigner.username if self.assigner else None,
@@ -731,6 +735,7 @@ class Quote(db.Model):
         order_by="QuoteVersion.version_no.desc()",
     )
     invoices = db.relationship("Invoice", back_populates="quote")
+    contracts = db.relationship("Contract", back_populates="quote")
 
     def to_dict(self) -> dict:
         active_invoice = next(
@@ -830,6 +835,113 @@ class QuoteVersion(db.Model):
         return {
             "id": self.id,
             "quote_id": self.quote_id,
+            "version_no": self.version_no,
+            "action": self.action,
+            "summary": self.summary,
+            "snapshot_json": self.snapshot_json,
+            "changed_by_id": self.changed_by_id,
+            "changed_by_username": self.changed_by.username if self.changed_by else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class Contract(db.Model):
+    __tablename__ = "contract"
+
+    id = db.Column(db.Integer, primary_key=True)
+    contract_no = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    quote_id = db.Column(db.Integer, db.ForeignKey("quote.id", ondelete="RESTRICT"), nullable=False, index=True)
+    quote_version_no = db.Column(db.Integer, nullable=False)
+    status = db.Column(db.String(32), nullable=False, default="draft")
+    contract_date = db.Column(db.Date, nullable=False)
+    project_name = db.Column(db.String(255), nullable=False)
+    site_address = db.Column(db.String(500))
+    party_a_name = db.Column(db.String(255), nullable=False)
+    party_a_tax_id = db.Column(db.String(64))
+    party_a_phone = db.Column(db.String(64))
+    party_a_address = db.Column(db.Text)
+    party_b_name = db.Column(db.String(255), nullable=False)
+    party_b_tax_id = db.Column(db.String(64))
+    party_b_phone = db.Column(db.String(64))
+    party_b_address = db.Column(db.Text)
+    start_date = db.Column(db.Date)
+    end_date = db.Column(db.Date)
+    currency = db.Column(db.String(8), nullable=False, default="TWD")
+    total_amount = db.Column(db.Float, nullable=False, default=0.0)
+    payment_terms = db.Column(db.Text, nullable=False)
+    warranty_months = db.Column(db.Integer, nullable=False, default=12)
+    special_terms = db.Column(db.Text)
+    quote_snapshot_json = db.Column(db.Text, nullable=False)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    quote = db.relationship("Quote", back_populates="contracts")
+    created_by = db.relationship("User", foreign_keys=[created_by_id])
+    versions = db.relationship(
+        "ContractVersion",
+        back_populates="contract",
+        cascade="all, delete-orphan",
+        order_by="ContractVersion.version_no.desc()",
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "contract_no": self.contract_no,
+            "quote_id": self.quote_id,
+            "quote_no": self.quote.quote_no if self.quote else None,
+            "quote_version_no": self.quote_version_no,
+            "status": self.status,
+            "contract_date": self.contract_date.isoformat() if self.contract_date else None,
+            "project_name": self.project_name,
+            "site_address": self.site_address,
+            "party_a_name": self.party_a_name,
+            "party_a_tax_id": self.party_a_tax_id,
+            "party_a_phone": self.party_a_phone,
+            "party_a_address": self.party_a_address,
+            "party_b_name": self.party_b_name,
+            "party_b_tax_id": self.party_b_tax_id,
+            "party_b_phone": self.party_b_phone,
+            "party_b_address": self.party_b_address,
+            "start_date": self.start_date.isoformat() if self.start_date else None,
+            "end_date": self.end_date.isoformat() if self.end_date else None,
+            "currency": self.currency,
+            "total_amount": round(self.total_amount or 0.0, 2),
+            "payment_terms": self.payment_terms,
+            "warranty_months": self.warranty_months,
+            "special_terms": self.special_terms,
+            "created_by_id": self.created_by_id,
+            "created_by_username": self.created_by.username if self.created_by else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "version_count": len(self.versions or []),
+        }
+
+
+class ContractVersion(db.Model):
+    __tablename__ = "contract_version"
+
+    id = db.Column(db.Integer, primary_key=True)
+    contract_id = db.Column(db.Integer, db.ForeignKey("contract.id", ondelete="CASCADE"), nullable=False, index=True)
+    version_no = db.Column(db.Integer, nullable=False)
+    action = db.Column(db.String(32), nullable=False, default="update")
+    summary = db.Column(db.String(255))
+    snapshot_json = db.Column(db.Text, nullable=False)
+    changed_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    contract = db.relationship("Contract", back_populates="versions")
+    changed_by = db.relationship("User", foreign_keys=[changed_by_id])
+
+    __table_args__ = (
+        UniqueConstraint("contract_id", "version_no", name="uq_contract_version_contract_version_no"),
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "contract_id": self.contract_id,
             "version_no": self.version_no,
             "action": self.action,
             "summary": self.summary,

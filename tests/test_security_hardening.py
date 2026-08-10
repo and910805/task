@@ -388,7 +388,9 @@ class TaskOwnershipSecurityTest(unittest.TestCase):
             owner.set_password("irrelevant-test-password")
             intruder = User(username="other-supervisor", role="site_supervisor")
             intruder.set_password("irrelevant-test-password")
-            db.session.add_all([owner, intruder])
+            admin = User(username="task-admin", role="admin")
+            admin.set_password("irrelevant-test-password")
+            db.session.add_all([owner, intruder, admin])
             db.session.flush()
             task = Task(
                 title="Private task",
@@ -403,6 +405,14 @@ class TaskOwnershipSecurityTest(unittest.TestCase):
             self.intruder_token = create_access_token(
                 identity=str(intruder.id),
                 additional_claims={"role": intruder.role},
+            )
+            self.owner_token = create_access_token(
+                identity=str(owner.id),
+                additional_claims={"role": owner.role},
+            )
+            self.admin_token = create_access_token(
+                identity=str(admin.id),
+                additional_claims={"role": admin.role},
             )
 
     def tearDown(self):
@@ -423,6 +433,39 @@ class TaskOwnershipSecurityTest(unittest.TestCase):
         self.assertEqual(
             client.delete(f"/api/tasks/{self.task_id}", headers=headers).status_code,
             403,
+        )
+
+    def test_archived_task_is_hidden_by_default_and_can_be_restored(self):
+        client = self.app.test_client()
+        headers = {"Authorization": f"Bearer {self.owner_token}"}
+
+        archived = client.post(f"/api/tasks/{self.task_id}/archive", headers=headers)
+        self.assertEqual(archived.status_code, 200)
+        self.assertIsNotNone(archived.get_json()["archived_at"])
+
+        default_rows = client.get("/api/tasks/", headers=headers).get_json()
+        archived_rows = client.get(
+            "/api/tasks/?include_archived=1", headers=headers
+        ).get_json()
+        self.assertEqual(default_rows, [])
+        self.assertEqual([row["id"] for row in archived_rows], [self.task_id])
+
+        restored = client.post(f"/api/tasks/{self.task_id}/restore", headers=headers)
+        self.assertEqual(restored.status_code, 200)
+        self.assertIsNone(restored.get_json()["archived_at"])
+
+    def test_only_admin_can_permanently_delete_task(self):
+        client = self.app.test_client()
+        owner_headers = {"Authorization": f"Bearer {self.owner_token}"}
+        admin_headers = {"Authorization": f"Bearer {self.admin_token}"}
+
+        self.assertEqual(
+            client.delete(f"/api/tasks/{self.task_id}", headers=owner_headers).status_code,
+            403,
+        )
+        self.assertEqual(
+            client.delete(f"/api/tasks/{self.task_id}", headers=admin_headers).status_code,
+            200,
         )
 
 
