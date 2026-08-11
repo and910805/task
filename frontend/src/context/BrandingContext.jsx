@@ -16,6 +16,11 @@ const defaultBranding = {
   logoUpdatedAt: null,
 };
 
+// 產品名固定，公司名由後台「品牌名稱」決定
+const APP_NAME = 'TaskGo';
+const FALLBACK_TITLE = 'TaskGo 立翔工程管理';
+const FALLBACK_FAVICON = '/brand-logo.svg';
+
 const BrandingContext = createContext({
   branding: defaultBranding,
   loading: true,
@@ -56,6 +61,17 @@ export const BrandingProvider = ({ children }) => {
       // Branding 可以維持預設值
     });
   }, [refresh]);
+
+  // 分頁標題與 favicon 跟著品牌設定走
+  useEffect(() => {
+    const name = (branding.name || '').trim();
+    document.title = name ? `${APP_NAME} ${name}` : FALLBACK_TITLE;
+
+    const icon = document.querySelector("link[rel='icon']");
+    if (icon) {
+      icon.href = branding.logoUrl || FALLBACK_FAVICON;
+    }
+  }, [branding.name, branding.logoUrl]);
 
   const updateName = useCallback(
     async (name) => {
