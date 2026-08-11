@@ -4,8 +4,9 @@ import os
 import sys
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from flask import Flask, jsonify
@@ -115,6 +116,38 @@ class SpreadsheetFormulaSecurityTest(unittest.TestCase):
     def test_regular_text_is_unchanged(self):
         self.assertEqual(crm._xlsx_safe_text("正常備註"), "正常備註")
         self.assertEqual(export._safe_excel_text("正常備註"), "正常備註")
+
+
+class PdfMarkupSecurityTest(unittest.TestCase):
+    def test_quote_pdf_treats_free_text_as_literal_content(self):
+        injected_markup = '<img src="http://127.0.0.1:9/probe.png"/>'
+        quote = SimpleNamespace(
+            recipient_name=f"客戶{injected_markup}",
+            site_address=f"地址{injected_markup}",
+            customer_signature_name=f"簽名{injected_markup}",
+            customer_signed_at=None,
+            customer_signature_path=None,
+            items=[],
+            tax_amount=0,
+            tax_rate=0,
+            total_amount=0,
+            subtotal=0,
+            quote_no="QT-SECURITY",
+            issue_date=date.today(),
+            expiry_date=date.today(),
+            note=f"備註{injected_markup}",
+        )
+
+        with (
+            patch.object(crm, "_require_embedded_pdf_font"),
+            patch.object(crm, "_resolve_pdf_stamp_path", return_value=None),
+            patch.object(crm.SimpleDocTemplate, "build", return_value=None),
+            patch(
+                "reportlab.platypus.paraparser.ImageReader",
+                side_effect=AssertionError("PDF text triggered an outbound image fetch"),
+            ),
+        ):
+            crm._build_quote_template_pdf(quote, None, None)
 
 
 class PublicEndpointRateLimitSecurityTest(unittest.TestCase):

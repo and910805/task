@@ -322,6 +322,11 @@ def _require_embedded_pdf_font() -> None:
     )
 
 
+def _plain_text_paragraph(value: object, style) -> Paragraph:
+    text = escape(str(value or "")).replace("\n", "<br />")
+    return Paragraph(text, style)
+
+
 def _pdf_font_health_payload() -> dict:
     _ensure_pdf_font()
     require_embedded = _env_flag(PDF_REQUIRE_EMBEDDED_FONT_ENV, default=True)
@@ -1860,22 +1865,25 @@ def _build_quote_template_pdf(
             return ""
         cell_style = item_cell_style.clone(f"QuoteTemplateItemCell-{alignment}")
         cell_style.alignment = alignment
-        return Paragraph(escape(text).replace("\n", "<br />"), cell_style)
+        return _plain_text_paragraph(text, cell_style)
 
     def _fit_numeric_cell(value: object, *, width_mm: float):
         text = str(value or "").strip()
         if not text:
             return ""
-        paragraph = Paragraph(escape(text), numeric_cell_style)
+        paragraph = _plain_text_paragraph(text, numeric_cell_style)
         return KeepInFrame((width_mm * mm) - 3, 7 * mm, [paragraph], mode="shrink")
 
     story = [
         Paragraph("立翔水電行", title_style),
         Paragraph("估價單", subtitle_style),
         Spacer(1, 3 * mm),
-        Paragraph(f"{recipient} 台照", recipient_style),
+        _plain_text_paragraph(f"{recipient} 台照", recipient_style),
         Paragraph(_to_roc_date_text(quote.issue_date), body_style),
-        Paragraph(f"施工地點：{site_address}" if site_address else "施工地點：__________________________", body_style),
+        _plain_text_paragraph(
+            f"施工地點：{site_address}" if site_address else "施工地點：__________________________",
+            body_style,
+        ),
         Spacer(1, 4 * mm),
     ]
     story[1] = Paragraph(document_label, subtitle_style)
@@ -2067,11 +2075,11 @@ def _build_quote_template_pdf(
         story.extend([Spacer(1, 2 * mm), footer_date])
 
     if quote.note:
-        story.extend([Spacer(1, 4 * mm), Paragraph(f"備註：{quote.note}", body_style)])
+        story.extend([Spacer(1, 4 * mm), _plain_text_paragraph(f"備註：{quote.note}", body_style)])
     if signature_image_path is not None:
         signed_date_text = customer_signed_at.strftime("%Y-%m-%d %H:%M") if customer_signed_at else "-"
         signature_meta = f"客戶簽名：{customer_signature_name or recipient or '-'}　簽名時間：{signed_date_text}"
-        story.extend([Spacer(1, 4 * mm), Paragraph(signature_meta, body_style)])
+        story.extend([Spacer(1, 4 * mm), _plain_text_paragraph(signature_meta, body_style)])
         try:
             signature_flowable = Image(signature_image_path, width=50 * mm, height=20 * mm, kind="proportional")
             signature_table = Table(
@@ -2181,9 +2189,9 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
         Paragraph("立翔水電行", title_style),
         Paragraph("發票", subtitle_style),
         Spacer(1, 3 * mm),
-        Paragraph(f"{recipient} 台照", body_style),
+        _plain_text_paragraph(f"{recipient} 台照", body_style),
         Paragraph(issue_date_text, body_style),
-        Paragraph(f"單號：{invoice.invoice_no}", body_style),
+        _plain_text_paragraph(f"單號：{invoice.invoice_no}", body_style),
         Spacer(1, 4 * mm),
     ]
 
@@ -2224,7 +2232,7 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
     story.append(table)
 
     if invoice.note:
-        story.extend([Spacer(1, 4 * mm), Paragraph(f"備註：{invoice.note}", body_style)])
+        story.extend([Spacer(1, 4 * mm), _plain_text_paragraph(f"備註：{invoice.note}", body_style)])
 
     doc.build(story, canvasmaker=_make_pdf_stamp_canvasmaker(doc, stamp_center))
     buffer.seek(0)
