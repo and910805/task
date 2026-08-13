@@ -1315,6 +1315,15 @@ def _invoice_query_with_details():
     )
 
 
+def _quote_query_with_details():
+    return Quote.query.options(
+        selectinload(Quote.items),
+        selectinload(Quote.customer),
+        selectinload(Quote.contact),
+        selectinload(Quote.invoices),
+    )
+
+
 def _audit_jsonable(value):
     if isinstance(value, datetime):
         return value.isoformat()
@@ -3046,7 +3055,7 @@ def update_contact(contact_id: int):
 @crm_bp.get("/quotes")
 @role_required(*READ_ROLES)
 def list_quotes():
-    query = Quote.query.options(selectinload(Quote.items)).order_by(Quote.updated_at.desc())
+    query = _quote_query_with_details().order_by(Quote.updated_at.desc())
     customer_id = request.args.get("customer_id", type=int)
     status = (request.args.get("status") or "").strip().lower()
     limit = _normalize_limit_arg(request.args.get("limit"), default=5, maximum=200)
@@ -4502,9 +4511,31 @@ def invoice_pdf(invoice_id: int):
 @crm_bp.get("/boot")
 @role_required(*READ_ROLES)
 def crm_bootstrap():
-    customers = Customer.query.order_by(Customer.updated_at.desc()).limit(50).all()
-    contacts = Contact.query.order_by(Contact.updated_at.desc()).limit(100).all()
-    quotes = Quote.query.options(selectinload(Quote.items)).order_by(Quote.updated_at.desc()).limit(30).all()
+    limit = _normalize_limit_arg(request.args.get("limit"), default=10, maximum=200)
+    customers = Customer.query.order_by(Customer.updated_at.desc()).limit(200).all()
+    contacts = Contact.query.order_by(Contact.updated_at.desc()).limit(200).all()
+    quote_query = _quote_query_with_details().order_by(Quote.updated_at.desc())
+    quotes = quote_query.limit(limit).all() if limit is not None else quote_query.all()
+    quote_ids = [row.id for row in quotes]
+    invoices = []
+    contracts = []
+    if quote_ids:
+        invoices = (
+            _invoice_query_with_details()
+            .filter(Invoice.quote_id.in_(quote_ids))
+            .order_by(Invoice.updated_at.desc(), Invoice.id.desc())
+            .all()
+        )
+        contracts = (
+            Contract.query.options(
+                selectinload(Contract.quote),
+                selectinload(Contract.created_by),
+                selectinload(Contract.versions),
+            )
+            .filter(Contract.quote_id.in_(quote_ids))
+            .order_by(Contract.updated_at.desc(), Contract.id.desc())
+            .all()
+        )
     catalog_items = (
         ServiceCatalogItem.query.filter(ServiceCatalogItem.is_active.is_(True))
         .order_by(ServiceCatalogItem.updated_at.desc())
@@ -4517,7 +4548,8 @@ def crm_bootstrap():
             "customers": [row.to_dict() for row in customers],
             "contacts": [row.to_dict() for row in contacts],
             "quotes": [row.to_dict() for row in quotes],
-            "invoices": [],
+            "invoices": [row.to_dict() for row in invoices],
+            "contracts": [row.to_dict() for row in contracts],
             "catalog_items": [row.to_dict() for row in catalog_items],
         }
     )

@@ -20,7 +20,7 @@ if str(BACKEND) not in sys.path:
 
 from decorators import jwt_user_claims_are_current, role_required
 from extensions import db, jwt
-from models import Attachment, Task, User
+from models import Attachment, Contract, Customer, Invoice, Quote, Task, User
 from routes import auth, crm, export, line, tasks
 from routes.uploads import upload_bp
 from rate_limit import _BUCKETS, _LOCK, rate_limit
@@ -522,6 +522,43 @@ class CrmAuthorizationSecurityTest(unittest.TestCase):
             manager = User(username="crm-manager", role="hq_staff")
             manager.set_password("irrelevant-test-password")
             db.session.add_all([worker, manager])
+            db.session.flush()
+            customer = Customer(name="CRM bootstrap customer", created_by_id=manager.id)
+            db.session.add(customer)
+            db.session.flush()
+            quote = Quote(
+                quote_no="QT-BOOT-001",
+                customer_id=customer.id,
+                issue_date=date.today(),
+                expiry_date=date.today(),
+                created_by_id=manager.id,
+            )
+            db.session.add(quote)
+            db.session.flush()
+            db.session.add_all(
+                [
+                    Invoice(
+                        invoice_no="IV-BOOT-001",
+                        customer_id=customer.id,
+                        quote_id=quote.id,
+                        issue_date=date.today(),
+                        due_date=date.today(),
+                        created_by_id=manager.id,
+                    ),
+                    Contract(
+                        contract_no="CT-BOOT-001",
+                        quote_id=quote.id,
+                        quote_version_no=1,
+                        contract_date=date.today(),
+                        project_name="Bootstrap project",
+                        party_a_name=customer.name,
+                        party_b_name="Test contractor",
+                        payment_terms="Test payment terms",
+                        quote_snapshot_json="{}",
+                        created_by_id=manager.id,
+                    ),
+                ]
+            )
             db.session.commit()
             self.worker_token = create_access_token(
                 identity=str(worker.id), additional_claims={"role": worker.role}
@@ -548,6 +585,12 @@ class CrmAuthorizationSecurityTest(unittest.TestCase):
 
         self.assertEqual(worker_response.status_code, 403)
         self.assertEqual(manager_response.status_code, 200)
+        payload = manager_response.get_json()
+        for key in ("customers", "contacts", "quotes", "invoices", "contracts", "catalog_items"):
+            self.assertIsInstance(payload.get(key), list)
+        self.assertEqual([row["quote_no"] for row in payload["quotes"]], ["QT-BOOT-001"])
+        self.assertEqual([row["invoice_no"] for row in payload["invoices"]], ["IV-BOOT-001"])
+        self.assertEqual([row["contract_no"] for row in payload["contracts"]], ["CT-BOOT-001"])
 
 
 if __name__ == "__main__":

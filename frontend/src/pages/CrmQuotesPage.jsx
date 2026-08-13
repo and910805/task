@@ -1,7 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 
 import api from '../api/client.js';
-import { useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import AppHeader from '../components/AppHeader.jsx';
 import SignaturePad from '../components/task/SignaturePad.jsx';
 
@@ -133,6 +133,7 @@ const CrmQuotesPage = () => {
   const [invoices, setInvoices] = useState([]);
   const [history, setHistory] = useState({ quotes: [] });
   const [loading, setLoading] = useState(true);
+  const [reloadKey, setReloadKey] = useState(0);
   const [saving, setSaving] = useState(false);
   const [convertingQuoteId, setConvertingQuoteId] = useState(null);
   const [copyingQuoteId, setCopyingQuoteId] = useState(null);
@@ -195,7 +196,7 @@ const CrmQuotesPage = () => {
     });
   };
 
-  const loadBase = async () => {
+  const loadBase = useCallback(async () => {
     const [customerRes, contactRes, catalogRes] = await Promise.all([
       api.get('crm/customers'),
       api.get('crm/contacts'),
@@ -204,17 +205,27 @@ const CrmQuotesPage = () => {
     setCustomers(Array.isArray(customerRes.data) ? customerRes.data : []);
     setContacts(Array.isArray(contactRes.data) ? contactRes.data : []);
     setCatalogItems(Array.isArray(catalogRes.data) ? catalogRes.data : []);
-  };
+  }, []);
 
-  const loadQuotes = async () => {
+  const loadPageData = useCallback(async () => {
+    const { data } = await api.get('crm/boot', { params: { limit: listLimit } });
+    setCustomers(Array.isArray(data?.customers) ? data.customers : []);
+    setContacts(Array.isArray(data?.contacts) ? data.contacts : []);
+    setCatalogItems(Array.isArray(data?.catalog_items) ? data.catalog_items : []);
+    setQuotes(Array.isArray(data?.quotes) ? data.quotes : []);
+    setInvoices(Array.isArray(data?.invoices) ? data.invoices : []);
+    setContracts(Array.isArray(data?.contracts) ? data.contracts : []);
+  }, [listLimit]);
+
+  const loadQuotes = useCallback(async () => {
     const { data } = await api.get('crm/quotes', { params: { limit: listLimit } });
     const rows = Array.isArray(data) ? data : [];
     setQuotes(rows);
     return rows;
-  };
+  }, [listLimit]);
 
-  const loadInvoices = async (quoteRows = null) => {
-    const rows = Array.isArray(quoteRows) ? quoteRows : quotes;
+  const loadInvoices = useCallback(async (quoteRows) => {
+    const rows = Array.isArray(quoteRows) ? quoteRows : [];
     const quoteIds = rows
       .map((row) => Number(row?.id || 0))
       .filter((id) => id > 0);
@@ -227,19 +238,19 @@ const CrmQuotesPage = () => {
     const invoiceRows = Array.isArray(data) ? data : [];
     setInvoices(invoiceRows);
     return invoiceRows;
-  };
+  }, [listLimit]);
 
-  const loadContracts = async () => {
+  const loadContracts = useCallback(async () => {
     const { data } = await api.get('crm/contracts');
     const rows = Array.isArray(data) ? data : [];
     setContracts(rows);
     return rows;
-  };
+  }, []);
 
-  const reloadManagedLists = async () => {
+  const reloadManagedLists = useCallback(async () => {
     const quoteRows = await loadQuotes();
     await Promise.all([loadInvoices(quoteRows), loadContracts()]);
-  };
+  }, [loadContracts, loadInvoices, loadQuotes]);
 
   const loadHistory = async (customerId) => {
     if (!customerId) {
@@ -293,34 +304,27 @@ const CrmQuotesPage = () => {
   };
 
   useEffect(() => {
-    const bootstrap = async () => {
-      setLoading(true);
-      setError('');
-      try {
-        await loadBase();
-      } catch (err) {
-        setError(err?.networkMessage || err?.response?.data?.msg || '報價資料載入失敗');
-      } finally {
-        setLoading(false);
-      }
-    };
-    bootstrap();
-  }, []);
+    let active = true;
 
-  useEffect(() => {
-    const reloadLists = async () => {
+    const reloadPage = async () => {
       setLoading(true);
       setError('');
       try {
-        await reloadManagedLists();
+        await loadPageData();
       } catch (err) {
-        setError(err?.networkMessage || err?.response?.data?.msg || '報價資料載入失敗');
+        if (active) {
+          setError(err?.networkMessage || err?.response?.data?.msg || '報價資料載入失敗，請按重新整理再試');
+        }
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     };
-    reloadLists();
-  }, [listLimit]);
+
+    reloadPage();
+    return () => {
+      active = false;
+    };
+  }, [loadPageData, reloadKey]);
 
   useEffect(() => {
     if (form.customer_id) {
@@ -1551,16 +1555,26 @@ const CrmQuotesPage = () => {
       <section ref={invoiceListSectionRef} className="panel panel--table">
         <div className="panel-header">
           <h2>報價單列表</h2>
-          <label className="panel-tag" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-            顯示筆數
-            <select value={listLimit} onChange={(event) => setListLimit(event.target.value || '10')}>
-              {CRM_LIST_LIMIT_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <label className="panel-tag" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              顯示筆數
+              <select value={listLimit} onChange={(event) => setListLimit(event.target.value || '10')}>
+                {CRM_LIST_LIMIT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={() => setReloadKey((value) => value + 1)}
+              disabled={loading}
+            >
+              {loading ? '載入中...' : '重新整理'}
+            </button>
+          </div>
         </div>
         <div className="table-wrapper">
           <table className="data-table">
@@ -1673,12 +1687,12 @@ const CrmQuotesPage = () => {
               ))}
               {!loading && quotes.length === 0 ? (
                 <tr>
-                  <td colSpan="4">尚無報價單</td>
+                  <td colSpan="4">{error ? '目前無法載入報價資料，請按重新整理再試。' : '目前沒有報價單。'}</td>
                 </tr>
               ) : null}
-              {loading ? (
+              {loading && quotes.length === 0 ? (
                 <tr>
-                  <td colSpan="4">載入中...</td>
+                  <td colSpan="4">報價資料載入中...</td>
                 </tr>
               ) : null}
             </tbody>
