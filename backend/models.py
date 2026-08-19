@@ -1083,6 +1083,7 @@ class InvoiceItem(db.Model):
     invoice_id = db.Column(db.Integer, db.ForeignKey("invoice.id", ondelete="CASCADE"), nullable=False)
     description = db.Column(db.String(500), nullable=False)
     unit = db.Column(db.String(32))
+    note = db.Column(db.Text)
     quantity = db.Column(db.Float, nullable=False, default=1.0)
     unit_price = db.Column(db.Float, nullable=False, default=0.0)
     amount = db.Column(db.Float, nullable=False, default=0.0)
@@ -1095,6 +1096,7 @@ class InvoiceItem(db.Model):
             "id": self.id,
             "description": self.description,
             "unit": self.unit,
+            "note": self.note,
             "quantity": round(self.quantity or 0.0, 4),
             "unit_price": round(self.unit_price or 0.0, 2),
             "amount": round(self.amount or 0.0, 2),

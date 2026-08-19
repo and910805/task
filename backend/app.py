@@ -16,6 +16,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from extensions import db, jwt
+from schema_migrations import ensure_invoice_item_note_column
 from storage import StorageError, create_storage
 
 
@@ -328,6 +329,7 @@ def create_app() -> Flask:
             _ensure_quote_item_unit_column()
             _ensure_quote_item_note_column()
             _ensure_invoice_item_unit_column()
+            ensure_invoice_item_note_column()
             _ensure_invoice_signature_columns()
             _ensure_material_purchase_pricing_columns()
         else:
@@ -356,6 +358,7 @@ def create_app() -> Flask:
         _ensure_quote_item_unit_column()
         _ensure_quote_item_note_column()
         _ensure_invoice_item_unit_column()
+        ensure_invoice_item_note_column()
         _ensure_invoice_signature_columns()
         _ensure_material_purchase_pricing_columns()
         click.echo("Database schema initialized.")

@@ -2269,7 +2269,7 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
                 sort_order=item.sort_order,
                 description=item.description,
                 unit=item.unit,
-                note="",
+                note=item.note,
                 quantity=item.quantity,
                 unit_price=item.unit_price,
                 amount=item.amount,
@@ -3644,6 +3644,7 @@ def convert_quote_to_invoice(quote_id: int):
             {
                 "description": (quote_item.description or "").strip(),
                 "unit": (quote_item.unit or "").strip() or "式",
+                "note": (quote_item.note or "").strip() or None,
                 "quantity": float(quote_item.quantity or 0.0),
                 "unit_price": float(quote_item.unit_price or 0.0),
                 "amount": round(float(quote_item.amount or 0.0), 2),
