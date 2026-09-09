@@ -325,6 +325,16 @@ def _public_help_text() -> str:
     )
 
 
+def _public_ack_text() -> str:
+    custom = (_cfg("LINE_PUBLIC_ACK_TEXT") or "").strip()
+    if custom:
+        return custom
+    return (
+        "已收到您的訊息，將由專人查看並儘快回覆。\n"
+        "若為漏水、跳電等緊急狀況，請直接撥打 0932-980-620。"
+    )
+
+
 def _handle_public_text(reply_token: str, text: str) -> None:
     normalized = (text or "").strip().lower()
     if not normalized:
@@ -359,7 +369,7 @@ def _handle_public_text(reply_token: str, text: str) -> None:
         )
         return
 
-    reply_text(reply_token, _public_help_text(), channel="public")
+    reply_text(reply_token, _public_ack_text(), channel="public")
 
 
 def _pending_key(line_user_id: str) -> str:
@@ -1144,7 +1154,7 @@ def public_webhook():
             if message.get("type") != "text":
                 reply_text(
                     reply_token,
-                    "目前支援文字指令：服務項目、預約、聯絡。",
+                    _public_ack_text(),
                     channel="public",
                 )
                 continue
