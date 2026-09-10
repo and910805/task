@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
+from email.utils import parseaddr
 from io import BytesIO
 from collections import OrderedDict
 from copy import copy
@@ -39,10 +40,12 @@ from models import (
     ServiceCatalogItem,
     SiteSetting,
     Task,
+    User,
     WebsiteBooking,
 )
 from utils import get_current_user_id
 from services.attachments import replace_signature_file
+from services.notifications import send_email_async
 from rate_limit import rate_limit
 
 from reportlab.lib import colors
@@ -2394,6 +2397,93 @@ def _website_booking_status_counts(rows: list[WebsiteBooking]) -> dict[str, int]
     return counts
 
 
+def _website_lead_notification_recipients() -> list[str]:
+    """Resolve website-lead recipients without exposing addresses publicly."""
+    configured = (
+        os.getenv("WEBSITE_LEAD_NOTIFICATION_EMAILS")
+        or current_app.config.get("WEBSITE_LEAD_NOTIFICATION_EMAILS")
+        or ""
+    )
+    candidates: list[str] = []
+    if configured:
+        candidates.extend(re.split(r"[;,]", str(configured)))
+    else:
+        candidates.extend(
+            value
+            for (value,) in (
+                db.session.query(User.notification_value)
+                .filter(
+                    User.role == "admin",
+                    User.notification_type == "email",
+                    User.notification_value.isnot(None),
+                )
+                .all()
+            )
+            if value
+        )
+
+        # A deployment with SMTP configured but no per-user email preference can
+        # still receive leads at its reply-to/sender mailbox.
+        if not candidates:
+            candidates.extend(
+                [
+                    os.getenv("EMAIL_REPLY_TO")
+                    or current_app.config.get("EMAIL_REPLY_TO"),
+                    os.getenv("EMAIL_SENDER") or current_app.config.get("EMAIL_SENDER"),
+                ]
+            )
+
+    recipients: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        address = parseaddr(str(candidate or "").strip())[1].strip()
+        if not address or "@" not in address:
+            continue
+        key = address.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        recipients.append(address)
+    return recipients
+
+
+def _notify_new_website_lead(booking: WebsiteBooking) -> None:
+    recipients = _website_lead_notification_recipients()
+    if not recipients:
+        current_app.logger.info(
+            "Website lead email skipped because no notification recipient is configured"
+        )
+        return
+
+    type_labels = {"booking": "預約", "quote": "詢價", "contact": "聯絡"}
+    inquiry_label = type_labels.get(booking.inquiry_type, "網站名單")
+    base_url = (
+        os.getenv("APP_BASE_URL") or current_app.config.get("APP_BASE_URL") or ""
+    ).strip().rstrip("/")
+    admin_url = f"{base_url}/crm/bookings" if base_url else ""
+
+    fields = [
+        ("名單編號", str(booking.id)),
+        ("類型", inquiry_label),
+        ("姓名", booking.name),
+        ("電話", booking.phone),
+        ("Email", booking.email),
+        ("服務項目", booking.service),
+        ("地址", booking.address),
+        ("希望聯絡時間", booking.preferred_time),
+        ("預算", booking.budget_range),
+        ("留言", booking.message),
+        ("來源", booking.source_channel),
+        ("來源網址", booking.source_url),
+        ("後台網站名單", admin_url),
+    ]
+    message = "收到一筆新的網站名單：\n\n" + "\n".join(
+        f"{label}：{value}" for label, value in fields if value
+    )
+    subject = f"[網站名單] 新{inquiry_label}｜{booking.name}｜{booking.service}"
+    send_email_async(recipients, subject, message)
+
+
 @crm_bp.post("/public/bookings")
 @rate_limit("public-booking", limit=10, window_seconds=3600)
 def create_public_booking():
@@ -2462,6 +2552,13 @@ def create_public_booking():
     )
     db.session.add(booking)
     db.session.commit()
+
+    try:
+        _notify_new_website_lead(booking)
+    except Exception as exc:  # pragma: no cover - notification must not reject the lead
+        current_app.logger.warning(
+            "Unable to queue website lead email for booking %s: %s", booking.id, exc
+        )
 
     return (
         jsonify(
