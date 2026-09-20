@@ -43,7 +43,7 @@ class APIError(Exception):
 
 class TaskGoAPI:
     def __init__(self) -> None:
-        self.base_url = "https://task.kuanlin.pro"
+        self.base_url = "https://task.kuanlin.online"
         self.token = ""
 
     def set_base_url(self, base_url: str) -> None:
@@ -134,7 +134,7 @@ class DesktopQuoteTool:
         self.item_row_map: dict[str, int] = {}
         self.editing_item_index: int | None = None
 
-        self.base_url_var = tk.StringVar(value="https://task.kuanlin.pro")
+        self.base_url_var = tk.StringVar(value="https://task.kuanlin.online")
         self.username_var = tk.StringVar()
         self.password_var = tk.StringVar()
         self.status_var = tk.StringVar(value="尚未登入")

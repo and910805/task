@@ -44,7 +44,7 @@ DEFAULT_EMAIL_NOTIFICATION_SETTINGS = {
     "subject_prefix": "",
     # Optionally append a task link at the bottom of emails.
     "include_task_link": False,
-    # If empty, will fallback to APP_BASE_URL env var. Example: "https://task.kuanlin.pro"
+    # If empty, will fallback to APP_BASE_URL env var. Example: "https://task.kuanlin.online"
     "task_link_base_url": "",
 }
 

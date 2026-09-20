@@ -177,14 +177,14 @@ class DesktopQuoteToolQt(QMainWindow):
         layout.setHorizontalSpacing(8)
         layout.setVerticalSpacing(8)
 
-        self.base_url_edit = QLineEdit("https://task.kuanlin.pro")
+        self.base_url_edit = QLineEdit("https://task.kuanlin.online")
         self.username_edit = QLineEdit()
         self.password_edit = QLineEdit()
         self.password_edit.setEchoMode(QLineEdit.Password)
         self.status_label = QLabel("尚未登入")
         self.status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.status_label.setProperty("role", "status")
-        self.base_url_edit.setPlaceholderText("https://task.kuanlin.pro")
+        self.base_url_edit.setPlaceholderText("https://task.kuanlin.online")
         self.username_edit.setPlaceholderText("帳號")
         self.password_edit.setPlaceholderText("密碼")
 

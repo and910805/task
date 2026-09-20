@@ -45,7 +45,7 @@ python app.py
 
 ## 登入設定
 
-- 系統網址：`https://task.kuanlin.pro`
+- 系統網址：`https://task.kuanlin.online`
 - 使用既有帳號密碼（admin / hq_staff / site_supervisor）
 
 ## 品項輸入格式

@@ -1020,7 +1020,7 @@ const AdminPage = () => {
           ...prev,
           task_link_base_url: event.target.value,
         }))}
-        placeholder="https://task.kuanlin.pro"
+        placeholder="https://task.kuanlin.online"
         disabled={emailSettingsBusy || !emailSettings.include_task_link}
       />
     </label>
@@ -1150,7 +1150,7 @@ const AdminPage = () => {
       <input
         value={lineSettings.task_link_base_url ?? ''}
         onChange={(event) => setLineSettings((prev) => ({ ...prev, task_link_base_url: event.target.value }))}
-        placeholder="https://task.kuanlin.pro"
+        placeholder="https://task.kuanlin.online"
         disabled={lineSettingsBusy || !lineSettings.include_task_link}
       />
     </label>
