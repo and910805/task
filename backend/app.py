@@ -276,10 +276,40 @@ def create_app() -> Flask:
     def public_photo_file(filename: str):
         return send_from_directory(marketing_photo_dir, filename)
 
+    def _send_pwa_asset(filename: str, cache_control: str):
+        """Serve PWA control files explicitly, never through the SPA fallback."""
+        asset_path = os.path.join(app.static_folder, filename)
+        if not os.path.isfile(asset_path):
+            return jsonify({"error": "Not found"}), 404
+        response = send_from_directory(app.static_folder, filename)
+        response.headers["Cache-Control"] = cache_control
+        return response
+
+    @app.route("/manifest.webmanifest")
+    def pwa_manifest():
+        # Revalidate promptly so devices discover icon and install metadata changes.
+        return _send_pwa_asset("manifest.webmanifest", "no-cache")
+
+    @app.route("/sw.js")
+    def pwa_service_worker():
+        # A stale service worker prevents clients from receiving security updates.
+        return _send_pwa_asset("sw.js", "no-cache")
+
+    @app.route("/offline.html")
+    def pwa_offline_page():
+        return _send_pwa_asset("offline.html", "public, max-age=86400")
+
+    @app.route("/icons/<filename>")
+    def pwa_icon(filename: str):
+        allowed_icons = {"icon-192.png", "icon-512.png", "apple-touch-icon.png"}
+        if filename not in allowed_icons:
+            return jsonify({"error": "Not found"}), 404
+        return _send_pwa_asset(f"icons/{filename}", "public, max-age=86400")
+
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
     def serve_react(path: str):
-        if path.startswith(("api/", "uploads/", "static/", "favicon.", "manifest", "robots")):
+        if path.startswith(("api/", "uploads/", "static/", "favicon.", "manifest", "robots", "sw.js", "offline.html", "icons/")):
             return jsonify({"error": "Not found"}), 404
         dist_dir = app.static_folder
         sale_dir = os.path.join(dist_dir, "salesite")

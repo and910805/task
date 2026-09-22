@@ -6737,3 +6737,44 @@ button:disabled {
   outline: 3px solid rgba(37, 99, 235, 0.2);
   outline-offset: 3px;
 }
+.pwa-update-prompt {
+  position: fixed;
+  z-index: 1000;
+  right: 1rem;
+  bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: min(32rem, calc(100vw - 2rem));
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  border-radius: 0.75rem;
+  background: #0f172a;
+  color: #f8fafc;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.28);
+}
+
+.pwa-update-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.5rem;
+}
+
+.pwa-update-actions button {
+  min-height: 2.25rem;
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .pwa-update-prompt {
+    right: 0.75rem;
+    bottom: 0.75rem;
+    left: 0.75rem;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .pwa-update-actions button {
+    flex: 1;
+  }
+}

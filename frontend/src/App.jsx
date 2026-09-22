@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from './context/AuthContext.jsx';
 import { BrandingProvider } from './context/BrandingContext.jsx';
 import { RoleLabelProvider } from './context/RoleLabelContext.jsx';
 import { ThemeProvider } from './context/ThemeContext.jsx';
+import PwaUpdatePrompt from './components/PwaUpdatePrompt.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import OperationsDashboardPage from './pages/OperationsDashboardPage.jsx';
 import TaskDetailPage from './pages/TaskDetailPage.jsx';
@@ -188,6 +189,7 @@ function App() {
             <BrowserRouter>
               <AppRoutes />
             </BrowserRouter>
+            <PwaUpdatePrompt />
             <Toaster position="top-center" toastOptions={{ duration: 3500 }} />
           </RoleLabelProvider>
         </AuthProvider>

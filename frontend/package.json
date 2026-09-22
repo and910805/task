@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
+    "verify:pwa": "node scripts/verify-pwa.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
