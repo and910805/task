@@ -21,9 +21,10 @@ from storage import StorageError, create_storage
 
 
 def _parse_cors_origins(raw: str | None) -> list[str]:
-    if not raw:
-        return ["http://localhost:5173"]
-    return [item.strip() for item in raw.split(",") if item.strip()]
+    origins = [item.strip() for item in raw.split(",") if item.strip()] if raw else ["http://localhost:5173"]
+    if "capacitor://localhost" not in origins:
+        origins.append("capacitor://localhost")
+    return origins
 
 
 def _normalize_database_url(db_url: str | None) -> str | None:
@@ -164,6 +165,10 @@ def create_app() -> Flask:
     db.init_app(app)
     jwt.init_app(app)
 
+    from tenancy import init_tenancy, public_endpoint
+
+    init_tenancy(app)
+
     from decorators import jwt_user_claims_are_current
 
     @jwt.token_verification_loader
@@ -189,6 +194,7 @@ def create_app() -> Flask:
     from routes.line import line_bp
     from routes.crm import crm_bp
     from routes.materials import materials_bp
+    from routes.workspaces import workspaces_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(tasks_bp, url_prefix="/api/tasks")
@@ -199,8 +205,10 @@ def create_app() -> Flask:
     app.register_blueprint(site_locations_bp, url_prefix="/api/site-locations")
     app.register_blueprint(crm_bp, url_prefix="/api/crm")
     app.register_blueprint(materials_bp, url_prefix="/api/materials")
+    app.register_blueprint(workspaces_bp, url_prefix="/api/workspaces")
 
     @app.route("/api/health")
+    @public_endpoint
     def health_check():
         try:
             db.session.execute(text("SELECT 1"))
@@ -258,6 +266,7 @@ def create_app() -> Flask:
         return None
 
     @app.route("/api/public/photos")
+    @public_endpoint
     def public_photo_list():
         if not os.path.isdir(marketing_photo_dir):
             return jsonify([]), 200
@@ -285,6 +294,37 @@ def create_app() -> Flask:
         response.headers["Cache-Control"] = cache_control
         return response
 
+    @app.route("/.well-known/apple-app-site-association")
+    @public_endpoint
+    def apple_app_site_association():
+        """Universal links for the iOS app (task and invite links open in-app).
+
+        Served only when APPLE_TEAM_ID is configured; the Team ID is not a
+        secret but is environment-specific, so it never lives in the repo.
+        """
+        team_id = (os.environ.get("APPLE_TEAM_ID") or "").strip()
+        bundle_id = (os.environ.get("IOS_BUNDLE_ID") or "online.kuanlin.taskgo").strip()
+        if not team_id:
+            return jsonify({"error": "Not found"}), 404
+        payload = {
+            "applinks": {
+                "apps": [],
+                "details": [
+                    {
+                        "appID": f"{team_id}.{bundle_id}",
+                        "components": [
+                            {"/": "/tasks/*", "comment": "open a task"},
+                            {"/": "/join", "comment": "accept an invitation"},
+                        ],
+                    }
+                ],
+            }
+        }
+        response = jsonify(payload)
+        response.headers["Content-Type"] = "application/json"
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        return response
+
     @app.route("/manifest.webmanifest")
     def pwa_manifest():
         # Revalidate promptly so devices discover icon and install metadata changes.
@@ -309,7 +349,7 @@ def create_app() -> Flask:
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
     def serve_react(path: str):
-        if path.startswith(("api/", "uploads/", "static/", "favicon.", "manifest", "robots", "sw.js", "offline.html", "icons/")):
+        if path.startswith(("api/", "uploads/", "static/", "favicon.", "manifest", "robots", "sw.js", "offline.html", "icons/", ".well-known/")):
             return jsonify({"error": "Not found"}), 404
         dist_dir = app.static_folder
         sale_dir = os.path.join(dist_dir, "salesite")
@@ -350,6 +390,7 @@ def create_app() -> Flask:
         if _should_init_db_on_startup(database_url):
             _wait_for_database_ready(app)
             db.create_all()
+            _ensure_workspace_schema(app)
             _ensure_user_reminder_frequency_column()
             _ensure_task_location_url_column()
             _ensure_task_archived_at_column()
@@ -374,11 +415,34 @@ def create_app() -> Flask:
         count = run_due_task_reminders()
         click.echo(f"Sent {count} reminder notifications.")
 
+    @app.cli.command("create-review-workspace")
+    @click.option("--name", default="TaskGo 示範公司", show_default=True)
+    @click.option("--owner", default="review-owner", show_default=True)
+    @click.option("--worker", default="review-worker", show_default=True)
+    def create_review_workspace(name: str, owner: str, worker: str) -> None:
+        """Create the App Review demo company (isolated; no real data).
+
+        The password is read from REVIEW_ACCOUNT_PASSWORD or prompted; it is
+        never printed. Enter the same value in App Store Connect > App Review
+        Information.
+        """
+        from services.review_workspace import create_review_workspace as _create
+
+        password = (os.environ.get("REVIEW_ACCOUNT_PASSWORD") or "").strip()
+        if not password:
+            password = click.prompt("Review account password (min 10 chars)", hide_input=True, confirmation_prompt=True)
+        result = _create(name=name, owner_username=owner, worker_username=worker, password=password)
+        click.echo(
+            f"Review workspace #{result['workspace_id']} ready: owner={owner}, worker={worker}, "
+            f"tasks={result['tasks']} (password not shown)."
+        )
+
     @app.cli.command("init-db")
     def init_db_command() -> None:
         """Initialize or update database schema manually."""
         _wait_for_database_ready(app)
         db.create_all()
+        _ensure_workspace_schema(app)
         _ensure_user_reminder_frequency_column()
         _ensure_task_location_url_column()
         _ensure_task_archived_at_column()
@@ -414,6 +478,17 @@ def _wait_for_database_ready(app: Flask, *, max_attempts: int = 12, interval_sec
                 interval_seconds,
             )
             time.sleep(interval_seconds)
+
+
+def _ensure_workspace_schema(app: Flask) -> None:
+    import workspace_migration
+
+    workspace_migration.ensure_schema()
+    if workspace_migration.needs_data_migration():
+        app.logger.warning(
+            "Existing data is not assigned to a workspace yet. Run: "
+            "python scripts/workspace_migration.py upgrade --legacy-name <company>"
+        )
 
 
 def _ensure_user_reminder_frequency_column() -> None:

@@ -11,8 +11,9 @@ from flask import Blueprint, current_app, jsonify, request
 from werkzeug.datastructures import FileStorage
 
 from decorators import role_required
+from tenancy import public_endpoint
 from extensions import db
-from models import SiteSetting, User, Task, TaskUpdate
+from models import SiteSetting, User, Task, TaskUpdate, WorkspaceMember
 from services.attachments import create_file_attachment
 from services.line_messaging import (
     build_default_rich_menu,
@@ -404,7 +405,28 @@ def _get_bound_user(line_user_id: str) -> User | None:
     ).first()
 
 
+def _line_member_role(task: Task | None, user_id: int) -> str | None:
+    """The bound user's active role in the task's company, if any."""
+    if task is None or task.workspace_id is None:
+        return None
+    membership = WorkspaceMember.query.filter_by(
+        workspace_id=task.workspace_id, user_id=user_id, status="active"
+    ).first()
+    return membership.role if membership else None
+
+
+def _line_visible_task(task_id: int, user: User) -> Task | None:
+    # LINE commands carry raw task ids; never reveal tasks of companies the
+    # bound account does not belong to.
+    task = db.session.get(Task, task_id)
+    if task is None or _line_member_role(task, user.id) is None:
+        return None
+    return task
+
+
 def _worker_can_access_task(task: Task, user_id: int) -> bool:
+    if _line_member_role(task, user_id) is None:
+        return False
     # 單一指派
     if getattr(task, "assigned_to_id", None) == user_id:
         return True
@@ -537,7 +559,7 @@ def _handle_postback(line_user_id: str, reply_token: str, raw_data: str | None) 
             reply_text(reply_token, "Invalid task id.")
             return
         task_id = int(task_id_raw)
-        task = Task.query.get(task_id)
+        task = _line_visible_task(task_id, user)
         if task is None:
             reply_text(reply_token, "Task not found.")
             return
@@ -654,7 +676,7 @@ def _handle_text_command(line_user_id: str, reply_token: str, text: str) -> None
             reply_text(reply_token, "任務資訊已失效，請重新操作。")
             return
 
-        task = Task.query.get(task_id)
+        task = _line_visible_task(task_id, user)
         if task is None:
             _clear_pending(line_user_id)
             reply_text(reply_token, f"任務 #{task_id} 不存在。")
@@ -702,7 +724,7 @@ def _handle_text_command(line_user_id: str, reply_token: str, text: str) -> None
             return
 
         task_id = int(parts[1])
-        task = Task.query.get(task_id)
+        task = _line_visible_task(task_id, user)
         if task is None:
             reply_text(reply_token, "找不到任務")
             return
@@ -728,7 +750,7 @@ def _handle_text_command(line_user_id: str, reply_token: str, text: str) -> None
             return
 
         task_id = int(parts[1])
-        task = Task.query.get(task_id)
+        task = _line_visible_task(task_id, user)
         if task is None:
             reply_text(reply_token, "找不到任務")
             return
@@ -748,7 +770,7 @@ def _handle_text_command(line_user_id: str, reply_token: str, text: str) -> None
             return
 
         task_id = int(parts[1])
-        task = Task.query.get(task_id)
+        task = _line_visible_task(task_id, user)
         if task is None:
             reply_text(reply_token, "找不到任務")
             return
@@ -768,7 +790,7 @@ def _handle_text_command(line_user_id: str, reply_token: str, text: str) -> None
             return
 
         task_id = int(parts[1])
-        task = Task.query.get(task_id)
+        task = _line_visible_task(task_id, user)
         if task is None:
             reply_text(reply_token, "找不到任務")
             return
@@ -783,15 +805,20 @@ def _handle_text_command(line_user_id: str, reply_token: str, text: str) -> None
             reply_text(reply_token, "用法：accept <task_id>")
             return
 
-        if user.role != "worker":
-            reply_text(reply_token, "只有工人可以接單。")
+        task_id = int(parts[1])
+        candidate = _line_visible_task(task_id, user)
+        if candidate is None:
+            reply_text(reply_token, "找不到任務")
+            return
+        if _line_member_role(candidate, user.id) != "worker":
+            reply_text(reply_token, "只有現場人員可以接單。")
             return
 
-        task_id = int(parts[1])
         now = datetime.utcnow()
         updated = (
             Task.query.filter(
                 Task.id == task_id,
+                Task.workspace_id == candidate.workspace_id,
                 Task.status == "尚未接單",
                 Task.assigned_to_id.is_(None),
             )
@@ -806,7 +833,7 @@ def _handle_text_command(line_user_id: str, reply_token: str, text: str) -> None
         )
 
         if updated == 0:
-            task = Task.query.get(task_id)
+            task = _line_visible_task(task_id, user)
             if task is None:
                 reply_text(reply_token, "找不到任務")
                 return
@@ -825,7 +852,7 @@ def _handle_text_command(line_user_id: str, reply_token: str, text: str) -> None
             return
 
         task_id = int(parts[1])
-        task = Task.query.get(task_id)
+        task = _line_visible_task(task_id, user)
         if task is None:
             reply_text(reply_token, "找不到任務")
             return
@@ -864,7 +891,7 @@ def _handle_text_command(line_user_id: str, reply_token: str, text: str) -> None
             reply_text(reply_token, "完成任務需要說明。用法：done <task_id> <說明>")
             return
 
-        task = Task.query.get(task_id)
+        task = _line_visible_task(task_id, user)
         if task is None:
             reply_text(reply_token, "找不到任務")
             return
@@ -901,7 +928,7 @@ def _handle_image_message(line_user_id: str, reply_token: str, message_id: str) 
     task_id = int(pending["task_id"])
     note = (pending.get("note") or "").strip()
 
-    task = Task.query.get(task_id)
+    task = _line_visible_task(task_id, user)
     if task is None:
         _clear_pending(line_user_id)
         reply_text(reply_token, "找不到任務，已清除待處理狀態。")
@@ -1072,6 +1099,7 @@ def remove_rich_menu(rich_menu_id: str):
 
 
 @line_bp.post("/webhook")
+@public_endpoint  # verified by the LINE channel signature
 def webhook():
     if not _verify_request():
         return jsonify({"msg": "invalid signature"}), 400
@@ -1129,6 +1157,7 @@ def webhook():
 
 
 @line_bp.post("/webhook/public")
+@public_endpoint  # verified by the LINE channel signature
 def public_webhook():
     if not _verify_request(channel="public"):
         return jsonify({"msg": "invalid signature"}), 400

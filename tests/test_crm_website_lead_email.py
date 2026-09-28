@@ -17,6 +17,7 @@ from extensions import db
 from models import User, WebsiteBooking
 from rate_limit import _BUCKETS, _LOCK
 from routes import crm
+from workspace_helpers import enroll_in_legacy_workspace
 
 
 class CrmWebsiteLeadEmailTest(unittest.TestCase):
@@ -45,6 +46,7 @@ class CrmWebsiteLeadEmailTest(unittest.TestCase):
             admin.set_password("irrelevant-test-password")
             db.session.add(admin)
             db.session.commit()
+            self.workspace_id = enroll_in_legacy_workspace().id
 
     def tearDown(self):
         with self.app.app_context():
@@ -78,7 +80,9 @@ class CrmWebsiteLeadEmailTest(unittest.TestCase):
         self.assertEqual(response.status_code, 201, response.get_json())
         booking_id = response.get_json()["booking_id"]
         with self.app.app_context():
-            self.assertIsNotNone(db.session.get(WebsiteBooking, booking_id))
+            booking = db.session.get(WebsiteBooking, booking_id)
+            self.assertIsNotNone(booking)
+            self.assertEqual(booking.workspace_id, self.workspace_id)
 
         send_email.assert_called_once()
         recipients, subject, message = send_email.call_args.args

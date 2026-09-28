@@ -17,6 +17,7 @@ if str(BACKEND) not in sys.path:
 
 from extensions import db, jwt
 from models import Customer, Invoice, InvoiceItem, Quote, QuoteItem, User
+from workspace_helpers import enroll_in_legacy_workspace
 from routes import crm
 from schema_migrations import ensure_invoice_item_note_column
 
@@ -68,6 +69,7 @@ class CrmInvoiceItemNoteTest(unittest.TestCase):
                 )
             )
             db.session.commit()
+            enroll_in_legacy_workspace()
             self.quote_id = quote.id
             self.customer_id = customer.id
             self.token = create_access_token(

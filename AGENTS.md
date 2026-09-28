@@ -376,3 +376,11 @@
 ### LINE 相關環境變數
 - `LINE_CHANNEL_ACCESS_TOKEN`
 - `LINE_CHANNEL_SECRET`
+
+---
+
+## 2026-09 更新：多租戶（TaskGo）
+
+- 平台品牌為 TaskGo；「立翔水電行」是遷移而來的一個工作區（`workspace.is_legacy`）。設計、遷移與回滾見 `docs/taskgo-multitenancy.md`，iOS/上架見 `docs/taskgo-app-store.md`。
+- 授權以「工作區成員資格 + 工作區內角色」為準（`backend/tenancy.py`），`user.role` 只為回滾保留。前端以 `X-Workspace-Id` 指定公司，伺服器每次驗證。
+- 新增 API 必須標註 `workspace_required` / `account_required` / `public_endpoint`，查詢一律加 `workspace_id` 條件；`tests/test_workspace_isolation.py` 會檢查漏標的路由。

@@ -15,8 +15,10 @@ const RoleLabelContext = createContext({
 });
 
 export const RoleLabelProvider = ({ children }) => {
-  const { isAuthenticated, initializing } = useAuth();
+  const { isAuthenticated, initializing, user } = useAuth();
+  const activeWorkspaceId = user?.active_workspace_id ?? null;
   const [overrides, setOverrides] = useState({});
+  const [serverLabels, setServerLabels] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -25,9 +27,11 @@ export const RoleLabelProvider = ({ children }) => {
       const { data } = await api.get('settings/roles');
       const fetchedOverrides = data?.overrides ?? {};
       setOverrides(fetchedOverrides);
+      setServerLabels(data?.labels ?? null);
       return data;
     } catch (error) {
       setOverrides({});
+      setServerLabels(null);
       throw error;
     } finally {
       setLoading(false);
@@ -39,19 +43,21 @@ export const RoleLabelProvider = ({ children }) => {
       return;
     }
 
-    if (!isAuthenticated) {
+    if (!isAuthenticated || !activeWorkspaceId) {
       setOverrides({});
+      setServerLabels(null);
       return;
     }
 
     refresh().catch(() => {
       // 如果取得自訂角色名稱失敗，維持預設值即可。
     });
-  }, [isAuthenticated, initializing, refresh]);
+  }, [isAuthenticated, initializing, activeWorkspaceId, refresh]);
 
+  // Each company names its own roles (e.g. 現場人員 → 水電師傅).
   const labels = useMemo(
-    () => ({ ...defaultRoleLabels, ...overrides }),
-    [overrides],
+    () => ({ ...defaultRoleLabels, ...(serverLabels ?? {}), ...overrides }),
+    [serverLabels, overrides],
   );
 
   const options = useMemo(() => buildRoleOptions(labels), [labels]);
@@ -62,6 +68,7 @@ export const RoleLabelProvider = ({ children }) => {
       const { data } = await api.put(`settings/roles/${role}`, { label: trimmed });
       const nextOverrides = data?.overrides ?? {};
       setOverrides(nextOverrides);
+      setServerLabels(data?.labels ?? null);
       return data;
     },
     [],
@@ -72,6 +79,7 @@ export const RoleLabelProvider = ({ children }) => {
       const { data } = await api.delete(`settings/roles/${role}`);
       const nextOverrides = data?.overrides ?? {};
       setOverrides(nextOverrides);
+      setServerLabels(data?.labels ?? null);
       return data;
     },
     [],

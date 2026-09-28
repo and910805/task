@@ -41,6 +41,16 @@ function getApiBase() {
 const apiBase = getApiBase();
 console.log("[apiBase]", apiBase);
 
+export const resolveBackendUrl = (value) => {
+  if (!value || /^https?:\/\//i.test(value)) return value;
+  try {
+    const base = new URL(apiBase, window.location.origin);
+    return new URL(value, base.origin).toString();
+  } catch {
+    return value;
+  }
+};
+
 const api = axios.create({
   baseURL: apiBase,
   timeout: 15000,
@@ -59,16 +69,37 @@ const retryDelay = (retryCount, retryAfter) => {
   return 700 * (2 ** (retryCount - 1));
 };
 
+export const WORKSPACE_STORAGE_KEY = "active_workspace_id";
+export const AUTH_EXPIRED_EVENT = "taskgo:auth-expired";
+export const WORKSPACE_ACCESS_EVENT = "taskgo:workspace-access";
+
+export const getActiveWorkspaceId = () => {
+  try {
+    return localStorage.getItem(WORKSPACE_STORAGE_KEY) || null;
+  } catch {
+    return null;
+  }
+};
+
+const setHeader = (config, name, value) => {
+  config.headers = config.headers ?? {};
+  // axios v1 headers may be AxiosHeaders with .set()
+  if (typeof config.headers.set === "function") {
+    config.headers.set(name, value);
+  } else {
+    config.headers[name] = value;
+  }
+};
+
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("auth_token");
   if (token) {
-    config.headers = config.headers ?? {};
-    // axios v1 headers may be AxiosHeaders with .set()
-    if (typeof config.headers.set === "function") {
-      config.headers.set("Authorization", `Bearer ${token}`);
-    } else {
-      config.headers["Authorization"] = `Bearer ${token}`;
-    }
+    setHeader(config, "Authorization", `Bearer ${token}`);
+  }
+  // The server verifies membership of this company on every request.
+  const workspaceId = getActiveWorkspaceId();
+  if (workspaceId && !config.skipWorkspace) {
+    setHeader(config, "X-Workspace-Id", workspaceId);
   }
   return config;
 });
@@ -101,6 +132,13 @@ api.interceptors.response.use(
       );
       await new Promise((resolve) => window.setTimeout(resolve, delay));
       return api.request(config);
+    }
+
+    const code = error?.response?.data?.code;
+    if (status === 401 && localStorage.getItem("auth_token") && !config?.skipAuthExpiry) {
+      window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+    } else if (status === 403 && (code === "workspace_forbidden" || code === "no_workspace")) {
+      window.dispatchEvent(new CustomEvent(WORKSPACE_ACCESS_EVENT, { detail: { code } }));
     }
 
     if (isTimeout) {

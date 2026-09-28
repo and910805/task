@@ -1,4 +1,4 @@
-"""Blueprint for exporting 立翔水電行 reports."""
+"""Blueprint for exporting TaskGo workspace reports."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from decorators import role_required
 from models import Task, TaskAssignee, _with_download_token
 from storage import StorageError
+from tenancy import current_workspace, current_workspace_id
 
 
 export_bp = Blueprint("export", __name__)
@@ -62,6 +63,7 @@ def export_tasks():
             selectinload(Task.assignees).selectinload(TaskAssignee.user),
             selectinload(Task.assigner),
         )
+        .filter(Task.workspace_id == current_workspace_id())
         .order_by(Task.created_at.desc())
         .all()
     )
@@ -151,7 +153,7 @@ def export_tasks():
     stream.seek(0)
 
     filename = f"taskgo_tasks_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.xlsx"
-    relative_path = f"reports/{filename}"
+    relative_path = f"reports/ws{current_workspace_id()}/{filename}"
 
     storage = current_app.extensions.get("storage")
     if storage is None:
@@ -166,5 +168,20 @@ def export_tasks():
 @export_bp.get("/download/<path:filename>")
 @role_required("admin", "hq_staff", "site_supervisor")
 def download_export(filename: str):
-    return _serve_storage_file(f"reports/{filename}")
+    normalized = filename.replace("\\", "/").lstrip("/")
+    if not normalized or "/" in normalized or ".." in normalized:
+        return jsonify({"msg": "File not found"}), 404
+    scoped_path = f"reports/ws{current_workspace_id()}/{normalized}"
+    storage = current_app.extensions.get("storage")
+    if storage is not None and hasattr(storage, "local_path"):
+        try:
+            storage.local_path(scoped_path)
+            return _serve_storage_file(scoped_path)
+        except (FileNotFoundError, StorageError):
+            pass
+    workspace = current_workspace()
+    if workspace is not None and workspace.is_legacy:
+        # Reports generated before the workspace migration were unscoped.
+        return _serve_storage_file(f"reports/{normalized}")
+    return _serve_storage_file(scoped_path)
 

@@ -5,7 +5,7 @@ const announceUpdate = (registration) => {
 };
 
 export const registerServiceWorker = () => {
-  if (!('serviceWorker' in navigator) || !window.isSecureContext) {
+  if (window.location.protocol === 'capacitor:' || !('serviceWorker' in navigator) || !window.isSecureContext) {
     return;
   }
 

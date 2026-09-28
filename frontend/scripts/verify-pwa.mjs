@@ -34,8 +34,8 @@ for (const [file, size] of [['icons/icon-192.png', 192], ['icons/icon-512.png', 
 const manifest = JSON.parse(await readFile(resolve(publicDir, 'manifest.webmanifest'), 'utf8'));
 const serviceWorker = await readFile(resolve(publicDir, 'sw.js'), 'utf8');
 
-if (manifest.name !== '立翔水電行' || manifest.display !== 'standalone') {
-  throw new Error('Manifest must identify 立翔水電行 as a standalone app.');
+if (manifest.name !== 'TaskGo' || manifest.display !== 'standalone') {
+  throw new Error('Manifest must identify TaskGo as a standalone app.');
 }
 
 for (const size of ['192x192', '512x512']) {

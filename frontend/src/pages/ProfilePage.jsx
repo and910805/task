@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import api from '../api/client.js';
+import AccountSection from '../components/AccountSection.jsx';
 import AppHeader from '../components/AppHeader.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useRoleLabels } from '../context/RoleLabelContext.jsx';
@@ -330,6 +331,7 @@ const ProfilePage = () => {
           ) : null}
         </form>
       </section>
+      <AccountSection />
     </div>
   );
 };

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import api from '../api/client.js';
+import api, { resolveBackendUrl } from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
 import { defaultRoleLabels } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -421,10 +421,7 @@ const AdminPage = () => {
       const { data } = await api.get('export/tasks');
       const downloadUrl = data?.url;
       if (downloadUrl) {
-        const resolvedUrl = /^https?:\/\//i.test(downloadUrl)
-          ? downloadUrl
-          : new URL(downloadUrl, window.location.origin).toString();
-        window.open(resolvedUrl, '_blank', 'noopener');
+        window.open(resolveBackendUrl(downloadUrl), '_blank', 'noopener');
         setExportSuccess('報表匯出完成，已在新分頁開啟下載。');
       } else {
         setExportSuccess('報表已產生。');

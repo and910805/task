@@ -18,6 +18,7 @@ if str(BACKEND) not in sys.path:
 
 from extensions import db, jwt
 from models import Contract, ContractVersion, Customer, Quote, QuoteItem, QuoteVersion, User
+from workspace_helpers import enroll_in_legacy_workspace
 from routes import crm
 
 
@@ -80,6 +81,7 @@ class CrmContractWorkflowTest(unittest.TestCase):
                 )
             )
             db.session.commit()
+            enroll_in_legacy_workspace()
 
             self.quote_id = quote.id
             self.manager_token = create_access_token(

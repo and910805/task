@@ -25,14 +25,15 @@ import api from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
 import { managerRoles } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import { parseServerUtcDate } from '../utils/datetime.js';
 
 const HOUR_MS = 60 * 60 * 1000;
 const COMPLETE_STATUS = '已完成';
 
 const toLocalDateKey = (value) => {
   if (!value) return '';
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
+  const date = value instanceof Date ? value : parseServerUtcDate(value);
+  if (!date || Number.isNaN(date.getTime())) return '';
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
@@ -56,8 +57,8 @@ const toCompactCurrency = (value) => {
 
 const formatTaskTime = (value) => {
   if (!value) return '未設定時間';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '未設定時間';
+  const date = parseServerUtcDate(value);
+  if (!date) return '未設定時間';
   return date.toLocaleString('zh-TW', {
     month: '2-digit',
     day: '2-digit',
@@ -87,7 +88,7 @@ const taskIsOverdue = (task, now = new Date()) => {
   if (task.is_overdue) return true;
   const scheduledAt = taskScheduleAt(task);
   if (!scheduledAt) return false;
-  const timestamp = new Date(scheduledAt).getTime();
+  const timestamp = parseServerUtcDate(scheduledAt)?.getTime();
   return Number.isFinite(timestamp) && timestamp < now.getTime();
 };
 
@@ -108,8 +109,10 @@ const quoteStatusLabel = (status) =>
   }[status] || status || '未設定');
 
 const OperationsDashboardPage = () => {
-  const { user } = useAuth();
+  const { user, hasModule } = useAuth();
   const isManager = managerRoles.has(user?.role);
+  // Quotes/invoices are only available to companies whose CRM module is enabled.
+  const showCrm = isManager && hasModule('crm');
   const isWorker = user?.role === 'worker';
   const [tasks, setTasks] = useState([]);
   const [availableTasks, setAvailableTasks] = useState([]);
@@ -128,7 +131,7 @@ const OperationsDashboardPage = () => {
 
     const requests = [api.get('tasks/')];
     if (isWorker) requests.push(api.get('tasks/', { params: { available: 1 } }));
-    if (isManager) {
+    if (showCrm) {
       requests.push(api.get('crm/quotes', { params: { limit: 200 } }));
       requests.push(api.get('crm/invoices', { params: { limit: 200 } }));
     }
@@ -152,7 +155,7 @@ const OperationsDashboardPage = () => {
         setAvailableTasks([]);
       }
 
-      if (isManager) {
+      if (showCrm) {
         const quoteResult = results[cursor];
         const invoiceResult = results[cursor + 1];
         const crmFailed = quoteResult?.status !== 'fulfilled' || invoiceResult?.status !== 'fulfilled';
@@ -176,7 +179,7 @@ const OperationsDashboardPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [isManager, isWorker]);
+  }, [showCrm, isWorker]);
 
   useEffect(() => {
     loadDashboard();
@@ -203,7 +206,7 @@ const OperationsDashboardPage = () => {
     const timeAnomalies = [];
     for (const task of tasks) {
       for (const entry of Array.isArray(task.time_entries) ? task.time_entries : []) {
-        const startedAt = entry?.start_time ? new Date(entry.start_time) : null;
+        const startedAt = parseServerUtcDate(entry?.start_time);
         if (startedAt && !entry?.end_time && !Number.isNaN(startedAt.getTime())) {
           const hours = (now.getTime() - startedAt.getTime()) / HOUR_MS;
           const timer = { task, entry, hours };
@@ -237,7 +240,8 @@ const OperationsDashboardPage = () => {
     completedMissingPhotos.forEach((task) => addAttention(task, 50, '完工但缺少照片'));
     const attention = Array.from(attentionMap.values()).sort((a, b) => {
       if (a.score !== b.score) return b.score - a.score;
-      return new Date(taskScheduleAt(a.task) || 0) - new Date(taskScheduleAt(b.task) || 0);
+      return (parseServerUtcDate(taskScheduleAt(a.task))?.getTime() ?? 0)
+        - (parseServerUtcDate(taskScheduleAt(b.task))?.getTime() ?? 0);
     });
 
     const workloadMap = new Map();
@@ -317,11 +321,11 @@ const OperationsDashboardPage = () => {
       { id: 'closeout', label: '哪些完工資料不完整？', answer: closeoutAnswer, href: '/tasks', action: '檢查完工任務' },
       { id: 'staffing', label: isWorker ? '現在有工作可接嗎？' : '人力有沒有漏派？', answer: staffingAnswer, href: '/calendar', action: '查看排程' },
     ];
-    if (isManager) {
+    if (showCrm) {
       rows.push({ id: 'receivable', label: '還有多少款項未收？', answer: receivableAnswer, href: '/crm/quotes', action: '查看請款單' });
     }
     return rows;
-  }, [dashboard, isManager, isWorker]);
+  }, [dashboard, showCrm, isWorker]);
 
   const activeAssistant = assistantPresets.find((item) => item.id === assistantMode) || assistantPresets[0];
   const maxWorkload = Math.max(...dashboard.workload.map((row) => row.active), 1);
@@ -338,17 +342,17 @@ const OperationsDashboardPage = () => {
     { label: '逾期任務', value: dashboard.overdue.length, hint: dashboard.overdue.length ? '需要優先確認' : '目前無逾期', icon: AlertTriangle, tone: 'red' },
     { label: isWorker ? '可接任務' : '未指派', value: dashboard.unassigned.length, hint: isWorker ? '可自行接單' : '等待安排人員', icon: UserRoundX, tone: 'amber' },
     { label: '工時異常', value: dashboard.timeAnomalies.length, hint: '超時或未結束', icon: Clock3, tone: 'violet' },
-    isManager
+    showCrm
       ? { label: '待收款', value: toCompactCurrency(dashboard.outstandingTotal), hint: `${dashboard.outstandingInvoices.length} 張請款單`, icon: CircleDollarSign, tone: 'cyan' }
       : { label: '完工缺照片', value: dashboard.completedMissingPhotos.length, hint: '補齊後方便查核', icon: CameraOff, tone: 'cyan' },
   ];
 
   const quickActions = [
-    ...(isManager ? [{ to: '/tasks?new=1', icon: FilePlus2, label: '建立任務', detail: '新增工作並安排人員' }] : []),
+    ...(isManager ? [{ to: '/dispatch/new', icon: FilePlus2, label: '新增派工', detail: '建立工作並指派人員' }] : []),
     { to: '/tasks', icon: ClipboardList, label: '任務清單', detail: '更新進度與現場紀錄' },
     { to: '/calendar', icon: CalendarDays, label: '行事曆', detail: '查看今天與本週安排' },
     { to: '/attendance', icon: Clock3, label: '出勤中心', detail: '檢查工時與異常紀錄' },
-    ...(isManager ? [{ to: '/crm/quotes', icon: FileText, label: '報價請款', detail: '建立報價與追蹤收款' }] : []),
+    ...(showCrm ? [{ to: '/crm/quotes', icon: FileText, label: '報價請款', detail: '建立報價與追蹤收款' }] : []),
   ];
 
   return (
@@ -504,7 +508,7 @@ const OperationsDashboardPage = () => {
           </div>
         </div>
 
-        {isManager ? (
+        {showCrm ? (
           <div className="operations-section operations-finance-section">
             <div className="operations-section__header">
               <div><p className="operations-eyebrow">報價與收款</p><h2>業務待辦</h2></div>

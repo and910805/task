@@ -7,10 +7,14 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
+    "test": "node --test scripts/*.test.mjs",
     "verify:pwa": "node scripts/verify-pwa.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@capacitor/app": "8.1.1",
+    "@capacitor/core": "8.5.2",
+    "@capacitor/push-notifications": "8.1.2",
     "axios": "^1.19.0",
     "lucide-react": "^1.30.0",
     "react": "^19.1.1",

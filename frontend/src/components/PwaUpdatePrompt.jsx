@@ -36,7 +36,7 @@ function PwaUpdatePrompt() {
       <span>
         {updateQueued
           ? '新版會在您下次重新開啟 App 時套用。'
-          : '立翔水電行已有新版可用。'}
+          : 'TaskGo 已有新版可用。'}
       </span>
       {updateQueued ? (
         <button type="button" className="secondary-button" onClick={() => setUpdateQueued(false)}>

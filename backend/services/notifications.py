@@ -194,11 +194,18 @@ def _append_task_link(message: str, task: "Task") -> str:
         return message
 
     try:
-        url = f"{base}/tasks/{task.id}"
+        url = task_deep_link(base, task)
     except Exception:
         return message
     return f"{message}\n\n任務連結：{url}"
 
+
+
+def task_deep_link(base: str, task: "Task") -> str:
+    # The workspace id lets a member of several companies land in the right one.
+    workspace_id = getattr(task, "workspace_id", None)
+    suffix = f"?ws={workspace_id}" if workspace_id else ""
+    return f"{base}/tasks/{task.id}{suffix}"
 
 
 def _append_task_link_line(message: str, task: "Task") -> str:
@@ -213,7 +220,7 @@ def _append_task_link_line(message: str, task: "Task") -> str:
         return message
 
     try:
-        url = f"{base}/tasks/{task.id}"
+        url = task_deep_link(base, task)
     except Exception:
         return message
     return f"{message}\n\n任務連結：{url}"
@@ -418,7 +425,7 @@ def _default_email_html(subject: str, message: str) -> str:
         <div style="font-size:14px;line-height:1.75;white-space:normal;">{safe_message}</div>
         <hr style="border:none;border-top:1px solid #e5e7eb;margin:18px 0;">
         <div style="font-size:12px;color:#6b7280;">
-          This is an automated notification email from TaskGo / 立翔水電行.
+          This is an automated notification email from TaskGo.
         </div>
       </div>
     </div>
@@ -429,7 +436,7 @@ def _default_email_html(subject: str, message: str) -> str:
 
 def _default_email_text(message: str) -> str:
     base = (message or "").strip()
-    footer = "This is an automated notification email from TaskGo / 立翔水電行."
+    footer = "This is an automated notification email from TaskGo."
     return f"{base}\n\n---\n{footer}" if base else footer
 
 
@@ -574,6 +581,13 @@ def _send_email(recipient: str, subject: str, message: str) -> None:
     send_email_async(recipient, subject, message)
 
 
+def _member_role(user: "User", task: "Task") -> str | None:
+    """The user's role in the task's company (global role only as a fallback)."""
+    from tenancy import workspace_role_for_user
+
+    return workspace_role_for_user(user.id, getattr(task, "workspace_id", None)) or getattr(user, "role", None)
+
+
 def _iter_unique_users(users: Sequence["User"]) -> Iterable["User"]:
     seen: set[int] = set()
     for user in users:
@@ -661,7 +675,7 @@ def _dispatch_notifications(
                 if (
                     task is not None
                     and email_kind == "assignment"
-                    and getattr(user, "role", None) == "worker"
+                    and _member_role(user, task) == "worker"
                 ):
                     try:
                         sent = push_task_action_flex(str(user.notification_value), task)
@@ -689,6 +703,23 @@ def notify_task_assignment(task: "Task", users: Sequence["User"], *, assigned_by
     summary = _format_task_summary(task)
     message = f"{actor}。\n{summary}"
     _dispatch_notifications(users, "任務指派通知", message, email_kind="assignment", task=task)
+    _push_assignment(task, users)
+
+
+def _push_assignment(task: "Task", users: Sequence["User"]) -> None:
+    """iOS push; tapping it opens the task in the right company."""
+    try:
+        from services.push import push_to_users
+
+        body = task.location or "點開查看工作內容"
+        push_to_users(
+            [user.id for user in users],
+            f"新派工：{task.title}",
+            body,
+            {"task_id": task.id, "workspace_id": getattr(task, "workspace_id", None)},
+        )
+    except Exception:
+        current_app.logger.exception("Failed to queue push notification")
 
 
 def notify_task_status_change(

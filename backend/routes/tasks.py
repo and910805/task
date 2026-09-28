@@ -3,13 +3,12 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, current_app, jsonify, redirect, request, send_file
-from flask_jwt_extended import get_jwt, jwt_required
 from sqlalchemy import func, or_
 from sqlalchemy.orm import selectinload
 
 from decorators import role_required
 from extensions import db
-from models import Attachment, Task, TaskAssignee, TaskUpdate, User
+from models import Attachment, Task, TaskAssignee, TaskUpdate, User, WorkspaceMember
 from services.attachments import (
     create_file_attachment,
     create_signature_attachment,
@@ -20,6 +19,7 @@ from services import (
     notify_task_status_change,
 )
 from storage import StorageError
+from tenancy import current_role, current_workspace, current_workspace_id, workspace_required, workspace_role_for_user
 from utils import get_current_user_id, task_is_accessible
 
 
@@ -44,6 +44,26 @@ def _task_assigned_user_ids(task: Task) -> set[int]:
         if assignment.user_id:
             ids.add(assignment.user_id)
     return ids
+
+
+def _workspace_tasks():
+    """Tasks of the request workspace only; every task lookup starts here."""
+    return Task.query.filter(Task.workspace_id == current_workspace_id())
+
+
+def _workspace_task_or_404(task_id: int) -> Task:
+    return _workspace_tasks().filter(Task.id == task_id).first_or_404()
+
+
+def _member_role(user: User) -> str | None:
+    return workspace_role_for_user(user.id)
+
+
+def _admins_assignable() -> bool:
+    # The migrated company keeps its rule that admins are never dispatched;
+    # small new companies often have the owner doing field work.
+    workspace = current_workspace()
+    return bool(workspace and not workspace.is_legacy)
 
 
 def _ensure_task_permission(task: Task, role: str | None, user_id: int | None, *, message: str = "You do not have access to this task"):
@@ -293,15 +313,24 @@ def _load_assignee_users(assignee_ids: list[int]):
     if not assignee_ids:
         return {}, None
 
-    users = User.query.filter(User.id.in_(assignee_ids)).all()
+    users = (
+        User.query.join(WorkspaceMember, WorkspaceMember.user_id == User.id)
+        .filter(
+            User.id.in_(assignee_ids),
+            WorkspaceMember.workspace_id == current_workspace_id(),
+            WorkspaceMember.status == "active",
+        )
+        .all()
+    )
     user_map = {user.id: user for user in users}
     missing = [user_id for user_id in assignee_ids if user_id not in user_map]
     if missing:
         return {}, (jsonify({"msg": f"User {missing[0]} not found"}), 404)
 
-    for user in users:
-        if user.role == "admin":
-            return {}, (jsonify({"msg": "Cannot assign tasks to admin users"}), 400)
+    if not _admins_assignable():
+        for user in users:
+            if _member_role(user) == "admin":
+                return {}, (jsonify({"msg": "Cannot assign tasks to admin users"}), 400)
 
     return user_map, None
 
@@ -386,6 +415,7 @@ def _find_schedule_conflicts(
             selectinload(Task.assignee),
         )
         .outerjoin(TaskAssignee, TaskAssignee.task_id == Task.id)
+        .filter(Task.workspace_id == current_workspace_id())
         .filter(Task.archived_at.is_(None))
         .filter(Task.status != "已完成")
         .filter(
@@ -537,12 +567,12 @@ def _serialize_task_for_viewer(
 
 
 @tasks_bp.get("/")
-@jwt_required()
+@workspace_required()
 def list_tasks():
     user_id = get_current_user_id()
     if user_id is None:
         return jsonify({"msg": "Invalid authentication token"}), 401
-    role = (get_jwt() or {}).get("role")
+    role = current_role()
 
     query = Task.query.options(
         selectinload(Task.attachments),
@@ -550,7 +580,9 @@ def list_tasks():
         selectinload(Task.assignees).selectinload(TaskAssignee.user),
         selectinload(Task.assigner),
         selectinload(Task.assignee),
-    ).outerjoin(TaskAssignee, TaskAssignee.task_id == Task.id)
+    ).outerjoin(TaskAssignee, TaskAssignee.task_id == Task.id).filter(
+        Task.workspace_id == current_workspace_id()
+    )
 
     available_only = str(request.args.get("available") or "").strip().lower() in {
         "1",
@@ -660,6 +692,7 @@ def _handle_create_task(data, creator_id):
         return jsonify({"msg": msg, "conflicts": details}), 409
 
     task = Task(
+        workspace_id=current_workspace_id(),
         title=title,
         description=description,
         status=status_raw,
@@ -710,16 +743,17 @@ def create_task_legacy():
 
 
 @tasks_bp.get("/<int:task_id>")
-@jwt_required()
+@workspace_required()
 def get_task(task_id: int):
     task = (
-        Task.query.options(
+        _workspace_tasks().options(
             selectinload(Task.assignees).selectinload(TaskAssignee.user),
             selectinload(Task.assignee),
         )
-        .get_or_404(task_id)
+        .filter(Task.id == task_id)
+        .first_or_404()
     )
-    role = (get_jwt() or {}).get("role")
+    role = current_role()
     user_id = get_current_user_id()
     permission_error = _ensure_task_permission(
         task, role, user_id, message="You do not have access to this task"
@@ -737,6 +771,7 @@ def get_task(task_id: int):
                 selectinload(Task.assignee),
             )
             .outerjoin(TaskAssignee, TaskAssignee.task_id == Task.id)
+            .filter(Task.workspace_id == current_workspace_id())
             .filter(Task.archived_at.is_(None))
             .filter(Task.status != "已完成")
             .filter(
@@ -754,16 +789,17 @@ def get_task(task_id: int):
 
 
 @tasks_bp.post("/<int:task_id>/assignees/add")
-@jwt_required()
+@workspace_required()
 def add_task_assignees(task_id: int):
     actor_id = get_current_user_id()
-    role = (get_jwt() or {}).get("role")
+    role = current_role()
     task = (
-        Task.query.options(
+        _workspace_tasks().options(
             selectinload(Task.assignees).selectinload(TaskAssignee.user),
             selectinload(Task.assignee),
         )
-        .get_or_404(task_id)
+        .filter(Task.id == task_id)
+        .first_or_404()
     )
 
     permission_error = _ensure_task_assignee_add_permission(task, role, actor_id)
@@ -786,7 +822,7 @@ def add_task_assignees(task_id: int):
         worker_map, error = _load_assignee_users(target_ids)
         if error:
             return error
-        non_worker = [u.username for u in worker_map.values() if u.role != "worker"]
+        non_worker = [u.username for u in worker_map.values() if _member_role(u) != "worker"]
         if non_worker:
             return jsonify({"msg": "Workers can only add worker assignees"}), 403
 
@@ -805,12 +841,12 @@ def add_task_assignees(task_id: int):
 
 
 @tasks_bp.post("/<int:task_id>/accept")
-@jwt_required()
+@workspace_required()
 def accept_task(task_id: int):
     user_id = get_current_user_id()
     if user_id is None:
         return jsonify({"msg": "Invalid authentication token"}), 401
-    role = (get_jwt() or {}).get("role")
+    role = current_role()
     if role != "worker":
         return jsonify({"msg": "Only workers can accept tasks"}), 403
 
@@ -818,6 +854,7 @@ def accept_task(task_id: int):
     updated = (
         Task.query.filter(
             Task.id == task_id,
+            Task.workspace_id == current_workspace_id(),
             Task.archived_at.is_(None),
             Task.status == "尚未接單",
             Task.assigned_to_id.is_(None),
@@ -833,7 +870,7 @@ def accept_task(task_id: int):
     )
 
     if updated == 0:
-        task = Task.query.get(task_id)
+        task = _workspace_tasks().filter(Task.id == task_id).first()
         if task is None:
             return jsonify({"msg": "Task not found"}), 404
         return jsonify({"msg": "任務已被接走或狀態不符合接單條件"}), 409
@@ -981,13 +1018,14 @@ def _apply_task_updates(task: Task, data: dict):
 @role_required("site_supervisor", "hq_staff")
 def update_task(task_id: int):
     actor_id = get_current_user_id()
-    role = (get_jwt() or {}).get("role")
+    role = current_role()
     task = (
-        Task.query.options(
+        _workspace_tasks().options(
             selectinload(Task.assignees).selectinload(TaskAssignee.user),
             selectinload(Task.assignee),
         )
-        .get_or_404(task_id)
+        .filter(Task.id == task_id)
+        .first_or_404()
     )
     permission_error = _ensure_task_permission(
         task, role, actor_id, message="You cannot update this task"
@@ -1009,13 +1047,14 @@ def update_task(task_id: int):
 @role_required("site_supervisor", "hq_staff")
 def update_task_patch(task_id: int):
     actor_id = get_current_user_id()
-    role = (get_jwt() or {}).get("role")
+    role = current_role()
     task = (
-        Task.query.options(
+        _workspace_tasks().options(
             selectinload(Task.assignees).selectinload(TaskAssignee.user),
             selectinload(Task.assignee),
         )
-        .get_or_404(task_id)
+        .filter(Task.id == task_id)
+        .first_or_404()
     )
     permission_error = _ensure_task_permission(
         task, role, actor_id, message="You cannot update this task"
@@ -1037,8 +1076,8 @@ def update_task_patch(task_id: int):
 @role_required("admin", "site_supervisor", "hq_staff")
 def archive_task(task_id: int):
     actor_id = get_current_user_id()
-    role = (get_jwt() or {}).get("role")
-    task = Task.query.get_or_404(task_id)
+    role = current_role()
+    task = _workspace_task_or_404(task_id)
     permission_error = _ensure_task_permission(
         task, role, actor_id, message="You cannot archive this task"
     )
@@ -1055,8 +1094,8 @@ def archive_task(task_id: int):
 @role_required("admin", "site_supervisor", "hq_staff")
 def restore_task(task_id: int):
     actor_id = get_current_user_id()
-    role = (get_jwt() or {}).get("role")
-    task = Task.query.get_or_404(task_id)
+    role = current_role()
+    task = _workspace_task_or_404(task_id)
     permission_error = _ensure_task_permission(
         task, role, actor_id, message="You cannot restore this task"
     )
@@ -1073,15 +1112,16 @@ def restore_task(task_id: int):
 @role_required("admin")
 def delete_task(task_id: int):
     actor_id = get_current_user_id()
-    role = (get_jwt() or {}).get("role")
+    role = current_role()
     task = (
-        Task.query.options(
+        _workspace_tasks().options(
             selectinload(Task.assignees).selectinload(TaskAssignee.user),
             selectinload(Task.attachments),
             selectinload(Task.updates),
             selectinload(Task.assignee),
         )
-        .get_or_404(task_id)
+        .filter(Task.id == task_id)
+        .first_or_404()
     )
     permission_error = _ensure_task_permission(
         task, role, actor_id, message="You cannot delete this task"
@@ -1109,16 +1149,16 @@ def delete_task(task_id: int):
 
 
 @tasks_bp.post("/<int:task_id>/updates")
-@jwt_required()
+@workspace_required()
 def add_update(task_id: int):
-    task = Task.query.get_or_404(task_id)
+    task = _workspace_task_or_404(task_id)
 
     data = request.get_json(silent=True) or {}
     status = data.get("status")
     note = data.get("note")
 
     user_id = get_current_user_id()
-    role = (get_jwt() or {}).get("role")
+    role = current_role()
 
     permission_error = _ensure_task_permission(
         task, role, user_id, message="You cannot update this task"
@@ -1188,10 +1228,10 @@ def add_update(task_id: int):
 
 
 @tasks_bp.post("/<int:task_id>/time/start")
-@jwt_required()
+@workspace_required()
 def start_time_tracking(task_id: int):
-    task = Task.query.get_or_404(task_id)
-    role = (get_jwt() or {}).get("role")
+    task = _workspace_task_or_404(task_id)
+    role = current_role()
     user_id = get_current_user_id()
     permission_error = _ensure_task_permission(
         task, role, user_id, message="You cannot start timing for this task"
@@ -1222,10 +1262,10 @@ def start_time_tracking(task_id: int):
 
 
 @tasks_bp.post("/<int:task_id>/time/stop")
-@jwt_required()
+@workspace_required()
 def stop_time_tracking(task_id: int):
-    task = Task.query.get_or_404(task_id)
-    role = (get_jwt() or {}).get("role")
+    task = _workspace_task_or_404(task_id)
+    role = current_role()
     user_id = get_current_user_id()
     permission_error = _ensure_task_permission(
         task, role, user_id, message="You cannot stop timing for this task"
@@ -1255,16 +1295,17 @@ def stop_time_tracking(task_id: int):
 
 
 @tasks_bp.post("/<int:task_id>/time/manual")
-@jwt_required()
+@workspace_required()
 def create_manual_time_entries(task_id: int):
     task = (
-        Task.query.options(
+        _workspace_tasks().options(
             selectinload(Task.assignees).selectinload(TaskAssignee.user),
             selectinload(Task.assignee),
         )
-        .get_or_404(task_id)
+        .filter(Task.id == task_id)
+        .first_or_404()
     )
-    role = (get_jwt() or {}).get("role")
+    role = current_role()
     actor_id = get_current_user_id()
 
     permission_error = _ensure_time_manage_permission(task, role, actor_id)
@@ -1284,7 +1325,7 @@ def create_manual_time_entries(task_id: int):
     user_map, error = _load_assignee_users(user_ids)
     if error:
         return error
-    if role == "worker" and any(user.role != "worker" for user in user_map.values()):
+    if role == "worker" and any(_member_role(user) != "worker" for user in user_map.values()):
         return jsonify({"msg": "Workers can only create time entries for worker assignees"}), 403
 
     start_time_raw = data.get("start_time")
@@ -1339,7 +1380,7 @@ def create_manual_time_entries(task_id: int):
 @tasks_bp.patch("/<int:task_id>/time/<int:entry_id>")
 @role_required("admin")
 def update_time_entry(task_id: int, entry_id: int):
-    task = Task.query.get_or_404(task_id)
+    task = _workspace_task_or_404(task_id)
     entry = TaskUpdate.query.filter_by(id=entry_id, task_id=task_id).first()
     if entry is None:
         return jsonify({"msg": "Time entry not found"}), 404
@@ -1389,9 +1430,9 @@ def update_time_entry(task_id: int, entry_id: int):
             entry.user_id = None
         else:
             user = User.query.get(new_user_id)
-            if user is None:
+            if user is None or workspace_role_for_user(user.id) is None:
                 return jsonify({"msg": "User not found"}), 404
-            if user.role == "admin":
+            if not _admins_assignable() and _member_role(user) == "admin":
                 return jsonify({"msg": "Cannot assign work hours to admin users"}), 400
             entry.user_id = user.id
 
@@ -1407,10 +1448,10 @@ def update_time_entry(task_id: int, entry_id: int):
 
 
 @tasks_bp.post("/<int:task_id>/attachments")
-@jwt_required()
+@workspace_required()
 def upload_attachment(task_id: int):
-    task = Task.query.get_or_404(task_id)
-    role = (get_jwt() or {}).get("role")
+    task = _workspace_task_or_404(task_id)
+    role = current_role()
     user_id = get_current_user_id()
     permission_error = _ensure_task_permission(
         task, role, user_id, message="You cannot upload for this task"
@@ -1450,16 +1491,20 @@ def upload_attachment(task_id: int):
 
 
 @tasks_bp.get("/attachments/<path:filename>")
-@jwt_required()
+@workspace_required()
 def get_attachment(filename: str):
     normalized = filename.replace("\\", "/").lstrip("/")
-    attachment = Attachment.query.filter_by(file_path=normalized).first()
+    attachment = (
+        Attachment.query.join(Task, Task.id == Attachment.task_id)
+        .filter(Attachment.file_path == normalized, Task.workspace_id == current_workspace_id())
+        .first()
+    )
     if attachment is None:
         return jsonify({"msg": "File not found"}), 404
 
     permission_error = _ensure_task_permission(
         attachment.task,
-        (get_jwt() or {}).get("role"),
+        current_role(),
         get_current_user_id(),
         message="You cannot access this attachment",
     )

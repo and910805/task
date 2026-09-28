@@ -88,10 +88,15 @@ class User(db.Model):
         return check_password_hash(self.password_hash, password)
 
     def to_dict(self) -> dict:
+        # Inside a workspace request the visible role is the membership role;
+        # the legacy global column is kept only for rollback compatibility.
+        from tenancy import workspace_role_for_user
+
+        role = workspace_role_for_user(self.id) or self.role
         try:
-            role_label = RoleLabel.get_labels().get(self.role, self.role)
+            role_label = RoleLabel.get_labels().get(role, role)
         except Exception:
-            role_label = ROLE_LABEL_DEFAULTS.get(self.role, self.role)
+            role_label = ROLE_LABEL_DEFAULTS.get(role, role)
 
         notification_value = None
         notification_hint = None
@@ -106,7 +111,7 @@ class User(db.Model):
         return {
             "id": self.id,
             "username": self.username,
-            "role": self.role,
+            "role": role,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "role_label": role_label,
             "notification_type": self.notification_type,
@@ -120,6 +125,7 @@ class Task(db.Model):
     __tablename__ = "task"
 
     id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id"), nullable=True, index=True)
     title = db.Column(db.String(150), nullable=False)
     description = db.Column(db.Text, nullable=False)
     status = db.Column(db.String(32), nullable=False, default="尚未接單")
@@ -186,6 +192,8 @@ class Task(db.Model):
         return self.due_date < reference
 
     def to_dict(self) -> dict:
+        from tenancy import workspace_role_for_user
+
         time_entries = [
             update.to_time_dict() for update in self.updates if update.start_time
         ]
@@ -199,18 +207,20 @@ class Task(db.Model):
             user = assignment.user
             if not user:
                 continue
+            member_role = workspace_role_for_user(user.id, self.workspace_id) or user.role
             assigned_users.append(
                 {
                     "id": user.id,
                     "username": user.username,
-                    "role": user.role,
-                    "role_label": role_labels.get(user.role, user.role),
+                    "role": member_role,
+                    "role_label": role_labels.get(member_role, member_role),
                 }
             )
         if assigned_users:
             assigned_users.sort(key=lambda item: item["username"].lower())
         return {
             "id": self.id,
+            "workspace_id": self.workspace_id,
             "title": self.title,
             "description": self.description,
             "status": self.status,
@@ -361,6 +371,7 @@ class MaterialItem(db.Model):
     __tablename__ = "material_item"
 
     id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id"), nullable=True, index=True)
     name = db.Column(db.String(255), nullable=False)
     spec = db.Column(db.String(255))
     unit = db.Column(db.String(32), nullable=False, default="個")
@@ -375,7 +386,7 @@ class MaterialItem(db.Model):
     stock_transactions = db.relationship("MaterialStockTransaction", back_populates="material_item")
 
     __table_args__ = (
-        UniqueConstraint("name", "spec", name="uq_material_item_name_spec"),
+        UniqueConstraint("workspace_id", "name", "spec", name="uq_material_item_workspace_name_spec"),
     )
 
     def to_dict(self) -> dict:
@@ -396,6 +407,7 @@ class MaterialPurchaseBatch(db.Model):
     __tablename__ = "material_purchase_batch"
 
     id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id"), nullable=True, index=True)
     supplier_name = db.Column(db.String(255), nullable=False)
     purchase_date = db.Column(db.Date, nullable=False)
     statement_month = db.Column(db.String(7), nullable=False)
@@ -527,6 +539,7 @@ class MaterialStockTransaction(db.Model):
     __tablename__ = "material_stock_txn"
 
     id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id"), nullable=True, index=True)
     material_item_id = db.Column(db.Integer, db.ForeignKey("material_item.id"), nullable=False, index=True)
     txn_type = db.Column(db.String(32), nullable=False)  # purchase / task_use / adjustment
     qty_delta = db.Column(db.Float, nullable=False, default=0.0)
@@ -575,7 +588,8 @@ class Customer(db.Model):
     __tablename__ = "customer"
 
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(255), nullable=False, unique=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id"), nullable=True, index=True)
+    name = db.Column(db.String(255), nullable=False)
     tax_id = db.Column(db.String(64))
     email = db.Column(db.String(255))
     phone = db.Column(db.String(64))
@@ -584,6 +598,8 @@ class Customer(db.Model):
     created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("workspace_id", "name", name="uq_customer_workspace_name"),)
 
     contacts = db.relationship("Contact", back_populates="customer", cascade="all, delete-orphan")
     quotes = db.relationship("Quote", back_populates="customer")
@@ -608,6 +624,7 @@ class Contact(db.Model):
     __tablename__ = "contact"
 
     id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id"), nullable=True, index=True)
     customer_id = db.Column(db.Integer, db.ForeignKey("customer.id", ondelete="CASCADE"), nullable=False)
     name = db.Column(db.String(255), nullable=False)
     title = db.Column(db.String(120))
@@ -645,6 +662,7 @@ class WebsiteBooking(db.Model):
     __tablename__ = "website_booking"
 
     id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id"), nullable=True, index=True)
     name = db.Column(db.String(255), nullable=False)
     phone = db.Column(db.String(64), nullable=False)
     email = db.Column(db.String(255))
@@ -707,7 +725,8 @@ class Quote(db.Model):
     __tablename__ = "quote"
 
     id = db.Column(db.Integer, primary_key=True)
-    quote_no = db.Column(db.String(64), nullable=False, unique=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id"), nullable=True, index=True)
+    quote_no = db.Column(db.String(64), nullable=False)
     status = db.Column(db.String(32), nullable=False, default="draft")
     customer_id = db.Column(db.Integer, db.ForeignKey("customer.id"), nullable=False)
     contact_id = db.Column(db.Integer, db.ForeignKey("contact.id"), nullable=True)
@@ -736,6 +755,8 @@ class Quote(db.Model):
     )
     invoices = db.relationship("Invoice", back_populates="quote")
     contracts = db.relationship("Contract", back_populates="quote")
+
+    __table_args__ = (UniqueConstraint("workspace_id", "quote_no", name="uq_quote_workspace_quote_no"),)
 
     def to_dict(self) -> dict:
         active_invoice = next(
@@ -849,7 +870,8 @@ class Contract(db.Model):
     __tablename__ = "contract"
 
     id = db.Column(db.Integer, primary_key=True)
-    contract_no = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id"), nullable=True, index=True)
+    contract_no = db.Column(db.String(64), nullable=False, index=True)
     quote_id = db.Column(db.Integer, db.ForeignKey("quote.id", ondelete="RESTRICT"), nullable=False, index=True)
     quote_version_no = db.Column(db.Integer, nullable=False)
     status = db.Column(db.String(32), nullable=False, default="draft")
@@ -884,6 +906,8 @@ class Contract(db.Model):
         cascade="all, delete-orphan",
         order_by="ContractVersion.version_no.desc()",
     )
+
+    __table_args__ = (UniqueConstraint("workspace_id", "contract_no", name="uq_contract_workspace_contract_no"),)
 
     def to_dict(self) -> dict:
         return {
@@ -956,7 +980,8 @@ class Invoice(db.Model):
     __tablename__ = "invoice"
 
     id = db.Column(db.Integer, primary_key=True)
-    invoice_no = db.Column(db.String(64), nullable=False, unique=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id"), nullable=True, index=True)
+    invoice_no = db.Column(db.String(64), nullable=False)
     status = db.Column(db.String(32), nullable=False, default="draft")
     customer_id = db.Column(db.Integer, db.ForeignKey("customer.id"), nullable=False)
     contact_id = db.Column(db.Integer, db.ForeignKey("contact.id"), nullable=True)
@@ -987,6 +1012,8 @@ class Invoice(db.Model):
         cascade="all, delete-orphan",
         order_by="InvoicePaymentRecord.payment_date.desc(), InvoicePaymentRecord.id.desc()",
     )
+
+    __table_args__ = (UniqueConstraint("workspace_id", "invoice_no", name="uq_invoice_workspace_invoice_no"),)
 
     def to_dict(self) -> dict:
         payment_total = round(sum(float(row.amount or 0.0) for row in self.payment_records), 2)
@@ -1108,7 +1135,8 @@ class ServiceCatalogItem(db.Model):
     __tablename__ = "service_catalog_item"
 
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(255), nullable=False, unique=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id"), nullable=True, index=True)
+    name = db.Column(db.String(255), nullable=False)
     unit = db.Column(db.String(32), nullable=False, default="式")
     unit_price = db.Column(db.Float, nullable=False, default=0.0)
     category = db.Column(db.String(64))
@@ -1116,6 +1144,8 @@ class ServiceCatalogItem(db.Model):
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("workspace_id", "name", name="uq_service_catalog_workspace_name"),)
 
     def to_dict(self) -> dict:
         return {
@@ -1135,6 +1165,7 @@ class AuditLog(db.Model):
     __tablename__ = "audit_log"
 
     id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id"), nullable=True, index=True)
     module = db.Column(db.String(64), nullable=False, index=True)
     action = db.Column(db.String(64), nullable=False, index=True)
     entity_type = db.Column(db.String(64), nullable=False, index=True)
@@ -1203,6 +1234,11 @@ class RoleLabel(db.Model):
 
     @classmethod
     def get_labels(cls) -> dict:
+        from tenancy import current_workspace_role_labels
+
+        workspace_labels = current_workspace_role_labels()
+        if workspace_labels is not None:
+            return workspace_labels
         cache = cls._cache_store()
         combined = cache.get("combined") if cache else None
         if combined is not None:
@@ -1232,10 +1268,13 @@ class SiteLocation(db.Model):
     __tablename__ = "site_location"
 
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(255), unique=True, nullable=False)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id"), nullable=True, index=True)
+    name = db.Column(db.String(255), nullable=False)
     map_url = db.Column(db.String(512))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("workspace_id", "name", name="uq_site_location_workspace_name"),)
 
     def to_dict(self) -> dict:
         return {
@@ -1287,3 +1326,177 @@ class SiteSetting(db.Model):
         db.session.delete(record)
         db.session.commit()
         return True
+
+
+WORKSPACE_ROLES = ("admin", "site_supervisor", "hq_staff", "worker")
+WORKSPACE_MANAGER_ROLES = ("admin", "site_supervisor", "hq_staff")
+WORKSPACE_ROLE_LABEL_DEFAULTS = {
+    "worker": "現場人員",
+    "site_supervisor": "主管",
+    "hq_staff": "辦公室人員",
+    "admin": "管理員",
+}
+WORKSPACE_PLANS = {
+    # Plan codes only define limits; no payment provider is wired up.
+    "legacy": {"label": "既有客戶", "max_members": None},
+    "trial": {"label": "試用", "max_members": 15},
+    "free": {"label": "免費", "max_members": 5},
+    "pro": {"label": "專業", "max_members": 200},
+}
+
+
+class Workspace(db.Model):
+    __tablename__ = "workspace"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    slug = db.Column(db.String(64), unique=True, nullable=False)
+    industry = db.Column(db.String(32))
+    owner_user_id = db.Column(db.Integer, db.ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
+    plan = db.Column(db.String(16), nullable=False, default="trial")
+    status = db.Column(db.String(16), nullable=False, default="active")
+    is_legacy = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    members = db.relationship("WorkspaceMember", back_populates="workspace", cascade="all, delete-orphan")
+
+    def plan_limits(self) -> dict:
+        return WORKSPACE_PLANS.get(self.plan, WORKSPACE_PLANS["free"])
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "slug": self.slug,
+            "industry": self.industry,
+            "owner_user_id": self.owner_user_id,
+            "plan": self.plan,
+            "plan_label": self.plan_limits()["label"],
+            "max_members": self.plan_limits()["max_members"],
+            "status": self.status,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class WorkspaceMember(db.Model):
+    __tablename__ = "workspace_member"
+
+    id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = db.Column(db.String(32), nullable=False, default="worker")
+    status = db.Column(db.String(16), nullable=False, default="active")
+    joined_at = db.Column(db.DateTime, default=datetime.utcnow)
+    last_used_at = db.Column(db.DateTime)
+
+    workspace = db.relationship("Workspace", back_populates="members")
+    user = db.relationship("User")
+
+    __table_args__ = (UniqueConstraint("workspace_id", "user_id", name="uq_workspace_member"),)
+
+    @property
+    def is_owner(self) -> bool:
+        return bool(self.workspace and self.workspace.owner_user_id == self.user_id)
+
+    def to_dict(self) -> dict:
+        return {
+            "workspace_id": self.workspace_id,
+            "user_id": self.user_id,
+            "role": self.role,
+            "is_owner": self.is_owner,
+            "status": self.status,
+            "joined_at": self.joined_at.isoformat() if self.joined_at else None,
+        }
+
+
+class WorkspaceInvitation(db.Model):
+    __tablename__ = "workspace_invitation"
+
+    id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id", ondelete="CASCADE"), nullable=False, index=True)
+    code_hash = db.Column(db.String(64), unique=True, nullable=False)
+    code_hint = db.Column(db.String(8))
+    role = db.Column(db.String(32), nullable=False, default="worker")
+    label = db.Column(db.String(120))
+    invited_by_id = db.Column(db.Integer, db.ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    max_uses = db.Column(db.Integer, nullable=False, default=1)
+    used_count = db.Column(db.Integer, nullable=False, default=0)
+    revoked_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    workspace = db.relationship("Workspace")
+    invited_by = db.relationship("User")
+
+    def is_usable(self, now: datetime | None = None) -> bool:
+        reference = now or datetime.utcnow()
+        return self.revoked_at is None and self.expires_at > reference and self.used_count < self.max_uses
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "role": self.role,
+            "label": self.label,
+            "code_hint": self.code_hint,
+            "invited_by": self.invited_by.username if self.invited_by else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "max_uses": self.max_uses,
+            "used_count": self.used_count,
+            "revoked": self.revoked_at is not None,
+            "usable": self.is_usable(),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class WorkspaceSetting(db.Model):
+    __tablename__ = "workspace_setting"
+
+    id = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id", ondelete="CASCADE"), nullable=False, index=True)
+    key = db.Column(db.String(64), nullable=False)
+    value = db.Column(db.Text, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("workspace_id", "key", name="uq_workspace_setting"),)
+
+    @classmethod
+    def get_record(cls, workspace_id: int, key: str) -> Optional["WorkspaceSetting"]:
+        return cls.query.filter_by(workspace_id=workspace_id, key=key).first()
+
+    @classmethod
+    def get_value(cls, workspace_id: int, key: str, default: Optional[str] = None) -> Optional[str]:
+        record = cls.get_record(workspace_id, key)
+        return default if record is None else record.value
+
+    @classmethod
+    def set_value(cls, workspace_id: int, key: str, value: str, *, commit: bool = True) -> "WorkspaceSetting":
+        record = cls.get_record(workspace_id, key)
+        if record is None:
+            record = cls(workspace_id=workspace_id, key=key, value=value)
+            db.session.add(record)
+        else:
+            record.value = value
+        if commit:
+            db.session.commit()
+        return record
+
+    @classmethod
+    def delete_value(cls, workspace_id: int, key: str) -> bool:
+        record = cls.get_record(workspace_id, key)
+        if record is None:
+            return False
+        db.session.delete(record)
+        db.session.commit()
+        return True
+
+
+class DeviceToken(db.Model):
+    __tablename__ = "device_token"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True)
+    platform = db.Column(db.String(16), nullable=False, default="ios")
+    token = db.Column(db.String(255), unique=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    last_seen_at = db.Column(db.DateTime, default=datetime.utcnow)

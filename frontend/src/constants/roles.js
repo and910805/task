@@ -5,10 +5,11 @@ export const ROLE_KEYS = Object.freeze([
   'admin',
 ]);
 
+// Platform defaults; every company can rename them in 系統設定.
 export const defaultRoleLabels = Object.freeze({
-  worker: '工人',
-  site_supervisor: '現場主管',
-  hq_staff: '總部人員',
+  worker: '現場人員',
+  site_supervisor: '主管',
+  hq_staff: '辦公室人員',
   admin: '管理員',
 });
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import api from '../api/client.js';
+import api, { resolveBackendUrl } from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
 
 const toCurrency = (value) =>
@@ -61,8 +61,8 @@ const ReportsPage = () => {
       const [customerRes, contactRes, quoteRes, invoiceRes, materialsRes] = await Promise.all([
         api.get('crm/customers'),
         api.get('crm/contacts'),
-        api.get('crm/quotes'),
-        api.get('crm/invoices'),
+        api.get('crm/quotes', { params: { limit: 'all' } }),
+        api.get('crm/invoices', { params: { limit: 'all' } }),
         api.get('materials/reports/monthly', { params: { month: targetMonth } }),
       ]);
       setCustomers(Array.isArray(customerRes.data) ? customerRes.data : []);
@@ -235,11 +235,9 @@ const ReportsPage = () => {
     try {
       const { data } = await api.get('export/tasks');
       const rawUrl = data?.url || '';
-      const base = (api.defaults.baseURL || '').replace(/\/$/, '');
-      const downloadUrl = rawUrl.startsWith('http') ? rawUrl : `${base}${rawUrl.startsWith('/') ? '' : '/'}${rawUrl}`;
       setExportResult({
         filename: data?.filename || 'task_report.xlsx',
-        url: downloadUrl,
+        url: resolveBackendUrl(rawUrl),
       });
     } catch (err) {
       setError(getErrorMessage(err, '匯出任務報表失敗'));
@@ -531,7 +529,7 @@ const ReportsPage = () => {
             {exporting ? '匯出中...' : '匯出任務報表（Excel）'}
           </button>
           {exportResult ? (
-            <a className="crm-action" href={exportResult.url} target="_blank" rel="noreferrer">
+            <a className="crm-action" href={resolveBackendUrl(exportResult.url)} target="_blank" rel="noreferrer">
               下載 {exportResult.filename}
             </a>
           ) : null}

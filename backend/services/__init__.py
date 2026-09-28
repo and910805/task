@@ -1,4 +1,4 @@
-"""Service utilities for 立翔水電行."""
+"""Service utilities for TaskGo."""
 
 from .notifications import (
     has_email_config,

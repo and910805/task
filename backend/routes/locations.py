@@ -1,14 +1,18 @@
 from sqlalchemy import func
 
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import jwt_required
 
 from decorators import role_required
 from extensions import db
 from models import SiteLocation
+from tenancy import current_workspace_id, workspace_required
 
 
 site_locations_bp = Blueprint("site_locations", __name__)
+
+
+def _workspace_locations():
+    return SiteLocation.query.filter(SiteLocation.workspace_id == current_workspace_id())
 
 
 def _normalize_map_url(raw: str | None) -> str | None:
@@ -23,9 +27,9 @@ def _normalize_map_url(raw: str | None) -> str | None:
 
 
 @site_locations_bp.get("/")
-@jwt_required()
+@workspace_required()
 def list_site_locations():
-    locations = SiteLocation.query.order_by(SiteLocation.name.asc()).all()
+    locations = _workspace_locations().order_by(SiteLocation.name.asc()).all()
     return jsonify([location.to_dict() for location in locations])
 
 
@@ -42,11 +46,11 @@ def create_site_location():
     except ValueError as exc:
         return jsonify({"msg": str(exc)}), 400
 
-    existing = SiteLocation.query.filter(func.lower(SiteLocation.name) == name.lower()).first()
+    existing = _workspace_locations().filter(func.lower(SiteLocation.name) == name.lower()).first()
     if existing:
         return jsonify({"msg": "地點名稱已存在"}), 400
 
-    location = SiteLocation(name=name, map_url=map_url)
+    location = SiteLocation(workspace_id=current_workspace_id(), name=name, map_url=map_url)
     db.session.add(location)
     db.session.commit()
     return jsonify(location.to_dict()), 201
@@ -55,7 +59,7 @@ def create_site_location():
 @site_locations_bp.put("/<int:location_id>")
 @role_required("admin")
 def update_site_location(location_id: int):
-    location = SiteLocation.query.get(location_id)
+    location = _workspace_locations().filter(SiteLocation.id == location_id).first()
     if not location:
         return jsonify({"msg": "找不到指定的地點"}), 404
 
@@ -70,7 +74,7 @@ def update_site_location(location_id: int):
         return jsonify({"msg": str(exc)}), 400
 
     existing = (
-        SiteLocation.query.filter(func.lower(SiteLocation.name) == name.lower())
+        _workspace_locations().filter(func.lower(SiteLocation.name) == name.lower())
         .filter(SiteLocation.id != location_id)
         .first()
     )
@@ -86,7 +90,7 @@ def update_site_location(location_id: int):
 @site_locations_bp.delete("/<int:location_id>")
 @role_required("admin")
 def delete_site_location(location_id: int):
-    location = SiteLocation.query.get(location_id)
+    location = _workspace_locations().filter(SiteLocation.id == location_id).first()
     if not location:
         return jsonify({"msg": "找不到指定的地點"}), 404
 

@@ -9,6 +9,7 @@ backend/venv/
 venv/
 
 backend/uploads/
+backend/backups/
 backend/*.db
 backend/instance/
 

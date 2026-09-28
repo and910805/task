@@ -15,7 +15,7 @@ const shortcutItems = [
 const managerShortcutIds = new Set(['shortcut-crm', 'shortcut-reports']);
 
 const GlobalSearch = () => {
-  const { user } = useAuth();
+  const { user, hasModule } = useAuth();
   const isManager = ['site_supervisor', 'hq_staff', 'admin'].includes(user?.role);
   const [query, setQuery] = useState('');
   const [indexLoaded, setIndexLoaded] = useState(false);
@@ -64,7 +64,7 @@ const GlobalSearch = () => {
     setError('');
     try {
       const requests = [api.get('tasks/')];
-      if (isManager) requests.push(api.get('crm/boot'));
+      if (isManager && hasModule('crm')) requests.push(api.get('crm/boot'));
       const [taskRes, bootRes] = await Promise.all(requests);
       const nextItems = buildItems(taskRes.data, bootRes?.data || {});
       setItems(nextItems);

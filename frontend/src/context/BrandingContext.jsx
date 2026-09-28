@@ -7,18 +7,19 @@ import {
   useState,
 } from 'react';
 
-import api from '../api/client.js';
+import api, { resolveBackendUrl } from '../api/client.js';
 
 const defaultBranding = {
-  name: '立翔水電行',
+  name: 'TaskGo',
   logoUrl: null,
   logoPath: null,
   logoUpdatedAt: null,
 };
 
-// 產品名固定，公司名由後台「品牌名稱」決定
+// 平台名固定為 TaskGo；登入後顯示目前公司的名稱與 Logo
 const APP_NAME = 'TaskGo';
-const FALLBACK_TITLE = 'TaskGo 立翔工程管理';
+const FALLBACK_TITLE = 'TaskGo';
+const WORKSPACE_CHANGED_EVENT = 'taskgo:workspace-changed';
 const FALLBACK_FAVICON = '/brand-logo.svg';
 
 const BrandingContext = createContext({
@@ -32,7 +33,8 @@ const BrandingContext = createContext({
 
 const normaliseBranding = (data = {}) => ({
   name: data.name || defaultBranding.name,
-  logoUrl: data.logo_url ?? null,
+  workspaceId: data.workspace_id ?? null,
+  logoUrl: resolveBackendUrl(data.logo_url) ?? null,
   logoPath: data.logo_path ?? null,
   logoUpdatedAt: data.logo_updated_at ?? null,
 });
@@ -57,15 +59,20 @@ export const BrandingProvider = ({ children }) => {
   }, []);
 
   useEffect(() => {
-    refresh().catch(() => {
-      // Branding 可以維持預設值
-    });
+    const load = () =>
+      refresh().catch(() => {
+        // Branding 可以維持預設值
+      });
+    load();
+    // Company branding follows login, logout and workspace switches.
+    window.addEventListener(WORKSPACE_CHANGED_EVENT, load);
+    return () => window.removeEventListener(WORKSPACE_CHANGED_EVENT, load);
   }, [refresh]);
 
   // 分頁標題與 favicon 跟著品牌設定走
   useEffect(() => {
     const name = (branding.name || '').trim();
-    document.title = name ? `${APP_NAME} ${name}` : FALLBACK_TITLE;
+    document.title = name && name !== APP_NAME ? `${name}｜${APP_NAME}` : FALLBACK_TITLE;
 
     const icon = document.querySelector("link[rel='icon']");
     if (icon) {

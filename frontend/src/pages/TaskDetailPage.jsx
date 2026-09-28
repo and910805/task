@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import Select from 'react-select';
 
-import api from '../api/client.js';
+import api, { resolveBackendUrl } from '../api/client.js';
 import AppHeader from '../components/AppHeader.jsx';
 import AudioRecorder from '../components/task/AudioRecorder.jsx';
 import SignaturePad from '../components/task/SignaturePad.jsx';
@@ -10,6 +10,12 @@ import TaskMaterialsPanel from '../components/task/TaskMaterialsPanel.jsx';
 import { managerRoles } from '../constants/roles.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useRoleLabels } from '../context/RoleLabelContext.jsx';
+import {
+  formatServerDateTime,
+  localDateTimeInputToIso,
+  parseServerUtcDate,
+  toLocalDateTimeInput,
+} from '../utils/datetime.js';
 
 const statusOptions = [
   { value: '尚未接單', label: '尚未接單' },
@@ -31,6 +37,7 @@ const statusBadgeClass = {
   進行中: 'status-badge status-in-progress',
   已完成: 'status-badge status-completed',
 };
+const formatDateTime = formatServerDateTime;
 const defaultNoteTemplates = [
   '已到場，開始作業。',
   '已完成檢修。',
@@ -46,30 +53,6 @@ const detailTabs = [
   { key: 'time', label: '⏱ 工時' },
 ];
 
-const toInputDatetimeValue = (value) => {
-  if (!value) return '';
-  const date = new Date(value);
-  const offsetInMs = date.getTimezoneOffset() * 60 * 1000;
-  const local = new Date(date.getTime() - offsetInMs);
-  return local.toISOString().slice(0, 16);
-};
-
-const toApiDatetimeValue = (value) => {
-  if (!value) return null;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed.toISOString();
-};
-
-const formatDateTime = (value) => {
-  if (!value) return '未設定';
-  try {
-    return new Date(value).toLocaleString();
-  } catch (err) {
-    return value;
-  }
-};
-
 const formatHours = (hours) => Number(hours ?? 0).toFixed(2);
 
 const parseAssigneeChangeNote = (note) => {
@@ -79,7 +62,7 @@ const parseAssigneeChangeNote = (note) => {
     if (parsed && typeof parsed === 'object') {
       return parsed;
     }
-  } catch (err) {
+  } catch {
     return null;
   }
   return null;
@@ -105,7 +88,9 @@ const formatAssigneeChangeSummary = (note) => {
 const TaskDetailPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, hasModule } = useAuth();
+  const workspaceId = user?.active_workspace_id;
+  const visibleTabs = detailTabs.filter((tab) => tab.key !== 'materials' || hasModule('materials'));
   const { labels } = useRoleLabels();
   const [task, setTask] = useState(null);
   const [error, setError] = useState('');
@@ -119,7 +104,11 @@ const TaskDetailPage = () => {
     due_date: '',
     location_url: '',
   });
-  const [activeTab, setActiveTab] = useState('info');
+  // Deep links (Today page, push notifications) may open a specific tab.
+  const [activeTab, setActiveTab] = useState(() => {
+    const requested = new URLSearchParams(window.location.search).get('tab');
+    return detailTabs.some((tab) => tab.key === requested) ? requested : 'info';
+  });
   const [photoForm, setPhotoForm] = useState({ file: null, note: '' });
   const [audioForm, setAudioForm] = useState({ file: null, note: '', transcript: '' });
   const [signatureNote, setSignatureNote] = useState('');
@@ -155,6 +144,7 @@ const TaskDetailPage = () => {
   const audioFileInputRef = useRef(null);
   const noteInputRef = useRef(null);
   const [noteTemplates, setNoteTemplates] = useState(defaultNoteTemplates);
+  const taskRequestRef = useRef(0);
 
   const isManager = useMemo(() => managerRoles.has(user?.role), [user?.role]);
   const isWorker = useMemo(() => user?.role === 'worker', [user?.role]);
@@ -177,19 +167,21 @@ const TaskDetailPage = () => {
     setNoteTemplates(defaultNoteTemplates);
   }, []);
 
-  const loadTask = async () => {
+  const loadTask = useCallback(async () => {
+    const requestId = ++taskRequestRef.current;
     setLoading(true);
     setError('');
+    setTask(null);
     try {
       const { data } = await api.get(`tasks/${id}`);
-      setTask(data);
+      if (requestId === taskRequestRef.current) setTask(data);
     } catch (err) {
       const message = getErrorMessage(err, '找不到該任務。');
-      setError(message);
+      if (requestId === taskRequestRef.current) setError(message);
     } finally {
-      setLoading(false);
+      if (requestId === taskRequestRef.current) setLoading(false);
     }
-  };
+  }, [id]);
 
   const loadAssignableUsers = async () => {
     if (!isManager && !isWorker) return;
@@ -203,7 +195,8 @@ const TaskDetailPage = () => {
 
   useEffect(() => {
     loadTask();
-  }, [id]);
+    return () => { taskRequestRef.current += 1; };
+  }, [loadTask, workspaceId]);
 
   useEffect(() => {
     loadNoteTemplates();
@@ -232,7 +225,7 @@ const TaskDetailPage = () => {
     if (!task) return;
     setAssignmentForm({
       assignee_ids: task.assignee_ids ? [...task.assignee_ids] : [],
-      due_date: task.due_date ? toInputDatetimeValue(task.due_date) : '',
+      due_date: task.due_date ? toLocalDateTimeInput(task.due_date) : '',
       location_url: task.location_url || '',
     });
   }, [task]);
@@ -252,25 +245,13 @@ const TaskDetailPage = () => {
     }
   }, [availableStatusOptions, updateForm.status]);
 
-  const buildAttachmentUrl = useCallback((url) => {
-    if (!url) return '';
-    if (/^https?:\/\//i.test(url)) {
-      return url;
-    }
-    try {
-      return new URL(url, window.location.origin).toString();
-    } catch (error) {
-      return url;
-    }
-  }, []);
-
   const resolvedAttachments = useMemo(
     () =>
       (task?.attachments ?? []).map((item) => ({
         ...item,
-        url: buildAttachmentUrl(item.url),
+        url: resolveBackendUrl(item.url),
       })),
-    [task, buildAttachmentUrl],
+    [task],
   );
 
   const photoAttachments = useMemo(
@@ -331,7 +312,7 @@ const TaskDetailPage = () => {
     if (!task?.due_date) return false;
     if (task.status === '已完成') return false;
     if (task.is_overdue !== undefined) return Boolean(task.is_overdue);
-    return new Date(task.due_date).getTime() < Date.now();
+    return (parseServerUtcDate(task.due_date)?.getTime() ?? Infinity) < Date.now();
   }, [task]);
   const showOverdueIndicator = showOverdue && isOverdue;
 
@@ -414,7 +395,7 @@ const TaskDetailPage = () => {
       } else {
         const payload = {
           assignee_ids: assignmentForm.assignee_ids.map(Number),
-          due_date: assignmentForm.due_date || null,
+          due_date: localDateTimeInputToIso(assignmentForm.due_date),
           location_url: assignmentForm.location_url.trim() || null,
         };
         await api.put(`tasks/${id}`, payload);
@@ -449,8 +430,8 @@ const TaskDetailPage = () => {
       return;
     }
 
-    const startTime = toApiDatetimeValue(bulkTimeForm.start_time);
-    const endTime = toApiDatetimeValue(bulkTimeForm.end_time);
+    const startTime = localDateTimeInputToIso(bulkTimeForm.start_time);
+    const endTime = localDateTimeInputToIso(bulkTimeForm.end_time);
     const hasHours = bulkTimeForm.work_hours.trim() !== '';
     const parsedHours = hasHours ? Number(bulkTimeForm.work_hours) : null;
 
@@ -494,8 +475,8 @@ const TaskDetailPage = () => {
     setEditingTimeEntryId(entry.id);
     setEditingTimeForm({
       user_id: entry.user_id ? String(entry.user_id) : '',
-      start_time: toInputDatetimeValue(entry.start_time),
-      end_time: toInputDatetimeValue(entry.end_time),
+      start_time: toLocalDateTimeInput(entry.start_time),
+      end_time: toLocalDateTimeInput(entry.end_time),
       work_hours:
         entry.work_hours === null || entry.work_hours === undefined ? '' : String(entry.work_hours),
       note: entry.note || '',
@@ -529,8 +510,8 @@ const TaskDetailPage = () => {
     try {
       const payload = {
         user_id: editingTimeForm.user_id ? Number(editingTimeForm.user_id) : null,
-        start_time: editingTimeForm.start_time ? toApiDatetimeValue(editingTimeForm.start_time) : null,
-        end_time: editingTimeForm.end_time ? toApiDatetimeValue(editingTimeForm.end_time) : null,
+        start_time: editingTimeForm.start_time ? localDateTimeInputToIso(editingTimeForm.start_time) : null,
+        end_time: editingTimeForm.end_time ? localDateTimeInputToIso(editingTimeForm.end_time) : null,
         note: editingTimeForm.note.trim() || null,
       };
       if (editingTimeForm.work_hours.trim() !== '') {
@@ -626,7 +607,7 @@ const TaskDetailPage = () => {
         originalSize: file.size,
       });
       setPhotoForm((prev) => ({ ...prev, file: compressed }));
-    } catch (err) {
+    } catch {
       setError('照片壓縮失敗，請重新選擇檔案。');
       setPhotoForm((prev) => ({ ...prev, file: null }));
       if (photoFileInputRef.current) {
@@ -871,7 +852,7 @@ const TaskDetailPage = () => {
       )}
 
       <nav className="tab-bar tab-bar--top">
-        {detailTabs.map((tab) => (
+        {visibleTabs.map((tab) => (
           <button
             key={tab.key}
             type="button"
@@ -1447,7 +1428,7 @@ const TaskDetailPage = () => {
       )}
 
       <nav className="tab-bar tab-bar--bottom">
-        {detailTabs.map((tab) => (
+        {visibleTabs.map((tab) => (
           <button
             key={tab.key}
             type="button"

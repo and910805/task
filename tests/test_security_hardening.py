@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from flask import Flask, jsonify
-from flask_jwt_extended import create_access_token
+from flask_jwt_extended import JWTManager, create_access_token
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,8 +19,9 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from decorators import jwt_user_claims_are_current, role_required
-from extensions import db, jwt
+from extensions import db
 from models import Attachment, Contract, Customer, Invoice, Quote, Task, User
+from workspace_helpers import enroll_in_legacy_workspace
 from routes import auth, crm, export, line, tasks
 from routes.uploads import upload_bp
 from rate_limit import _BUCKETS, _LOCK, rate_limit
@@ -92,18 +93,17 @@ class PasswordPolicySecurityTest(unittest.TestCase):
     def test_generated_password_meets_policy(self):
         self.assertIsNone(auth._password_error(auth._generate_password()))
 
-    def test_public_registration_is_disabled_by_default(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("ALLOW_PUBLIC_WORKER_REGISTRATION", None)
-            self.assertFalse(auth._public_registration_enabled())
+    def test_company_signup_can_be_disabled(self):
+        # Anonymous registration into an existing company requires an
+        # invitation (see test_workspace_isolation); self-service signup only
+        # creates a separate, isolated company and can be switched off.
+        with patch.dict(os.environ, {"ALLOW_PUBLIC_SIGNUP": "0"}, clear=False):
+            self.assertFalse(auth._public_signup_enabled())
 
-    def test_public_registration_requires_explicit_opt_in(self):
-        with patch.dict(
-            os.environ,
-            {"ALLOW_PUBLIC_WORKER_REGISTRATION": "true"},
-            clear=False,
-        ):
-            self.assertTrue(auth._public_registration_enabled())
+    def test_company_signup_is_enabled_unless_turned_off(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ALLOW_PUBLIC_SIGNUP", None)
+            self.assertTrue(auth._public_signup_enabled())
 
 
 class SpreadsheetFormulaSecurityTest(unittest.TestCase):
@@ -186,7 +186,7 @@ class RoleAuthorizationSecurityTest(unittest.TestCase):
             JWT_SECRET_KEY="test-jwt-secret",
         )
         db.init_app(self.app)
-        jwt.init_app(self.app)
+        JWTManager().init_app(self.app)
 
         @self.app.get("/admin-only")
         @role_required("admin")
@@ -252,7 +252,7 @@ class DownloadAuthorizationSecurityTest(unittest.TestCase):
             JWT_SECRET_KEY="test-jwt-secret",
         )
         db.init_app(self.app)
-        jwt.init_app(self.app)
+        JWTManager().init_app(self.app)
         self.app.register_blueprint(upload_bp, url_prefix="/api/upload")
         self.app.register_blueprint(tasks.tasks_bp, url_prefix="/api/tasks")
         self.app.extensions["storage"] = LocalStorage(Path(self.temp_dir.name) / "uploads")
@@ -296,6 +296,7 @@ class DownloadAuthorizationSecurityTest(unittest.TestCase):
                 )
             )
             db.session.commit()
+            enroll_in_legacy_workspace()
 
             self.assigned_id = assigned.id
             self.other_id = other.id
@@ -411,7 +412,7 @@ class TaskOwnershipSecurityTest(unittest.TestCase):
             JWT_SECRET_KEY="test-jwt-secret",
         )
         db.init_app(self.app)
-        jwt.init_app(self.app)
+        JWTManager().init_app(self.app)
         self.app.register_blueprint(tasks.tasks_bp, url_prefix="/api/tasks")
         self.app.extensions["storage"] = LocalStorage(Path(self.temp_dir.name) / "uploads")
 
@@ -434,6 +435,7 @@ class TaskOwnershipSecurityTest(unittest.TestCase):
             )
             db.session.add(task)
             db.session.commit()
+            enroll_in_legacy_workspace()
             self.task_id = task.id
             self.intruder_token = create_access_token(
                 identity=str(intruder.id),
@@ -512,7 +514,7 @@ class CrmAuthorizationSecurityTest(unittest.TestCase):
             JWT_SECRET_KEY="test-jwt-secret",
         )
         db.init_app(self.app)
-        jwt.init_app(self.app)
+        JWTManager().init_app(self.app)
         self.app.register_blueprint(crm.crm_bp, url_prefix="/api/crm")
 
         with self.app.app_context():
@@ -560,6 +562,7 @@ class CrmAuthorizationSecurityTest(unittest.TestCase):
                 ]
             )
             db.session.commit()
+            enroll_in_legacy_workspace()
             self.worker_token = create_access_token(
                 identity=str(worker.id), additional_claims={"role": worker.role}
             )

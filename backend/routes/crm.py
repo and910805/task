@@ -16,14 +16,17 @@ from types import SimpleNamespace
 import unicodedata
 from xml.sax.saxutils import escape
 
-from flask import Blueprint, current_app, jsonify, request, send_file
+from flask import Blueprint, abort, current_app, jsonify, request, send_file
 from flask_jwt_extended import jwt_required
 from openpyxl import load_workbook
 from sqlalchemy import func, inspect
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, with_loader_criteria
+from sqlalchemy import event
+from sqlalchemy.orm import Session
 
 from decorators import role_required
+from tenancy import current_workspace_id, legacy_workspace_id, public_endpoint
 from extensions import db
 from models import (
     Contact,
@@ -38,10 +41,12 @@ from models import (
     QuoteItem,
     QuoteVersion,
     ServiceCatalogItem,
-    SiteSetting,
     Task,
     User,
     WebsiteBooking,
+    WorkspaceSetting,
+    WorkspaceMember,
+    Workspace,
 )
 from utils import get_current_user_id
 from services.attachments import replace_signature_file
@@ -116,6 +121,139 @@ QUOTE_PDF_BASE_ROW_HEIGHT_MM = 9
 QUOTE_PDF_STAMP_ROW_HEIGHT_MM = 11.0
 QUOTE_PDF_STAMP_PADDING_MM = 0.75
 QUOTE_PDF_MIN_BLANK_ROW_HEIGHT_MM = 5.5
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _scope_crm_orm_statements(execute_state):
+    """Apply tenant criteria to every ORM read made by an authenticated CRM request."""
+    if not execute_state.is_select:
+        return
+    try:
+        if request.blueprint != crm_bp.name:
+            return
+        workspace_id = current_workspace_id()
+    except RuntimeError:
+        return
+    if workspace_id is None:
+        return
+
+    from models import (
+        AuditLog, Customer, Contact, WebsiteBooking, Quote, Contract, Invoice,
+        ServiceCatalogItem,
+    )
+
+    for model in (AuditLog, Customer, Contact, WebsiteBooking, Quote, Contract, Invoice, ServiceCatalogItem):
+        execute_state.statement = execute_state.statement.options(
+            with_loader_criteria(
+                model,
+                lambda entity: entity.workspace_id == workspace_id,
+                include_aliases=True,
+            )
+        )
+
+
+def _workspace_setting(key: str, default: str | None = None) -> str | None:
+    workspace_id = current_workspace_id()
+    if workspace_id is None:
+        return default
+    return WorkspaceSetting.get_value(workspace_id, key, default)
+
+
+def _crm_brand_name() -> str:
+    workspace_id = current_workspace_id()
+    workspace = db.session.get(Workspace, workspace_id) if workspace_id is not None else None
+    return _workspace_setting("branding_name") or (workspace.name if workspace else "TaskGo")
+
+
+def _workspace_row(model, object_id, *, options=()):
+    workspace_id = current_workspace_id()
+    if workspace_id is None or object_id is None:
+        return None
+    # Use a SQL predicate even if this identity is already present in the Session.
+    query = model.query.options(*options) if options else model.query
+    return query.filter(model.id == object_id, model.workspace_id == workspace_id).first()
+
+
+def _invoice_row(invoice_id):
+    return _invoice_query_with_details().filter(
+        Invoice.id == invoice_id, Invoice.workspace_id == current_workspace_id()
+    ).first()
+
+
+def _validate_crm_relations(*entities) -> None:
+    """Reject corrupt cross-workspace foreign keys before any relation is serialized."""
+    workspace_id = current_workspace_id()
+    if workspace_id is None:
+        abort(404)
+    for entity in entities:
+        if entity is None:
+            continue
+        if hasattr(entity, "workspace_id") and entity.workspace_id != workspace_id:
+            abort(404)
+        if isinstance(entity, Contact):
+            if _workspace_row(Customer, entity.customer_id) is None:
+                abort(404)
+        elif isinstance(entity, Quote):
+            customer = _workspace_row(Customer, entity.customer_id)
+            if customer is None:
+                abort(404)
+            if entity.contact_id is not None:
+                contact = _workspace_row(Contact, entity.contact_id)
+                if contact is None or contact.customer_id != customer.id:
+                    abort(404)
+            for invoice in entity.invoices or []:
+                if (
+                    invoice.workspace_id != workspace_id
+                    or invoice.quote_id != entity.id
+                    or invoice.customer_id != customer.id
+                ):
+                    abort(404)
+        elif isinstance(entity, Invoice):
+            customer = _workspace_row(Customer, entity.customer_id)
+            if customer is None:
+                abort(404)
+            if entity.contact_id is not None:
+                contact = _workspace_row(Contact, entity.contact_id)
+                if contact is None or contact.customer_id != customer.id:
+                    abort(404)
+            if entity.quote_id is not None:
+                quote = _workspace_row(Quote, entity.quote_id)
+                if quote is None or quote.customer_id != customer.id:
+                    abort(404)
+                if _workspace_row(Customer, quote.customer_id) is None:
+                    abort(404)
+                if quote.contact_id is not None:
+                    quote_contact = _workspace_row(Contact, quote.contact_id)
+                    if quote_contact is None or quote_contact.customer_id != quote.customer_id:
+                        abort(404)
+        elif isinstance(entity, Contract):
+            if _workspace_row(Quote, entity.quote_id) is None:
+                abort(404)
+        elif isinstance(entity, WebsiteBooking):
+            if entity.converted_customer_id and _workspace_row(Customer, entity.converted_customer_id) is None:
+                abort(404)
+            if entity.converted_contact_id and _workspace_row(Contact, entity.converted_contact_id) is None:
+                abort(404)
+
+
+def _crm_company_tax_id() -> str | None:
+    configured = _workspace_setting("company_tax_id")
+    if configured:
+        return configured
+    workspace_id = current_workspace_id()
+    workspace = db.session.get(Workspace, workspace_id) if workspace_id is not None else None
+    return "14511159" if workspace and workspace.is_legacy else None
+
+
+def _pdf_company_tax_text() -> str | None:
+    tax_id = _crm_company_tax_id()
+    if not tax_id:
+        return None
+    workspace_id = current_workspace_id()
+    workspace = db.session.get(Workspace, workspace_id) if workspace_id is not None else None
+    if workspace and workspace.is_legacy and tax_id == "14511159":
+        return PDF_COMPANY_TAX_ID_TEXT
+    return f"統一編號 {tax_id}"
 
 
 def _normalize_limit_arg(raw_limit, *, default: int = 5, maximum: int = 200) -> int | None:
@@ -354,6 +492,12 @@ def _pdf_font_health_payload() -> dict:
 
 
 def _resolve_pdf_stamp_path() -> str | None:
+    workspace_id = current_workspace_id()
+    workspace = db.session.get(Workspace, workspace_id) if workspace_id is not None else None
+    if workspace is not None and not workspace.is_legacy:
+        configured_for_workspace = (_workspace_setting("pdf_stamp_path") or "").strip()
+        return configured_for_workspace if configured_for_workspace and os.path.isfile(configured_for_workspace) else None
+
     configured = (os.environ.get(PDF_STAMP_ENV) or "").strip()
     if configured and os.path.exists(configured):
         return configured
@@ -898,6 +1042,7 @@ def _sync_quote_items_to_catalog(items: list[dict]) -> None:
         if existing is None:
             db.session.add(
                 ServiceCatalogItem(
+                    workspace_id=current_workspace_id(),
                     name=name,
                     unit=(item.get("unit") or "").strip() or "式",
                     unit_price=round(float(item.get("unit_price") or 0.0), 2),
@@ -933,10 +1078,13 @@ def _apply_totals(entity, items: list[dict], tax_rate_raw):
 
 
 def _next_quote_no(reference_date: date | None = None) -> str:
+    workspace_id = current_workspace_id()
     ymd = reference_date.strftime("%Y%m%d") if reference_date else datetime.utcnow().strftime("%Y%m%d")
     prefix = f"QT-{ymd}-"
 
-    rows = Quote.query.with_entities(Quote.quote_no).filter(Quote.quote_no.like(f"{prefix}%")).all()
+    rows = Quote.query.with_entities(Quote.quote_no).filter(
+        Quote.workspace_id == workspace_id, Quote.quote_no.like(f"{prefix}%")
+    ).all()
     max_seq = 0
     for (quote_no,) in rows:
         if not isinstance(quote_no, str) or not quote_no.startswith(prefix):
@@ -947,7 +1095,9 @@ def _next_quote_no(reference_date: date | None = None) -> str:
 
     next_seq = max_seq + 1
     candidate = f"{prefix}{next_seq:03d}"
-    while Quote.query.filter(Quote.quote_no == candidate).first() is not None:
+    while Quote.query.filter(
+        Quote.workspace_id == workspace_id, Quote.quote_no == candidate
+    ).first() is not None:
         next_seq += 1
         candidate = f"{prefix}{next_seq:03d}"
     return candidate
@@ -982,6 +1132,7 @@ def _duplicate_quote(source: Quote, *, today: date | None = None) -> Quote:
     ]
 
     quote = Quote(
+        workspace_id=current_workspace_id(),
         quote_no=_next_quote_no(issue_date),
         status="draft",
         customer_id=source.customer_id,
@@ -1005,7 +1156,7 @@ def _duplicate_quote(source: Quote, *, today: date | None = None) -> Quote:
     _sync_quote_items_to_catalog(items)
 
     db.session.flush()
-    copied = Quote.query.options(selectinload(Quote.items)).get(quote.id) or quote
+    copied = _workspace_row(Quote, quote.id, options=(selectinload(Quote.items),)) or quote
     _append_quote_version_snapshot(
         copied,
         action="duplicate",
@@ -1017,10 +1168,13 @@ def _duplicate_quote(source: Quote, *, today: date | None = None) -> Quote:
 
 
 def _next_invoice_no() -> str:
+    workspace_id = current_workspace_id()
     ymd = datetime.utcnow().strftime("%Y%m%d")
     prefix = f"INV-{ymd}-"
 
-    rows = Invoice.query.with_entities(Invoice.invoice_no).filter(Invoice.invoice_no.like(f"{prefix}%")).all()
+    rows = Invoice.query.with_entities(Invoice.invoice_no).filter(
+        Invoice.workspace_id == workspace_id, Invoice.invoice_no.like(f"{prefix}%")
+    ).all()
     max_seq = 0
     for (invoice_no,) in rows:
         if not isinstance(invoice_no, str) or not invoice_no.startswith(prefix):
@@ -1031,7 +1185,9 @@ def _next_invoice_no() -> str:
 
     next_seq = max_seq + 1
     candidate = f"{prefix}{next_seq:03d}"
-    while Invoice.query.filter(Invoice.invoice_no == candidate).first() is not None:
+    while Invoice.query.filter(
+        Invoice.workspace_id == workspace_id, Invoice.invoice_no == candidate
+    ).first() is not None:
         next_seq += 1
         candidate = f"{prefix}{next_seq:03d}"
     return candidate
@@ -1084,10 +1240,11 @@ def _contract_pdf_font_name() -> str:
 
 
 def _next_contract_no(reference_date: date | None = None) -> str:
+    workspace_id = current_workspace_id()
     contract_date = reference_date or date.today()
     prefix = f"CT-{contract_date.strftime('%Y%m%d')}-"
     rows = Contract.query.with_entities(Contract.contract_no).filter(
-        Contract.contract_no.like(f"{prefix}%")
+        Contract.workspace_id == workspace_id, Contract.contract_no.like(f"{prefix}%")
     ).all()
     max_seq = 0
     for (contract_no,) in rows:
@@ -1366,6 +1523,7 @@ def _append_audit_log(
 ) -> None:
     db.session.add(
         AuditLog(
+            workspace_id=current_workspace_id(),
             module=module,
             action=(action or "").strip() or "unknown",
             entity_type=(entity_type or "").strip() or "unknown",
@@ -1528,6 +1686,7 @@ def _create_task_for_quote(quote: Quote, customer: Customer | None, contact: Con
     due_date = datetime.combine(expiry_value, time(hour=18, minute=0))
 
     return Task(
+        workspace_id=current_workspace_id(),
         title=title,
         description=_quote_task_description(quote, customer, contact),
         status="尚未接單",
@@ -1608,7 +1767,7 @@ def _apply_quote_to_template_sheet(ws, quote: Quote, customer: Customer | None, 
     recipient = _resolve_quote_recipient_display(quote, customer, contact)
     site_address = (getattr(quote, "site_address", None) or "").strip()
 
-    ws["D2"] = "立翔水電行"
+    ws["D2"] = _crm_brand_name()
     ws["D3"] = "估價單"
     ws["D4"] = _xlsx_safe_text(recipient)
     ws["E4"] = "台照"
@@ -1657,13 +1816,13 @@ def _apply_quote_to_template_sheet(ws, quote: Quote, customer: Customer | None, 
 
 
 def _validate_customer_contact(customer_id, contact_id):
-    customer = Customer.query.get(customer_id)
+    customer = _workspace_row(Customer, customer_id)
     if not customer:
         return None, None, (jsonify({"msg": "Customer not found"}), 404)
 
     contact = None
     if contact_id is not None:
-        contact = Contact.query.get(contact_id)
+        contact = _workspace_row(Contact, contact_id)
         if not contact:
             return None, None, (jsonify({"msg": "Contact not found"}), 404)
         if contact.customer_id != customer.id:
@@ -1673,6 +1832,7 @@ def _validate_customer_contact(customer_id, contact_id):
 
 
 def _serialize_customer_service_history(customer: Customer, *, quote_limit: int = 30, invoice_limit: int = 30):
+    _validate_crm_relations(customer)
     quotes = (
         Quote.query.options(selectinload(Quote.items))
         .filter(Quote.customer_id == customer.id)
@@ -1680,6 +1840,7 @@ def _serialize_customer_service_history(customer: Customer, *, quote_limit: int 
         .limit(quote_limit)
         .all()
     )
+    _validate_crm_relations(*quotes)
     return {
         "customer": customer.to_dict(),
         "quotes": [row.to_dict() for row in quotes],
@@ -1704,7 +1865,7 @@ def _build_pdf_document(title: str, meta_rows: list[list[str]], item_rows: list[
     styles["Heading1"].fontName = PDF_FONT_NAME
 
     story = [
-        Paragraph("立翔水電行", styles["Heading1"]),
+        Paragraph(escape(_crm_brand_name()), styles["Heading1"]),
         Paragraph(title, styles["Normal"]),
         Spacer(1, 8 * mm),
     ]
@@ -1887,7 +2048,7 @@ def _build_quote_template_pdf(
         return KeepInFrame((width_mm * mm) - 3, 7 * mm, [paragraph], mode="shrink")
 
     story = [
-        Paragraph("立翔水電行", title_style),
+        Paragraph(escape(_crm_brand_name()), title_style),
         Paragraph("估價單", subtitle_style),
         Spacer(1, 3 * mm),
         _plain_text_paragraph(f"{recipient} 台照", recipient_style),
@@ -1900,7 +2061,9 @@ def _build_quote_template_pdf(
     ]
     story[1] = Paragraph(document_label, subtitle_style)
     story.insert(0, Spacer(1, 1 * mm))
-    story.insert(0, Paragraph(PDF_COMPANY_TAX_ID_TEXT, company_meta_style))
+    tax_text = _pdf_company_tax_text()
+    if tax_text:
+        story.insert(0, _plain_text_paragraph(tax_text, company_meta_style))
 
     item_rows_per_page = 20
     rows = [["項目", "項目名稱", "規格內容", "單位", "數量", "單價", "合計", "備註"]]
@@ -2198,7 +2361,7 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
     body_style.leading = 14
 
     story = [
-        Paragraph("立翔水電行", title_style),
+        Paragraph(escape(_crm_brand_name()), title_style),
         Paragraph("發票", subtitle_style),
         Spacer(1, 3 * mm),
         _plain_text_paragraph(f"{recipient} 台照", body_style),
@@ -2299,13 +2462,14 @@ def _append_note(original: str | None, extra: str) -> str:
 
 
 def _find_or_create_customer(name: str, phone: str, email: str, address: str, note_line: str):
+    workspace_id = current_workspace_id()
     customer = None
     if phone:
-        customer = Customer.query.filter(Customer.phone == phone).first()
+        customer = Customer.query.filter(Customer.workspace_id == workspace_id, Customer.phone == phone).first()
     if not customer and email:
-        customer = Customer.query.filter(Customer.email == email).first()
+        customer = Customer.query.filter(Customer.workspace_id == workspace_id, Customer.email == email).first()
     if not customer and name:
-        customer = Customer.query.filter(Customer.name == name).first()
+        customer = Customer.query.filter(Customer.workspace_id == workspace_id, Customer.name == name).first()
 
     if customer:
         if phone and not customer.phone:
@@ -2320,11 +2484,12 @@ def _find_or_create_customer(name: str, phone: str, email: str, address: str, no
     base_name = name or f"WebBooking-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
     candidate = base_name
     suffix = 2
-    while Customer.query.filter(Customer.name == candidate).first():
+    while Customer.query.filter(Customer.workspace_id == workspace_id, Customer.name == candidate).first():
         candidate = f"{base_name}-{suffix}"
         suffix += 1
 
     customer = Customer(
+        workspace_id=workspace_id,
         name=candidate,
         email=email or None,
         phone=phone or None,
@@ -2338,15 +2503,18 @@ def _find_or_create_customer(name: str, phone: str, email: str, address: str, no
 
 
 def _find_or_create_contact(customer: Customer, name: str, phone: str, email: str, note_line: str):
+    workspace_id = current_workspace_id()
     contact = None
     if email:
         contact = Contact.query.filter(
             Contact.customer_id == customer.id,
+            Contact.workspace_id == workspace_id,
             Contact.email == email,
         ).first()
     if not contact and phone:
         contact = Contact.query.filter(
             Contact.customer_id == customer.id,
+            Contact.workspace_id == workspace_id,
             Contact.phone == phone,
             Contact.name == name,
         ).first()
@@ -2359,8 +2527,11 @@ def _find_or_create_contact(customer: Customer, name: str, phone: str, email: st
         contact.note = _append_note(contact.note, note_line)
         return contact
 
-    is_primary = Contact.query.filter(Contact.customer_id == customer.id).count() == 0
+    is_primary = Contact.query.filter(
+        Contact.workspace_id == workspace_id, Contact.customer_id == customer.id
+    ).count() == 0
     contact = Contact(
+        workspace_id=workspace_id,
         customer_id=customer.id,
         name=name or customer.name,
         email=email or None,
@@ -2408,17 +2579,22 @@ def _website_lead_notification_recipients() -> list[str]:
     if configured:
         candidates.extend(re.split(r"[;,]", str(configured)))
     else:
+        legacy_id = legacy_workspace_id()
+        recipients_query = db.session.query(User.notification_value)
+        if legacy_id is not None:
+            recipients_query = recipients_query.join(WorkspaceMember, WorkspaceMember.user_id == User.id).filter(
+                WorkspaceMember.workspace_id == legacy_id,
+                WorkspaceMember.status == "active",
+                WorkspaceMember.role == "admin",
+            )
+        else:
+            # Before workspace migration, the single-tenant installation is the legacy company.
+            recipients_query = recipients_query.filter(User.role == "admin")
         candidates.extend(
             value
-            for (value,) in (
-                db.session.query(User.notification_value)
-                .filter(
-                    User.role == "admin",
-                    User.notification_type == "email",
-                    User.notification_value.isnot(None),
-                )
-                .all()
-            )
+            for (value,) in recipients_query.filter(
+                User.notification_type == "email", User.notification_value.isnot(None)
+            ).all()
             if value
         )
 
@@ -2485,8 +2661,12 @@ def _notify_new_website_lead(booking: WebsiteBooking) -> None:
 
 
 @crm_bp.post("/public/bookings")
+@public_endpoint  # the legacy company's public website form
 @rate_limit("public-booking", limit=10, window_seconds=3600)
 def create_public_booking():
+    legacy_id = legacy_workspace_id()
+    if legacy_id is None:
+        return jsonify({"msg": "Legacy website workspace is not configured"}), 503
     _ensure_website_booking_table()
     data = request.get_json(silent=True) or {}
     name = _trim(data.get("name"))
@@ -2534,7 +2714,9 @@ def create_public_booking():
     if preferred_time:
         merged_message = f"聯絡時段: {preferred_time}" + (f"\n{message}" if message else "")
 
+    # Public inquiries remain attached only to the legacy company's website.
     booking = WebsiteBooking(
+        workspace_id=legacy_id,
         name=name,
         phone=phone,
         email=email,
@@ -2594,6 +2776,7 @@ def list_public_bookings():
             | (WebsiteBooking.address.ilike(pattern))
         )
     rows = query.limit(500).all()
+    _validate_crm_relations(*rows)
     return jsonify([row.to_dict() for row in rows])
 
 
@@ -2601,7 +2784,8 @@ def list_public_bookings():
 @role_required(*WRITE_ROLES)
 def update_public_booking(booking_id: int):
     _ensure_website_booking_table()
-    booking = WebsiteBooking.query.get_or_404(booking_id)
+    booking = _workspace_row(WebsiteBooking, booking_id) or abort(404)
+    _validate_crm_relations(booking)
     before_snapshot = booking.to_dict()
     data = request.get_json(silent=True) or {}
 
@@ -2645,7 +2829,8 @@ def update_public_booking(booking_id: int):
 @role_required(*WRITE_ROLES)
 def convert_public_booking_to_customer(booking_id: int):
     _ensure_website_booking_table()
-    booking = WebsiteBooking.query.get_or_404(booking_id)
+    booking = _workspace_row(WebsiteBooking, booking_id) or abort(404)
+    _validate_crm_relations(booking)
     if booking.status == "converted" and booking.converted_customer_id:
         return jsonify(
             {
@@ -2846,6 +3031,7 @@ def create_catalog_item():
         return jsonify({"msg": "catalog item name already exists"}), 400
 
     item = ServiceCatalogItem(
+        workspace_id=current_workspace_id(),
         name=name,
         unit=unit,
         unit_price=unit_price or 0.0,
@@ -2869,7 +3055,7 @@ def create_catalog_item():
 @crm_bp.put("/catalog-items/<int:item_id>")
 @role_required(*WRITE_ROLES)
 def update_catalog_item(item_id: int):
-    item = ServiceCatalogItem.query.get_or_404(item_id)
+    item = _workspace_row(ServiceCatalogItem, item_id) or abort(404)
     before_snapshot = item.to_dict()
     data = request.get_json() or {}
 
@@ -2924,7 +3110,7 @@ def update_catalog_item(item_id: int):
 @crm_bp.delete("/catalog-items/<int:item_id>")
 @role_required(*WRITE_ROLES)
 def delete_catalog_item(item_id: int):
-    item = ServiceCatalogItem.query.get_or_404(item_id)
+    item = _workspace_row(ServiceCatalogItem, item_id) or abort(404)
     snapshot = item.to_dict()
     _append_audit_log(
         action="catalog_item_delete",
@@ -2941,7 +3127,7 @@ def delete_catalog_item(item_id: int):
 @crm_bp.get("/customers/<int:customer_id>/service-history")
 @role_required(*READ_ROLES)
 def customer_service_history(customer_id: int):
-    customer = Customer.query.get_or_404(customer_id)
+    customer = _workspace_row(Customer, customer_id) or abort(404)
     quote_limit = request.args.get("quote_limit", default=50, type=int) or 50
     quote_limit = max(1, min(quote_limit, 200))
     return jsonify(_serialize_customer_service_history(customer, quote_limit=quote_limit, invoice_limit=0))
@@ -2996,6 +3182,7 @@ def create_customer():
         return jsonify({"msg": f"客戶「{name}」已存在，請搜尋後編輯既有客戶。"}), 400
 
     customer = Customer(
+        workspace_id=current_workspace_id(),
         name=name,
         tax_id=(data.get("tax_id") or "").strip() or None,
         email=(data.get("email") or "").strip() or None,
@@ -3016,9 +3203,13 @@ def create_customer():
 @crm_bp.get("/customers/<int:customer_id>")
 @role_required(*READ_ROLES)
 def get_customer(customer_id: int):
-    customer = Customer.query.get_or_404(customer_id)
+    customer = _workspace_row(Customer, customer_id) or abort(404)
     payload = customer.to_dict()
-    payload["contacts"] = [contact.to_dict() for contact in customer.contacts]
+    contacts = Contact.query.filter(
+        Contact.workspace_id == current_workspace_id(), Contact.customer_id == customer.id
+    ).all()
+    _validate_crm_relations(*contacts)
+    payload["contacts"] = [contact.to_dict() for contact in contacts]
     return jsonify(payload)
 
 
@@ -3050,7 +3241,7 @@ def list_audit_logs():
 @crm_bp.put("/customers/<int:customer_id>")
 @role_required(*WRITE_ROLES)
 def update_customer(customer_id: int):
-    customer = Customer.query.get_or_404(customer_id)
+    customer = _workspace_row(Customer, customer_id) or abort(404)
     data = request.get_json() or {}
 
     if "name" in data:
@@ -3101,11 +3292,12 @@ def create_contact():
     if not name:
         return jsonify({"msg": "name is required"}), 400
 
-    customer = Customer.query.get(customer_id)
+    customer = _workspace_row(Customer, customer_id)
     if not customer:
         return jsonify({"msg": "Customer not found"}), 404
 
     contact = Contact(
+        workspace_id=current_workspace_id(),
         customer_id=customer.id,
         name=name,
         title=(data.get("title") or "").strip() or None,
@@ -3122,11 +3314,11 @@ def create_contact():
 @crm_bp.put("/contacts/<int:contact_id>")
 @role_required(*WRITE_ROLES)
 def update_contact(contact_id: int):
-    contact = Contact.query.get_or_404(contact_id)
+    contact = _workspace_row(Contact, contact_id) or abort(404)
     data = request.get_json() or {}
 
     if "customer_id" in data:
-        next_customer = Customer.query.get(data.get("customer_id"))
+        next_customer = _workspace_row(Customer, data.get("customer_id"))
         if not next_customer:
             return jsonify({"msg": "Customer not found"}), 404
         contact.customer_id = next_customer.id
@@ -3163,6 +3355,7 @@ def list_quotes():
         query = query.filter(Quote.status == status)
 
     rows = query.limit(limit).all() if limit is not None else query.all()
+    _validate_crm_relations(*rows)
     return jsonify([row.to_dict() for row in rows])
 
 
@@ -3177,7 +3370,7 @@ def search_quote_item_usage():
     catalog_item = None
     item_name = raw_item_name
     if catalog_item_id:
-        catalog_item = ServiceCatalogItem.query.get(catalog_item_id)
+        catalog_item = _workspace_row(ServiceCatalogItem, catalog_item_id)
         if not catalog_item:
             return jsonify({"msg": "Catalog item not found"}), 404
         item_name = (catalog_item.name or "").strip()
@@ -3204,6 +3397,8 @@ def search_quote_item_usage():
         query = query.filter((QuoteItem.description.ilike(pattern)) | (QuoteItem.note.ilike(pattern)))
 
     rows = query.limit(limit).all() if limit is not None else query.all()
+    for row in rows:
+        _validate_crm_relations(row.quote)
 
     grouped_results: OrderedDict[int, dict] = OrderedDict()
     for row in rows:
@@ -3308,6 +3503,7 @@ def create_quote():
     issue_date, expiry_date = _default_quote_dates(issue_date, expiry_date)
 
     quote = Quote(
+        workspace_id=current_workspace_id(),
         quote_no=(data.get("quote_no") or "").strip() or _next_quote_no(),
         status=status,
         customer_id=customer_id,
@@ -3334,20 +3530,22 @@ def create_quote():
     _sync_quote_items_to_catalog(items)
 
     db.session.flush()
-    quote = Quote.query.options(selectinload(Quote.items)).get(quote.id)
+    quote = _workspace_row(Quote, quote.id, options=(selectinload(Quote.items),))
     if quote:
         _append_quote_version_snapshot(quote, action="create", summary="Initial quote created")
         db.session.add(_create_task_for_quote(quote, customer, contact))
 
     db.session.commit()
-    quote = Quote.query.options(selectinload(Quote.items)).get(quote.id)
+    quote = _workspace_row(Quote, quote.id, options=(selectinload(Quote.items),))
+    _validate_crm_relations(quote)
     return jsonify(quote.to_dict() if quote else {}), 201
 
 
 @crm_bp.put("/quotes/<int:quote_id>")
 @role_required(*WRITE_ROLES)
 def update_quote(quote_id: int):
-    quote = Quote.query.options(selectinload(Quote.items)).get_or_404(quote_id)
+    quote = _workspace_row(Quote, quote_id, options=(selectinload(Quote.items),)) or abort(404)
+    _validate_crm_relations(quote)
     data = request.get_json() or {}
     active_invoice = _active_invoice_for_quote(quote.id)
     if active_invoice is not None:
@@ -3419,23 +3617,24 @@ def update_quote(quote_id: int):
     # Item-only edits may not otherwise issue an UPDATE for the quote row.
     quote.updated_at = datetime.utcnow()
     db.session.flush()
-    quote = Quote.query.options(selectinload(Quote.items)).get(quote.id)
+    quote = _workspace_row(Quote, quote.id, options=(selectinload(Quote.items),))
     if quote:
         _append_quote_version_snapshot(quote, action="update", summary="Quote updated")
 
     db.session.commit()
-    quote = Quote.query.options(selectinload(Quote.items)).get(quote.id)
+    quote = _workspace_row(Quote, quote.id, options=(selectinload(Quote.items),))
+    _validate_crm_relations(quote)
     return jsonify(quote.to_dict())
 
 
 @crm_bp.post("/quotes/<int:quote_id>/duplicate")
 @role_required(*WRITE_ROLES)
 def duplicate_quote(quote_id: int):
-    source = Quote.query.options(
-        selectinload(Quote.items),
-        selectinload(Quote.customer),
-        selectinload(Quote.contact),
-    ).get_or_404(quote_id)
+    source = _workspace_row(
+        Quote, quote_id,
+        options=(selectinload(Quote.items), selectinload(Quote.customer), selectinload(Quote.contact)),
+    ) or abort(404)
+    _validate_crm_relations(source)
 
     try:
         copied = _duplicate_quote(source)
@@ -3444,19 +3643,19 @@ def duplicate_quote(quote_id: int):
         return jsonify({"msg": "無法複製此報價單，請檢查品項或稅率資料"}), 400
 
     db.session.commit()
-    copied = Quote.query.options(selectinload(Quote.items)).get(copied.id)
+    copied = _workspace_row(Quote, copied.id, options=(selectinload(Quote.items),))
+    _validate_crm_relations(copied)
     return jsonify(copied.to_dict() if copied else {}), 201
 
 
 @crm_bp.delete("/quotes/<int:quote_id>")
 @role_required(*WRITE_ROLES)
 def delete_quote(quote_id: int):
-    quote = Quote.query.options(
-        selectinload(Quote.items),
-        selectinload(Quote.customer),
-        selectinload(Quote.contact),
-        selectinload(Quote.invoices),
-    ).get_or_404(quote_id)
+    quote = _workspace_row(
+        Quote, quote_id,
+        options=(selectinload(Quote.items), selectinload(Quote.customer), selectinload(Quote.contact), selectinload(Quote.invoices)),
+    ) or abort(404)
+    _validate_crm_relations(quote, *quote.invoices)
 
     related_invoice = _active_invoice_for_quote(quote.id)
     if related_invoice is not None:
@@ -3519,7 +3718,8 @@ def delete_quote(quote_id: int):
 @crm_bp.get("/quotes/<int:quote_id>/versions")
 @role_required(*READ_ROLES)
 def quote_versions(quote_id: int):
-    quote = Quote.query.get_or_404(quote_id)
+    quote = _workspace_row(Quote, quote_id) or abort(404)
+    _validate_crm_relations(quote)
     rows = (
         QuoteVersion.query.options(selectinload(QuoteVersion.changed_by))
         .filter(QuoteVersion.quote_id == quote.id)
@@ -3546,17 +3746,19 @@ def list_contracts():
     quote_id = request.args.get("quote_id", type=int)
     if quote_id:
         query = query.filter(Contract.quote_id == quote_id)
-    return jsonify([row.to_dict() for row in query.limit(200).all()])
+    rows = query.limit(200).all()
+    _validate_crm_relations(*rows)
+    return jsonify([row.to_dict() for row in rows])
 
 
 @crm_bp.post("/quotes/<int:quote_id>/contracts")
 @role_required(*WRITE_ROLES)
 def create_contract(quote_id: int):
-    quote = Quote.query.options(
-        selectinload(Quote.items),
-        selectinload(Quote.customer),
-        selectinload(Quote.contact),
-    ).get_or_404(quote_id)
+    quote = _workspace_row(
+        Quote, quote_id,
+        options=(selectinload(Quote.items), selectinload(Quote.customer), selectinload(Quote.contact)),
+    ) or abort(404)
+    _validate_crm_relations(quote)
     data = request.get_json() or {}
     customer = quote.customer
     contact = quote.contact
@@ -3569,10 +3771,11 @@ def create_contract(quote_id: int):
         or (quote.recipient_name or "").strip()
         or (customer.name if customer else "")
     )
-    project_name = str(data.get("project_name") or "").strip() or f"{party_a_name or quote.quote_no} 水電工程"
-    branding_name = SiteSetting.get_value("branding_name", "立翔水電行") or "立翔水電行"
+    project_name = str(data.get("project_name") or "").strip() or f"{party_a_name or quote.quote_no} 工程"
+    branding_name = _crm_brand_name()
     quote_version_no = _latest_quote_version_no(quote)
     contract = Contract(
+        workspace_id=current_workspace_id(),
         contract_no=_next_contract_no(contract_date),
         quote_id=quote.id,
         quote_version_no=quote_version_no,
@@ -3585,7 +3788,7 @@ def create_contract(quote_id: int):
         party_a_phone=(contact.phone if contact and contact.phone else (customer.phone if customer else None)),
         party_a_address=customer.address if customer else None,
         party_b_name=branding_name,
-        party_b_tax_id="14511159",
+        party_b_tax_id=_crm_company_tax_id(),
         party_b_phone=None,
         party_b_address=None,
         start_date=None,
@@ -3625,10 +3828,10 @@ def create_contract(quote_id: int):
 @crm_bp.put("/contracts/<int:contract_id>")
 @role_required(*WRITE_ROLES)
 def update_contract(contract_id: int):
-    contract = Contract.query.options(
-        selectinload(Contract.quote),
-        selectinload(Contract.versions),
-    ).get_or_404(contract_id)
+    contract = _workspace_row(
+        Contract, contract_id, options=(selectinload(Contract.quote), selectinload(Contract.versions))
+    ) or abort(404)
+    _validate_crm_relations(contract)
     if contract.status == "signed":
         return jsonify({"msg": "已簽署契約不可直接修改，請建立補充協議或新契約"}), 409
     before = contract.to_dict()
@@ -3657,7 +3860,8 @@ def update_contract(contract_id: int):
 @crm_bp.get("/contracts/<int:contract_id>/versions")
 @role_required(*READ_ROLES)
 def contract_versions(contract_id: int):
-    contract = Contract.query.get_or_404(contract_id)
+    contract = _workspace_row(Contract, contract_id) or abort(404)
+    _validate_crm_relations(contract)
     rows = (
         ContractVersion.query.options(selectinload(ContractVersion.changed_by))
         .filter(ContractVersion.contract_id == contract.id)
@@ -3678,7 +3882,8 @@ def contract_versions(contract_id: int):
 @crm_bp.get("/contracts/<int:contract_id>/pdf")
 @role_required(*READ_ROLES)
 def contract_pdf(contract_id: int):
-    contract = Contract.query.options(selectinload(Contract.quote)).get_or_404(contract_id)
+    contract = _workspace_row(Contract, contract_id, options=(selectinload(Contract.quote),)) or abort(404)
+    _validate_crm_relations(contract)
     try:
         buffer = _build_contract_pdf(contract)
     except RuntimeError as exc:
@@ -3705,11 +3910,11 @@ def contract_pdf(contract_id: int):
 @crm_bp.post("/quotes/<int:quote_id>/convert-to-invoice")
 @role_required(*WRITE_ROLES)
 def convert_quote_to_invoice(quote_id: int):
-    quote = Quote.query.options(
-        selectinload(Quote.items),
-        selectinload(Quote.customer),
-        selectinload(Quote.contact),
-    ).get_or_404(quote_id)
+    quote = _workspace_row(
+        Quote, quote_id,
+        options=(selectinload(Quote.items), selectinload(Quote.customer), selectinload(Quote.contact)),
+    ) or abort(404)
+    _validate_crm_relations(quote)
 
     existing = (
         _invoice_query_with_details()
@@ -3753,6 +3958,7 @@ def convert_quote_to_invoice(quote_id: int):
         return jsonify({"msg": "Quote has no items to convert"}), 400
 
     invoice = Invoice(
+        workspace_id=current_workspace_id(),
         invoice_no=_next_invoice_no(),
         status="issued",
         customer_id=quote.customer_id,
@@ -3798,7 +4004,7 @@ def convert_quote_to_invoice(quote_id: int):
     )
 
     db.session.commit()
-    invoice = _invoice_query_with_details().get(invoice.id)
+    invoice = _invoice_row(invoice.id)
     return (
         jsonify(
             {
@@ -3842,6 +4048,7 @@ def list_invoices():
         query = query.filter(Invoice.status == status)
 
     rows = query.limit(limit).all() if limit is not None else query.all()
+    _validate_crm_relations(*rows)
     return jsonify([row.to_dict() for row in rows])
 
 
@@ -3854,7 +4061,8 @@ def create_invoice():
 @crm_bp.put("/invoices/<int:invoice_id>")
 @role_required(*WRITE_ROLES)
 def update_invoice(invoice_id: int):
-    invoice = _invoice_query_with_details().get_or_404(invoice_id)
+    invoice = _invoice_row(invoice_id) or abort(404)
+    _validate_crm_relations(invoice)
     before_snapshot = {
         "status": (invoice.status or "").strip().lower() or None,
         "note": invoice.note,
@@ -3902,14 +4110,15 @@ def update_invoice(invoice_id: int):
         )
 
     db.session.commit()
-    invoice = _invoice_query_with_details().get(invoice.id)
+    invoice = _invoice_row(invoice.id)
     return jsonify(invoice.to_dict() if invoice else {})
 
 
 @crm_bp.post("/invoices/<int:invoice_id>/signature")
 @role_required(*WRITE_ROLES)
 def upload_invoice_signature(invoice_id: int):
-    invoice = _invoice_query_with_details().get_or_404(invoice_id)
+    invoice = _invoice_row(invoice_id) or abort(404)
+    _validate_crm_relations(invoice)
     data = request.get_json(silent=True) or {}
     data_url = (data.get("data_url") or "").strip()
     if not data_url:
@@ -3951,14 +4160,15 @@ def upload_invoice_signature(invoice_id: int):
     )
     db.session.commit()
 
-    invoice = _invoice_query_with_details().get(invoice.id)
+    invoice = _invoice_row(invoice.id)
     return jsonify(invoice.to_dict() if invoice else {})
 
 
 @crm_bp.post("/invoices/<int:invoice_id>/payments")
 @role_required(*WRITE_ROLES)
 def create_invoice_payment_record(invoice_id: int):
-    invoice = _invoice_query_with_details().get_or_404(invoice_id)
+    invoice = _invoice_row(invoice_id) or abort(404)
+    _validate_crm_relations(invoice)
     if (invoice.status or "").strip().lower() == "cancelled":
         return jsonify({"msg": "Cancelled invoices cannot receive payments"}), 400
     before_status = (invoice.status or "").strip().lower() or None
@@ -4014,7 +4224,7 @@ def create_invoice_payment_record(invoice_id: int):
     )
     db.session.commit()
 
-    invoice = _invoice_query_with_details().get(invoice.id)
+    invoice = _invoice_row(invoice.id)
     return (
         jsonify(
             {
@@ -4029,7 +4239,8 @@ def create_invoice_payment_record(invoice_id: int):
 @crm_bp.delete("/invoices/<int:invoice_id>/payments/<int:payment_id>")
 @role_required(*WRITE_ROLES)
 def delete_invoice_payment_record(invoice_id: int, payment_id: int):
-    invoice = _invoice_query_with_details().get_or_404(invoice_id)
+    invoice = _invoice_row(invoice_id) or abort(404)
+    _validate_crm_relations(invoice)
     payment = next((row for row in (invoice.payment_records or []) if int(row.id) == int(payment_id)), None)
     if payment is None:
         return jsonify({"msg": "Invoice payment record not found"}), 404
@@ -4062,7 +4273,7 @@ def delete_invoice_payment_record(invoice_id: int, payment_id: int):
     )
     db.session.commit()
 
-    invoice = _invoice_query_with_details().get(invoice.id)
+    invoice = _invoice_row(invoice.id)
     return jsonify(
         {
             "msg": "Invoice payment deleted",
@@ -4074,11 +4285,17 @@ def delete_invoice_payment_record(invoice_id: int, payment_id: int):
 @crm_bp.get("/quotes/<int:quote_id>/xlsx")
 @role_required(*READ_ROLES)
 def quote_xlsx(quote_id: int):
-    quote = Quote.query.options(selectinload(Quote.items)).get_or_404(quote_id)
-    customer = Customer.query.get(quote.customer_id)
-    contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
+    quote = _workspace_row(Quote, quote_id, options=(selectinload(Quote.items),)) or abort(404)
+    _validate_crm_relations(quote)
+    customer = _workspace_row(Customer, quote.customer_id)
+    contact = _workspace_row(Contact, quote.contact_id) if quote.contact_id else None
     cache_key = _build_download_cache_key(
         "quote-xlsx-v3",
+        current_workspace_id(),
+        _crm_brand_name(),
+        _workspace_setting("branding_logo_path"),
+        _workspace_setting("pdf_stamp_path"),
+        _workspace_setting("company_tax_id"),
         quote.id,
         quote.updated_at,
         customer.updated_at if customer else None,
@@ -4460,11 +4677,17 @@ def _build_contract_pdf(contract: Contract) -> BytesIO:
 @crm_bp.get("/quotes/<int:quote_id>/pdf")
 @role_required(*READ_ROLES)
 def quote_pdf(quote_id: int):
-    quote = Quote.query.options(selectinload(Quote.items)).get_or_404(quote_id)
-    customer = Customer.query.get(quote.customer_id)
-    contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
+    quote = _workspace_row(Quote, quote_id, options=(selectinload(Quote.items),)) or abort(404)
+    _validate_crm_relations(quote)
+    customer = _workspace_row(Customer, quote.customer_id)
+    contact = _workspace_row(Contact, quote.contact_id) if quote.contact_id else None
     cache_key = _build_download_cache_key(
         "quote-pdf-v7",
+        current_workspace_id(),
+        _crm_brand_name(),
+        _workspace_setting("branding_logo_path"),
+        _workspace_setting("pdf_stamp_path"),
+        _workspace_setting("company_tax_id"),
         quote.id,
         quote.updated_at,
         customer.updated_at if customer else None,
@@ -4549,11 +4772,17 @@ def crm_db_health():
 @crm_bp.get("/invoices/<int:invoice_id>/pdf")
 @role_required(*READ_ROLES)
 def invoice_pdf(invoice_id: int):
-    invoice = Invoice.query.options(selectinload(Invoice.items)).get_or_404(invoice_id)
-    customer = Customer.query.get(invoice.customer_id)
-    contact = Contact.query.get(invoice.contact_id) if invoice.contact_id else None
+    invoice = _workspace_row(Invoice, invoice_id, options=(selectinload(Invoice.items),)) or abort(404)
+    _validate_crm_relations(invoice)
+    customer = _workspace_row(Customer, invoice.customer_id)
+    contact = _workspace_row(Contact, invoice.contact_id) if invoice.contact_id else None
     cache_key = _build_download_cache_key(
         "invoice-pdf-v3",
+        current_workspace_id(),
+        _crm_brand_name(),
+        _workspace_setting("branding_logo_path"),
+        _workspace_setting("pdf_stamp_path"),
+        _workspace_setting("company_tax_id"),
         invoice.id,
         invoice.updated_at,
         customer.updated_at if customer else None,
@@ -4641,6 +4870,8 @@ def crm_bootstrap():
         .all()
     )
 
+    _validate_crm_relations(*quotes, *invoices, *contracts)
+
     return jsonify(
         {
             "customers": [row.to_dict() for row in customers],
@@ -4651,5 +4882,3 @@ def crm_bootstrap():
             "catalog_items": [row.to_dict() for row in catalog_items],
         }
     )
-
-

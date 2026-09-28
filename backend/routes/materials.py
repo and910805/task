@@ -4,11 +4,11 @@ from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import get_jwt, jwt_required
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import selectinload
 
 from decorators import role_required
+from tenancy import current_role, current_workspace_id, workspace_required
 from extensions import db
 from models import (
     MaterialItem,
@@ -115,9 +115,49 @@ def _to_txn_datetime(day: date, *, hour: int = 12) -> datetime:
 
 
 def _current_role() -> str | None:
-    claims = get_jwt() or {}
-    role = claims.get("role")
-    return role if isinstance(role, str) else None
+    return current_role()
+
+
+def _workspace_query(model):
+    return model.query.filter(model.workspace_id == current_workspace_id())
+
+
+def _workspace_id_filter(query, model):
+    return query.filter(model.workspace_id == current_workspace_id())
+
+
+def _get_material_item(item_id: int):
+    return _workspace_query(MaterialItem).filter(MaterialItem.id == item_id).first()
+
+
+def _get_purchase_batch(batch_id: int, *, options=()):
+    query = MaterialPurchaseBatch.query
+    if options:
+        query = query.options(*options) if isinstance(options, (tuple, list)) else query.options(options)
+    return _workspace_id_filter(query, MaterialPurchaseBatch).filter(MaterialPurchaseBatch.id == batch_id).first()
+
+
+def _purchase_batch_material_map(batch: MaterialPurchaseBatch) -> dict[int, MaterialItem]:
+    material_ids = {int(row.material_item_id) for row in batch.items or [] if row.material_item_id}
+    if not material_ids:
+        return {}
+    rows = _workspace_query(MaterialItem).filter(MaterialItem.id.in_(material_ids)).all()
+    return {row.id: row for row in rows}
+
+
+def _purchase_batch_materials_are_scoped(batch: MaterialPurchaseBatch) -> bool:
+    material_ids = {int(row.material_item_id) for row in batch.items or [] if row.material_item_id}
+    return len(_purchase_batch_material_map(batch)) == len(material_ids)
+
+
+def _task_usage_query(task: Task):
+    return TaskMaterialUsage.query.join(Task, Task.id == TaskMaterialUsage.task_id).join(
+        MaterialItem, MaterialItem.id == TaskMaterialUsage.material_item_id
+    ).filter(
+        TaskMaterialUsage.task_id == task.id,
+        Task.workspace_id == current_workspace_id(),
+        MaterialItem.workspace_id == current_workspace_id(),
+    )
 
 
 def _task_accessible(task: Task, role: str | None, user_id: int | None) -> bool:
@@ -127,7 +167,8 @@ def _task_accessible(task: Task, role: str | None, user_id: int | None) -> bool:
 def _get_task_or_403(task_id: int):
     task = (
         Task.query.options(selectinload(Task.assignees))
-        .get_or_404(task_id)
+        .filter(Task.id == task_id, Task.workspace_id == current_workspace_id())
+        .first_or_404()
     )
     role = _current_role()
     user_id = get_current_user_id()
@@ -209,6 +250,10 @@ def _material_stock_snapshot_map(*, as_of: datetime | None = None, material_item
         func.sum(MaterialStockTransaction.amount_delta),
         func.max(MaterialStockTransaction.txn_date),
     )
+    query = query.join(MaterialItem, MaterialItem.id == MaterialStockTransaction.material_item_id).filter(
+        MaterialStockTransaction.workspace_id == current_workspace_id(),
+        MaterialItem.workspace_id == current_workspace_id(),
+    )
     if as_of is not None:
         query = query.filter(MaterialStockTransaction.txn_date <= as_of)
     if material_item_ids:
@@ -221,7 +266,12 @@ def _material_stock_snapshot_map(*, as_of: datetime | None = None, material_item
             func.sum(MaterialPurchaseItem.quantity),
         )
         .join(MaterialPurchaseBatch, MaterialPurchaseBatch.id == MaterialPurchaseItem.batch_id)
-        .filter(MaterialPurchaseBatch.status == "draft")
+        .join(MaterialItem, MaterialItem.id == MaterialPurchaseItem.material_item_id)
+        .filter(
+            MaterialPurchaseBatch.status == "draft",
+            MaterialPurchaseBatch.workspace_id == current_workspace_id(),
+            MaterialItem.workspace_id == current_workspace_id(),
+        )
     )
     if material_item_ids:
         pending_query = pending_query.filter(MaterialPurchaseItem.material_item_id.in_(material_item_ids))
@@ -324,6 +374,7 @@ def _create_purchase_stock_txn(batch: MaterialPurchaseBatch, purchase_item: Mate
     unit_cost = float(purchase_item.unit_cost or 0.0) if is_confirmed else 0.0
     amount_delta = float(purchase_item.amount or 0.0) if is_confirmed else 0.0
     return MaterialStockTransaction(
+        workspace_id=current_workspace_id(),
         material_item_id=purchase_item.material_item_id,
         txn_type="purchase",
         qty_delta=float(purchase_item.quantity or 0.0),
@@ -343,6 +394,7 @@ def _sync_purchase_stock_txn(batch: MaterialPurchaseBatch, purchase_item: Materi
         db.session.add(txn)
     is_confirmed = _purchase_batch_is_confirmed(batch)
     txn.material_item_id = purchase_item.material_item_id
+    txn.workspace_id = current_workspace_id()
     txn.txn_type = "purchase"
     txn.qty_delta = float(purchase_item.quantity or 0.0)
     txn.unit_cost = float(purchase_item.unit_cost or 0.0) if is_confirmed else 0.0
@@ -399,6 +451,7 @@ def _upsert_usage_stock_txn(usage: TaskMaterialUsage, *, actor_id: int | None) -
         txn = MaterialStockTransaction(task_material_usage_id=usage.id)
         db.session.add(txn)
     txn.material_item_id = usage.material_item_id
+    txn.workspace_id = current_workspace_id()
     txn.task_id = usage.task_id
     txn.txn_type = "task_use"
     txn.qty_delta = -float(usage.used_qty or 0.0)
@@ -458,7 +511,7 @@ def list_material_items():
     role = _current_role()
     for_task = _parse_bool_flag(request.args.get("for_task"))
     include_inactive = str(request.args.get("include_inactive") or "").strip().lower() in {"1", "true", "yes"}
-    query = MaterialItem.query.order_by(MaterialItem.name.asc(), MaterialItem.spec.asc(), MaterialItem.id.asc())
+    query = _workspace_query(MaterialItem).order_by(MaterialItem.name.asc(), MaterialItem.spec.asc(), MaterialItem.id.asc())
     if not include_inactive:
         query = query.filter(MaterialItem.is_active.is_(True))
     rows = query.limit(500).all()
@@ -481,7 +534,7 @@ def create_material_item():
     except (TypeError, ValueError):
         return jsonify({"msg": "reference_cost must be a number"}), 400
 
-    exists = MaterialItem.query.filter(
+    exists = _workspace_query(MaterialItem).filter(
         MaterialItem.name == name,
         func.coalesce(MaterialItem.spec, "") == spec,
     ).first()
@@ -489,6 +542,7 @@ def create_material_item():
         return jsonify({"msg": "Material item already exists", "item": exists.to_dict()}), 409
 
     row = MaterialItem(
+        workspace_id=current_workspace_id(),
         name=name,
         spec=spec,
         unit=unit,
@@ -504,7 +558,9 @@ def create_material_item():
 @materials_bp.put("/items/<int:item_id>")
 @role_required(*MANAGER_ROLES)
 def update_material_item(item_id: int):
-    item = MaterialItem.query.get_or_404(item_id)
+    item = _get_material_item(item_id)
+    if item is None:
+        return jsonify({"msg": "Material item not found"}), 404
     data = request.get_json() or {}
     if "name" in data:
         item.name = (data.get("name") or "").strip() or item.name
@@ -519,7 +575,7 @@ def update_material_item(item_id: int):
             return jsonify({"msg": "reference_cost must be a number"}), 400
     if "is_active" in data:
         item.is_active = bool(data.get("is_active"))
-    duplicate = MaterialItem.query.filter(
+    duplicate = _workspace_query(MaterialItem).filter(
         MaterialItem.id != item.id,
         MaterialItem.name == item.name,
         func.coalesce(MaterialItem.spec, "") == _normalize_material_spec(item.spec),
@@ -543,7 +599,7 @@ def stock_summary():
             as_of = datetime.combine(parsed, time.max)
 
     include_inactive = str(request.args.get("include_inactive") or "").strip().lower() in {"1", "true", "yes"}
-    query = MaterialItem.query.order_by(MaterialItem.name.asc(), MaterialItem.spec.asc(), MaterialItem.id.asc())
+    query = _workspace_query(MaterialItem).order_by(MaterialItem.name.asc(), MaterialItem.spec.asc(), MaterialItem.id.asc())
     if not include_inactive:
         query = query.filter(MaterialItem.is_active.is_(True))
     items = query.limit(1000).all()
@@ -562,6 +618,9 @@ def stock_transactions():
     query = MaterialStockTransaction.query.options(
         selectinload(MaterialStockTransaction.material_item),
         selectinload(MaterialStockTransaction.task),
+    ).join(MaterialItem, MaterialItem.id == MaterialStockTransaction.material_item_id).filter(
+        MaterialStockTransaction.workspace_id == current_workspace_id(),
+        MaterialItem.workspace_id == current_workspace_id(),
     ).order_by(MaterialStockTransaction.txn_date.desc(), MaterialStockTransaction.id.desc())
 
     if month_raw:
@@ -578,13 +637,22 @@ def stock_transactions():
     if material_item_id:
         query = query.filter(MaterialStockTransaction.material_item_id == material_item_id)
     if task_id:
-        query = query.filter(MaterialStockTransaction.task_id == task_id)
+        query = query.filter(
+            MaterialStockTransaction.task_id == task_id,
+            MaterialStockTransaction.task_id.in_(
+                Task.query.with_entities(Task.id).filter(Task.workspace_id == current_workspace_id())
+            ),
+        )
 
     rows = query.limit(limit).all()
     payload = []
     for row in rows:
         item = row.to_dict()
-        item["task_title"] = row.task.title if row.task else None
+        item["task_title"] = (
+            row.task.title
+            if row.task and row.task.workspace_id == current_workspace_id()
+            else None
+        )
         payload.append(item)
     return jsonify({"month": month_text, "rows": payload})
 
@@ -594,9 +662,9 @@ def stock_transactions():
 def list_purchase_batches():
     month_raw = request.args.get("month")
     supplier = (request.args.get("supplier") or "").strip()
-    query = MaterialPurchaseBatch.query.options(
+    query = _workspace_id_filter(MaterialPurchaseBatch.query.options(
         selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
-    ).order_by(MaterialPurchaseBatch.purchase_date.desc(), MaterialPurchaseBatch.id.desc())
+    ), MaterialPurchaseBatch).order_by(MaterialPurchaseBatch.purchase_date.desc(), MaterialPurchaseBatch.id.desc())
 
     if month_raw:
         month_text, month_start, month_end, month_err = _parse_month(month_raw, default_today=False)
@@ -614,16 +682,20 @@ def list_purchase_batches():
     if supplier:
         query = query.filter(MaterialPurchaseBatch.supplier_name == supplier)
 
-    rows = query.limit(200).all()
+    rows = [row for row in query.limit(200).all() if _purchase_batch_materials_are_scoped(row)]
     return jsonify([row.to_dict() for row in rows])
 
 
 @materials_bp.get("/purchases/<int:batch_id>")
 @role_required(*MANAGER_ROLES)
 def get_purchase_batch(batch_id: int):
-    row = MaterialPurchaseBatch.query.options(
+    row = _get_purchase_batch(batch_id, options=(
         selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
-    ).get_or_404(batch_id)
+    ))
+    if row is None:
+        return jsonify({"msg": "Purchase batch not found"}), 404
+    if not _purchase_batch_materials_are_scoped(row):
+        return jsonify({"msg": "Purchase batch not found"}), 404
     return jsonify(row.to_dict())
 
 
@@ -661,7 +733,7 @@ def create_purchase_batch():
         return jsonify({"msg": "All items must have unit_cost > 0 before confirmation"}), 400
 
     material_ids = [item["material_item_id"] for item in items_payload]
-    materials = MaterialItem.query.filter(MaterialItem.id.in_(material_ids)).all()
+    materials = _workspace_query(MaterialItem).filter(MaterialItem.id.in_(material_ids)).all()
     material_map = {row.id: row for row in materials}
     missing_ids = [item_id for item_id in material_ids if item_id not in material_map]
     if missing_ids:
@@ -669,6 +741,7 @@ def create_purchase_batch():
 
     actor_id = get_current_user_id()
     batch = MaterialPurchaseBatch(
+        workspace_id=current_workspace_id(),
         supplier_name=supplier_name,
         purchase_date=purchase_date,
         statement_month=statement_month or _statement_month_from_date(purchase_date),
@@ -687,25 +760,30 @@ def create_purchase_batch():
         db.session.flush()
         db.session.add(_create_purchase_stock_txn(batch, purchase_item, actor_id=actor_id))
 
-    batch = MaterialPurchaseBatch.query.options(
+    batch = _get_purchase_batch(batch.id, options=(
         selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
-    ).get(batch.id)
+    ))
     if batch is not None:
         _update_material_reference_costs_from_batch(batch, material_map)
 
     db.session.commit()
-    batch = MaterialPurchaseBatch.query.options(
+    batch = _get_purchase_batch(batch.id, options=(
         selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
-    ).get(batch.id)
+    ))
     return jsonify(batch.to_dict() if batch else {}), 201
 
 
 @materials_bp.put("/purchases/<int:batch_id>")
 @role_required(*MANAGER_ROLES)
 def update_purchase_batch(batch_id: int):
-    batch = MaterialPurchaseBatch.query.options(
+    batch = _get_purchase_batch(batch_id, options=(
         selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
-    ).get_or_404(batch_id)
+    ))
+    if batch is None:
+        return jsonify({"msg": "Purchase batch not found"}), 404
+    material_map = _purchase_batch_material_map(batch)
+    if len(material_map) != len({int(row.material_item_id) for row in batch.items or [] if row.material_item_id}):
+        return jsonify({"msg": "Purchase batch contains a material outside this workspace"}), 400
     data = request.get_json() or {}
 
     if _purchase_batch_is_confirmed(batch):
@@ -749,7 +827,7 @@ def update_purchase_batch(batch_id: int):
                 *[int(row.material_item_id) for row in (batch.items or []) if row.material_item_id],
             }
         )
-        materials = MaterialItem.query.filter(MaterialItem.id.in_(material_ids)).all()
+        materials = _workspace_query(MaterialItem).filter(MaterialItem.id.in_(material_ids)).all()
         material_map = {row.id: row for row in materials}
         missing_ids = [item_id for item_id in material_ids if item_id not in material_map]
         if missing_ids:
@@ -770,13 +848,13 @@ def update_purchase_batch(batch_id: int):
             db.session.add(purchase_item)
             db.session.flush()
             _sync_purchase_stock_txn(batch, purchase_item, actor_id=get_current_user_id())
-        batch = MaterialPurchaseBatch.query.options(
+        batch = _get_purchase_batch(batch.id, options=(
             selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
-        ).get(batch.id) or batch
+        )) or batch
 
     if not material_map:
         material_ids = [int(row.material_item_id) for row in (batch.items or []) if row.material_item_id]
-        materials = MaterialItem.query.filter(MaterialItem.id.in_(material_ids)).all() if material_ids else []
+        materials = _workspace_query(MaterialItem).filter(MaterialItem.id.in_(material_ids)).all() if material_ids else []
         material_map = {row.id: row for row in materials}
 
     for purchase_item in batch.items or []:
@@ -785,18 +863,23 @@ def update_purchase_batch(batch_id: int):
     _update_material_reference_costs_from_batch(batch, material_map)
 
     db.session.commit()
-    batch = MaterialPurchaseBatch.query.options(
+    batch = _get_purchase_batch(batch.id, options=(
         selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
-    ).get(batch.id)
+    ))
     return jsonify(batch.to_dict() if batch else {})
 
 
 @materials_bp.post("/purchases/<int:batch_id>/confirm")
 @role_required(*MANAGER_ROLES)
 def confirm_purchase_batch(batch_id: int):
-    batch = MaterialPurchaseBatch.query.options(
+    batch = _get_purchase_batch(batch_id, options=(
         selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
-    ).get_or_404(batch_id)
+    ))
+    if batch is None:
+        return jsonify({"msg": "Purchase batch not found"}), 404
+    material_map = _purchase_batch_material_map(batch)
+    if len(material_map) != len({int(row.material_item_id) for row in batch.items or [] if row.material_item_id}):
+        return jsonify({"msg": "Purchase batch contains a material outside this workspace"}), 400
     if _purchase_batch_is_confirmed(batch):
         return jsonify(batch.to_dict()), 200
     if not batch.items:
@@ -806,22 +889,19 @@ def confirm_purchase_batch(batch_id: int):
 
     batch.status = "confirmed"
     batch.confirmed_at = _now_utc()
-    material_ids = [int(row.material_item_id) for row in (batch.items or []) if row.material_item_id]
-    materials = MaterialItem.query.filter(MaterialItem.id.in_(material_ids)).all() if material_ids else []
-    material_map = {row.id: row for row in materials}
     for purchase_item in batch.items or []:
         _apply_purchase_item_pricing(batch, purchase_item)
         _sync_purchase_stock_txn(batch, purchase_item, actor_id=get_current_user_id())
     _update_material_reference_costs_from_batch(batch, material_map)
     db.session.commit()
-    batch = MaterialPurchaseBatch.query.options(
+    batch = _get_purchase_batch(batch.id, options=(
         selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
-    ).get(batch.id)
+    ))
     return jsonify(batch.to_dict() if batch else {})
 
 
 @materials_bp.get("/tasks/<int:task_id>/usages")
-@jwt_required()
+@workspace_required()
 def list_task_material_usages(task_id: int):
     task, task_err = _get_task_or_403(task_id)
     if task_err:
@@ -830,8 +910,7 @@ def list_task_material_usages(task_id: int):
     include_cost = _is_manager_role(role)
 
     rows = (
-        TaskMaterialUsage.query.options(selectinload(TaskMaterialUsage.material_item))
-        .filter(TaskMaterialUsage.task_id == task.id)
+        _task_usage_query(task).options(selectinload(TaskMaterialUsage.material_item))
         .order_by(TaskMaterialUsage.used_date.desc(), TaskMaterialUsage.id.desc())
         .all()
     )
@@ -848,7 +927,7 @@ def list_task_material_usages(task_id: int):
 
 
 @materials_bp.post("/tasks/<int:task_id>/usages")
-@jwt_required()
+@workspace_required()
 def create_task_material_usage(task_id: int):
     task, task_err = _get_task_or_403(task_id)
     if task_err:
@@ -865,7 +944,7 @@ def create_task_material_usage(task_id: int):
     except (TypeError, ValueError):
         return jsonify({"msg": "material_item_id is required"}), 400
 
-    material = MaterialItem.query.get(material_item_id)
+    material = _get_material_item(material_item_id)
     if material is None:
         return jsonify({"msg": "Material item not found"}), 404
 
@@ -919,12 +998,14 @@ def create_task_material_usage(task_id: int):
     db.session.flush()
     _upsert_usage_stock_txn(usage, actor_id=actor_id)
     db.session.commit()
-    usage = TaskMaterialUsage.query.options(selectinload(TaskMaterialUsage.material_item)).get(usage.id)
+    usage = _task_usage_query(task).options(selectinload(TaskMaterialUsage.material_item)).filter(
+        TaskMaterialUsage.id == usage.id
+    ).first()
     return jsonify(_serialize_task_usage(usage, include_cost=_is_manager_role(role)) if usage else {}), 201
 
 
 @materials_bp.put("/tasks/<int:task_id>/usages/<int:usage_id>")
-@jwt_required()
+@workspace_required()
 def update_task_material_usage(task_id: int, usage_id: int):
     task, task_err = _get_task_or_403(task_id)
     if task_err:
@@ -937,9 +1018,8 @@ def update_task_material_usage(task_id: int, usage_id: int):
     if manager_err:
         return manager_err
 
-    usage = TaskMaterialUsage.query.options(selectinload(TaskMaterialUsage.material_item)).filter(
-        TaskMaterialUsage.id == usage_id,
-        TaskMaterialUsage.task_id == task.id,
+    usage = _task_usage_query(task).options(selectinload(TaskMaterialUsage.material_item)).filter(
+        TaskMaterialUsage.id == usage_id
     ).first()
     if usage is None:
         return jsonify({"msg": "Task material usage not found"}), 404
@@ -952,12 +1032,14 @@ def update_task_material_usage(task_id: int, usage_id: int):
             new_material_id = int(data.get("material_item_id"))
         except (TypeError, ValueError):
             return jsonify({"msg": "material_item_id must be an integer"}), 400
-        material = MaterialItem.query.get(new_material_id)
+        material = _get_material_item(new_material_id)
         if material is None:
             return jsonify({"msg": "Material item not found"}), 404
         usage.material_item_id = new_material_id
     else:
-        material = usage.material_item or MaterialItem.query.get(usage.material_item_id)
+        material = _get_material_item(usage.material_item_id)
+        if material is None:
+            return jsonify({"msg": "Material item not found in this workspace"}), 404
 
     if "used_qty" in data:
         used_qty, qty_err = _parse_float(data.get("used_qty"), "used_qty", minimum=0)
@@ -1000,12 +1082,14 @@ def update_task_material_usage(task_id: int, usage_id: int):
     usage.total_cost = round(float(usage.used_qty or 0.0) * float(usage.unit_cost_snapshot or 0.0), 2)
     _upsert_usage_stock_txn(usage, actor_id=get_current_user_id())
     db.session.commit()
-    usage = TaskMaterialUsage.query.options(selectinload(TaskMaterialUsage.material_item)).get(usage.id)
+    usage = _task_usage_query(task).options(selectinload(TaskMaterialUsage.material_item)).filter(
+        TaskMaterialUsage.id == usage.id
+    ).first()
     return jsonify(_serialize_task_usage(usage, include_cost=True) if usage else {})
 
 
 @materials_bp.delete("/tasks/<int:task_id>/usages/<int:usage_id>")
-@jwt_required()
+@workspace_required()
 def delete_task_material_usage(task_id: int, usage_id: int):
     task, task_err = _get_task_or_403(task_id)
     if task_err:
@@ -1018,10 +1102,7 @@ def delete_task_material_usage(task_id: int, usage_id: int):
     if manager_err:
         return manager_err
 
-    usage = TaskMaterialUsage.query.filter(
-        TaskMaterialUsage.id == usage_id,
-        TaskMaterialUsage.task_id == task.id,
-    ).first()
+    usage = _task_usage_query(task).filter(TaskMaterialUsage.id == usage_id).first()
     if usage is None:
         return jsonify({"msg": "Task material usage not found"}), 404
 
@@ -1043,12 +1124,17 @@ def monthly_material_report():
     month_start_dt = datetime.combine(month_start, time.min)
     month_end_dt = datetime.combine(month_end, time.min)
 
-    items = MaterialItem.query.order_by(MaterialItem.name.asc(), MaterialItem.spec.asc(), MaterialItem.id.asc()).all()
+    items = _workspace_query(MaterialItem).order_by(MaterialItem.name.asc(), MaterialItem.spec.asc(), MaterialItem.id.asc()).all()
     item_map = {item.id: item for item in items}
 
     txns = (
         MaterialStockTransaction.query.options(selectinload(MaterialStockTransaction.material_item))
-        .filter(MaterialStockTransaction.txn_date < month_end_dt)
+        .join(MaterialItem, MaterialItem.id == MaterialStockTransaction.material_item_id)
+        .filter(
+            MaterialStockTransaction.workspace_id == current_workspace_id(),
+            MaterialItem.workspace_id == current_workspace_id(),
+            MaterialStockTransaction.txn_date < month_end_dt,
+        )
         .order_by(MaterialStockTransaction.txn_date.asc(), MaterialStockTransaction.id.asc())
         .all()
     )
@@ -1088,9 +1174,9 @@ def monthly_material_report():
         closing_qty[material_id] += qty_delta
 
     purchase_batches = (
-        MaterialPurchaseBatch.query.options(
+        _workspace_id_filter(MaterialPurchaseBatch.query.options(
             selectinload(MaterialPurchaseBatch.items).selectinload(MaterialPurchaseItem.material_item)
-        )
+        ), MaterialPurchaseBatch)
         .filter(
             or_(
                 MaterialPurchaseBatch.statement_month == month_text,
@@ -1103,6 +1189,7 @@ def monthly_material_report():
         .order_by(MaterialPurchaseBatch.purchase_date.asc(), MaterialPurchaseBatch.id.asc())
         .all()
     )
+    purchase_batches = [batch for batch in purchase_batches if _purchase_batch_materials_are_scoped(batch)]
     unpriced_purchase_material_ids: set[int] = set()
     for batch in purchase_batches:
         if _purchase_batch_is_confirmed(batch):

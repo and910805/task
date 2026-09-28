@@ -1,4 +1,4 @@
-"""Blueprint dedicated to rich media uploads for 立翔水電行 tasks."""
+"""Blueprint dedicated to rich media uploads for TaskGo tasks."""
 
 from __future__ import annotations
 
@@ -7,16 +7,15 @@ from datetime import datetime, timezone
 from flask import Blueprint, current_app, jsonify, redirect, request, send_from_directory
 from flask_jwt_extended import (
     decode_token,
-    get_jwt,
     get_jwt_identity,
-    jwt_required,
     verify_jwt_in_request,
 )
 from flask_jwt_extended.exceptions import NoAuthorizationError
 
 from extensions import db
-from models import Attachment, Invoice, Task, User
+from models import Attachment, Invoice, Task, User, Workspace, WorkspaceMember
 from services.attachments import create_file_attachment, create_signature_attachment
+from tenancy import current_role, current_workspace_id, public_endpoint, workspace_required
 from utils import get_current_user_id, task_is_accessible
 from storage import StorageError
 
@@ -25,7 +24,7 @@ upload_bp = Blueprint("upload", __name__)
 
 
 def _check_task_permission(task: Task, *, message: str):
-    role = (get_jwt() or {}).get("role")
+    role = current_role()
     user_id = get_current_user_id()
     if user_id is None:
         return None, jsonify({"msg": "Invalid authentication token"}), 401
@@ -99,28 +98,57 @@ def _authenticated_download_user(filename: str) -> User | None:
     return db.session.get(User, user_id)
 
 
+def _member_role(user: User, workspace_id: int | None) -> str | None:
+    if workspace_id is None:
+        return None
+    membership = (
+        WorkspaceMember.query.join(Workspace, Workspace.id == WorkspaceMember.workspace_id)
+        .filter(
+            WorkspaceMember.workspace_id == workspace_id,
+            WorkspaceMember.user_id == user.id,
+            WorkspaceMember.status == "active",
+            Workspace.status == "active",
+        )
+        .first()
+    )
+    return membership.role if membership else None
+
+
+def _report_workspace_id(normalized: str) -> int | None:
+    # reports/ws<id>/<file>.xlsx; older unscoped reports belong to the legacy workspace.
+    parts = normalized.split("/")
+    if len(parts) == 3 and parts[1].startswith("ws") and parts[1][2:].isdigit():
+        return int(parts[1][2:])
+    if len(parts) == 2:
+        legacy = Workspace.query.filter_by(is_legacy=True).order_by(Workspace.id.asc()).first()
+        return legacy.id if legacy else None
+    return None
+
+
 def _can_download_file(user: User, filename: str) -> bool:
+    """Files are downloadable only by members of the owning workspace."""
     normalized = filename.replace("\\", "/").lstrip("/")
-    role = user.role
     manager_roles = {"admin", "site_supervisor", "hq_staff"}
 
     attachment = Attachment.query.filter_by(file_path=normalized).first()
-    if attachment is not None:
-        return task_is_accessible(attachment.task, role, user.id)
+    if attachment is not None and attachment.task is not None:
+        role = _member_role(user, attachment.task.workspace_id)
+        return role is not None and task_is_accessible(attachment.task, role, user.id)
 
-    if Invoice.query.filter_by(customer_signature_path=normalized).first() is not None:
-        return role in manager_roles
+    invoice = Invoice.query.filter_by(customer_signature_path=normalized).first()
+    if invoice is not None:
+        return _member_role(user, invoice.workspace_id) in manager_roles
 
     if normalized.startswith("reports/"):
-        return role in manager_roles
+        return _member_role(user, _report_workspace_id(normalized)) in manager_roles
 
     return False
 
 
 @upload_bp.post("/tasks/<int:task_id>/images")
-@jwt_required()
+@workspace_required()
 def upload_image(task_id: int):
-    task = Task.query.get_or_404(task_id)
+    task = Task.query.filter(Task.id == task_id, Task.workspace_id == current_workspace_id()).first_or_404()
     user_id, error_response, status = _check_task_permission(
         task, message="You cannot upload photos for this task"
     )
@@ -151,9 +179,9 @@ def upload_image(task_id: int):
 
 
 @upload_bp.post("/tasks/<int:task_id>/audio")
-@jwt_required()
+@workspace_required()
 def upload_audio(task_id: int):
-    task = Task.query.get_or_404(task_id)
+    task = Task.query.filter(Task.id == task_id, Task.workspace_id == current_workspace_id()).first_or_404()
     user_id, error_response, status = _check_task_permission(
         task, message="You cannot upload audio for this task"
     )
@@ -186,9 +214,9 @@ def upload_audio(task_id: int):
 
 
 @upload_bp.post("/tasks/<int:task_id>/signature")
-@jwt_required()
+@workspace_required()
 def upload_signature(task_id: int):
-    task = Task.query.get_or_404(task_id)
+    task = Task.query.filter(Task.id == task_id, Task.workspace_id == current_workspace_id()).first_or_404()
     user_id, error_response, status = _check_task_permission(
         task, message="You cannot upload signatures for this task"
     )
@@ -215,6 +243,7 @@ def upload_signature(task_id: int):
 
 
 @upload_bp.get("/files/<path:filename>")
+@public_endpoint  # authenticates itself: header JWT or a short-lived per-file token
 def download_file(filename: str):
     user = _authenticated_download_user(filename)
     if user is None:

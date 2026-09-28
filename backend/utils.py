@@ -23,6 +23,13 @@ def task_is_accessible(task, role: str | None, user_id: int | None) -> bool:
 
     if task is None or user_id is None:
         return False
+    # Defense in depth: a task of another workspace is never accessible, even
+    # if a caller forgot to scope its query.
+    from tenancy import current_workspace_id
+
+    request_workspace_id = current_workspace_id()
+    if request_workspace_id is not None and getattr(task, "workspace_id", None) != request_workspace_id:
+        return False
     if role in {"admin", "hq_staff"}:
         return True
 

@@ -5207,8 +5207,12 @@ button:disabled {
   }
 
   .task-detail-page.mobile-tabs .tab.active,
-  .task-detail-page.mobile-tabs button:not(.secondary-button):not(.mobile-task-back) {
+  .task-detail-page.mobile-tabs button:not(.secondary-button):not(.mobile-task-back):not(.tab):not(.chip):not(.chip-button) {
     color: #ffffff;
+  }
+
+  .task-detail-page.mobile-tabs .tab:not(.active) {
+    color: #334155;
   }
 
   .task-detail-page.mobile-tabs .status-badge.status-pending {

@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "立翔水電行",
-  "short_name": "立翔水電行",
-  "description": "立翔水電行工程與客戶管理系統",
+  "name": "TaskGo",
+  "short_name": "TaskGo",
+  "description": "現場服務團隊的派工、工時與施工回報",
   "lang": "zh-Hant",
   "start_url": "/login",
   "scope": "/",

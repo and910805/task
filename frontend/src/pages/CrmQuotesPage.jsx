@@ -1,9 +1,10 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 
-import api from '../api/client.js';
+import api, { resolveBackendUrl } from '../api/client.js';
 import { useCallback, useRef } from 'react';
 import AppHeader from '../components/AppHeader.jsx';
 import SignaturePad from '../components/task/SignaturePad.jsx';
+import { useBranding } from '../context/BrandingContext.jsx';
 
 let lineItemKeySeed = 1;
 const nextLineItemKey = () => `line-${lineItemKeySeed++}`;
@@ -124,6 +125,7 @@ const withAuthToken = (rawUrl) => {
 };
 
 const CrmQuotesPage = () => {
+  const { branding } = useBranding();
   const [activeTab, setActiveTab] = useState('manage');
   const [customers, setCustomers] = useState([]);
   const [contacts, setContacts] = useState([]);
@@ -673,8 +675,8 @@ const CrmQuotesPage = () => {
       party_a_tax_id: contract?.party_a_tax_id || customer.tax_id || '',
       party_a_phone: contract?.party_a_phone || customer.phone || '',
       party_a_address: contract?.party_a_address || customer.address || '',
-      party_b_name: contract?.party_b_name || '立翔水電行',
-      party_b_tax_id: contract?.party_b_tax_id || '14511159',
+      party_b_name: contract?.party_b_name || branding.name || '',
+      party_b_tax_id: contract?.party_b_tax_id || '',
       party_b_phone: contract?.party_b_phone || '',
       party_b_address: contract?.party_b_address || '',
       start_date: contract?.start_date || '',
@@ -1908,7 +1910,7 @@ const CrmQuotesPage = () => {
             </div>
             {paymentPanelInvoice.customer_signature_url ? (
               <div className="invoice-signature-preview">
-                <img src={withAuthToken(paymentPanelInvoice.customer_signature_url)} alt="客戶簽名" />
+                <img src={resolveBackendUrl(withAuthToken(paymentPanelInvoice.customer_signature_url))} alt="客戶簽名" />
               </div>
             ) : null}
             <SignaturePad onSubmit={submitInvoiceSignature} disabled={uploadingInvoiceSignature} />

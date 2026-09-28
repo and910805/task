@@ -1,32 +1,34 @@
-import os
-import uuid
 import json
+import os
+import re
+import uuid
 
 from flask import Blueprint, current_app, jsonify, redirect, request, send_from_directory, url_for
-from flask_jwt_extended import jwt_required
 
-from decorators import role_required
-from extensions import db
-from models import ROLE_LABEL_DEFAULTS, RoleLabel, SiteSetting
+from models import WORKSPACE_ROLE_LABEL_DEFAULTS, WorkspaceSetting
 from services.attachments import validate_upload_content
 from storage import StorageError
+from tenancy import (
+    ROLE_LABELS_KEY,
+    clear_request_caches,
+    current_workspace,
+    current_workspace_id,
+    public_endpoint,
+    try_bind_workspace,
+    workspace_required,
+    workspace_role_label_overrides,
+)
 
 
 settings_bp = Blueprint("settings", __name__)
 
-
-def _serialize_role_labels():
-    overrides = RoleLabel.get_overrides()
-    labels = {**ROLE_LABEL_DEFAULTS, **overrides}
-    return overrides, labels
-
-
-DEFAULT_BRANDING_NAME = "立翔水電行"
+PLATFORM_NAME = "TaskGo"
 BRANDING_NAME_KEY = "branding_name"
 BRANDING_LOGO_KEY = "branding_logo_path"
 # SVG is deliberately excluded: serving an administrator-uploaded SVG from the
 # application origin can become stored XSS when the file is opened directly.
 LOGO_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+LOGO_TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
 TASK_NOTE_TEMPLATES_KEY = "task_update_note_templates"
 DEFAULT_TASK_NOTE_TEMPLATES = [
     "已到場，開始作業。",
@@ -43,16 +45,38 @@ def _storage():
     return storage
 
 
-def _serialize_branding():
-    name = SiteSetting.get_value(BRANDING_NAME_KEY, DEFAULT_BRANDING_NAME) or DEFAULT_BRANDING_NAME
-    logo_record = SiteSetting.get_record(BRANDING_LOGO_KEY)
+def _logo_token(logo_path: str | None) -> str | None:
+    if not logo_path:
+        return None
+    stem, ext = os.path.splitext(os.path.basename(logo_path))
+    if ext.lower() not in LOGO_EXTENSIONS or not stem.startswith("logo-"):
+        return None
+    token = stem[len("logo-"):]
+    return token if LOGO_TOKEN_RE.match(token) else None
+
+
+def _serialize_branding(workspace=None):
+    """Company branding inside a workspace; TaskGo platform branding otherwise."""
+    if workspace is None:
+        return {
+            "name": PLATFORM_NAME,
+            "platform_name": PLATFORM_NAME,
+            "workspace_id": None,
+            "logo_path": None,
+            "logo_url": None,
+            "logo_updated_at": None,
+        }
+
+    name = WorkspaceSetting.get_value(workspace.id, BRANDING_NAME_KEY) or workspace.name
+    logo_record = WorkspaceSetting.get_record(workspace.id, BRANDING_LOGO_KEY)
     logo_path = logo_record.value if logo_record else None
     logo_updated_at = (
         logo_record.updated_at.isoformat() if logo_record and logo_record.updated_at else None
     )
 
     logo_url = None
-    if logo_path and os.path.splitext(logo_path)[1].lower() in LOGO_EXTENSIONS:
+    token = _logo_token(logo_path)
+    if token:
         try:
             storage = _storage()
         except RuntimeError:
@@ -62,10 +86,10 @@ def _serialize_branding():
                 if getattr(storage, "use_s3", False):
                     logo_url = storage.url_for(logo_path, expires_in=3600)
                 else:
-                    version = logo_updated_at or "0"
                     logo_url = url_for(
                         "settings.serve_branding_logo",
-                        v=version,
+                        token=token,
+                        v=logo_updated_at or "0",
                         _external=False,
                     )
             except StorageError:
@@ -73,14 +97,16 @@ def _serialize_branding():
 
     return {
         "name": name,
+        "platform_name": PLATFORM_NAME,
+        "workspace_id": workspace.id,
         "logo_path": logo_path,
         "logo_url": logo_url,
         "logo_updated_at": logo_updated_at,
     }
 
 
-def _load_task_note_templates() -> list[str]:
-    raw = SiteSetting.get_value(TASK_NOTE_TEMPLATES_KEY)
+def _load_task_note_templates(workspace_id: int) -> list[str]:
+    raw = WorkspaceSetting.get_value(workspace_id, TASK_NOTE_TEMPLATES_KEY)
     if raw is None:
         return list(DEFAULT_TASK_NOTE_TEMPLATES)
     try:
@@ -93,29 +119,37 @@ def _load_task_note_templates() -> list[str]:
 
 
 @settings_bp.get("/branding")
-@jwt_required(optional=True)
+@public_endpoint
 def get_branding():
-    return jsonify(_serialize_branding())
+    # Public so the login screen can render TaskGo; company branding is only
+    # returned after the caller proves membership with a valid token.
+    from tenancy import _load_current_user
+
+    workspace = None
+    if request.headers.get("Authorization"):
+        user, error = _load_current_user()
+        if error is None:
+            try_bind_workspace(user)
+            workspace = current_workspace()
+    return jsonify(_serialize_branding(workspace))
 
 
-@settings_bp.get("/branding/logo")
-def serve_branding_logo():
-    """Expose the configured branding logo without requiring authentication."""
-
-    logo_record = SiteSetting.get_record(BRANDING_LOGO_KEY)
-    logo_path = logo_record.value if logo_record else None
-
-    if not logo_path:
-        return jsonify({"msg": "Logo not configured"}), 404
-    if os.path.splitext(logo_path)[1].lower() not in LOGO_EXTENSIONS:
-        return jsonify({"msg": "Logo format is not allowed"}), 404
+@settings_bp.get("/branding/logo/<string:token>")
+@public_endpoint  # unguessable per-upload token; logos are not confidential
+def serve_branding_logo(token: str):
+    if not LOGO_TOKEN_RE.match(token or ""):
+        return jsonify({"msg": "Logo not found"}), 404
+    record = WorkspaceSetting.query.filter(
+        WorkspaceSetting.key == BRANDING_LOGO_KEY,
+        WorkspaceSetting.value.like(f"%logo-{token}.%"),
+    ).first()
+    logo_path = record.value if record else None
+    if _logo_token(logo_path) != token:
+        return jsonify({"msg": "Logo not found"}), 404
 
     try:
         storage = _storage()
     except RuntimeError:
-        storage = None
-
-    if storage is None:
         return jsonify({"msg": "Storage backend is not configured"}), 500
 
     if getattr(storage, "use_s3", False):
@@ -136,21 +170,22 @@ def serve_branding_logo():
 
 
 @settings_bp.put("/branding/name")
-@role_required("admin")
+@workspace_required("admin")
 def update_branding_name():
     data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
 
     if not name:
-        return jsonify({"msg": "登入畫面名稱不可為空白"}), 400
+        return jsonify({"msg": "公司顯示名稱不可為空白"}), 400
+    if len(name) > 120:
+        return jsonify({"msg": "公司顯示名稱過長"}), 400
 
-    record = SiteSetting.set_value(BRANDING_NAME_KEY, name)
-    db.session.refresh(record)
-    return jsonify(_serialize_branding())
+    WorkspaceSetting.set_value(current_workspace_id(), BRANDING_NAME_KEY, name)
+    return jsonify(_serialize_branding(current_workspace()))
 
 
 @settings_bp.post("/branding/logo")
-@role_required("admin")
+@workspace_required("admin")
 def upload_branding_logo():
     if "file" not in request.files:
         return jsonify({"msg": "請選擇要上傳的圖片"}), 400
@@ -172,22 +207,20 @@ def upload_branding_logo():
     try:
         storage = _storage()
     except RuntimeError:
-        storage = None
-
-    if storage is None:
         return jsonify({"msg": "Storage backend is not configured"}), 500
 
-    previous_path = SiteSetting.get_value(BRANDING_LOGO_KEY)
-    relative_path = f"branding/logo-{uuid.uuid4().hex}{ext}"
+    workspace_id = current_workspace_id()
+    previous_path = WorkspaceSetting.get_value(workspace_id, BRANDING_LOGO_KEY)
+    relative_path = f"branding/ws{workspace_id}/logo-{uuid.uuid4().hex}{ext}"
 
     try:
         file.stream.seek(0)
         storage.save(relative_path, file.stream)
     except Exception as exc:
         current_app.logger.error("Logo upload failed: %s", exc)
-        return jsonify({"msg": "上傳網站 Logo 失敗"}), 500
+        return jsonify({"msg": "上傳公司 Logo 失敗"}), 500
 
-    SiteSetting.set_value(BRANDING_LOGO_KEY, relative_path)
+    WorkspaceSetting.set_value(workspace_id, BRANDING_LOGO_KEY, relative_path)
 
     if previous_path:
         try:
@@ -195,16 +228,16 @@ def upload_branding_logo():
         except Exception as exc:  # pragma: no cover - best-effort cleanup
             current_app.logger.warning("Failed to delete previous logo %s: %s", previous_path, exc)
 
-    response = _serialize_branding()
-    return jsonify(response), 201
+    return jsonify(_serialize_branding(current_workspace())), 201
 
 
 @settings_bp.delete("/branding/logo")
-@role_required("admin")
+@workspace_required("admin")
 def delete_branding_logo():
-    previous_path = SiteSetting.get_value(BRANDING_LOGO_KEY)
+    workspace_id = current_workspace_id()
+    previous_path = WorkspaceSetting.get_value(workspace_id, BRANDING_LOGO_KEY)
 
-    SiteSetting.delete_value(BRANDING_LOGO_KEY)
+    WorkspaceSetting.delete_value(workspace_id, BRANDING_LOGO_KEY)
 
     if previous_path:
         try:
@@ -217,17 +250,17 @@ def delete_branding_logo():
             except Exception as exc:  # pragma: no cover - best-effort cleanup
                 current_app.logger.warning("Failed to delete logo %s: %s", previous_path, exc)
 
-    return jsonify(_serialize_branding()), 200
+    return jsonify(_serialize_branding(current_workspace())), 200
 
 
 @settings_bp.get("/task-update-templates")
-@jwt_required()
+@workspace_required()
 def get_task_update_templates():
-    return jsonify({"templates": _load_task_note_templates()})
+    return jsonify({"templates": _load_task_note_templates(current_workspace_id())})
 
 
 @settings_bp.put("/task-update-templates")
-@role_required("admin")
+@workspace_required("admin")
 def update_task_update_templates():
     data = request.get_json(silent=True) or {}
     templates = data.get("templates")
@@ -238,30 +271,42 @@ def update_task_update_templates():
         return jsonify({"msg": "templates 必須是陣列"}), 400
 
     cleaned = [str(item).strip() for item in templates if str(item).strip()]
-    SiteSetting.set_value(
+    WorkspaceSetting.set_value(
+        current_workspace_id(),
         TASK_NOTE_TEMPLATES_KEY,
         json.dumps(cleaned, ensure_ascii=False),
     )
     return jsonify({"templates": cleaned})
 
 
-@settings_bp.get("/roles")
-@jwt_required(optional=True)
-def get_role_labels():
-    overrides, labels = _serialize_role_labels()
-    return jsonify(
-        {
-            "labels": labels,
-            "overrides": overrides,
-            "defaults": ROLE_LABEL_DEFAULTS,
-        }
+def _role_label_payload():
+    overrides = workspace_role_label_overrides(current_workspace_id())
+    return {
+        "labels": {**WORKSPACE_ROLE_LABEL_DEFAULTS, **overrides},
+        "overrides": overrides,
+        "defaults": WORKSPACE_ROLE_LABEL_DEFAULTS,
+    }
+
+
+def _save_role_label_overrides(overrides: dict) -> None:
+    WorkspaceSetting.set_value(
+        current_workspace_id(),
+        ROLE_LABELS_KEY,
+        json.dumps(overrides, ensure_ascii=False),
     )
+    clear_request_caches()
+
+
+@settings_bp.get("/roles")
+@workspace_required()
+def get_role_labels():
+    return jsonify(_role_label_payload())
 
 
 @settings_bp.put("/roles/<string:role>")
-@role_required("admin")
+@workspace_required("admin")
 def update_role_label(role: str):
-    if role not in ROLE_LABEL_DEFAULTS:
+    if role not in WORKSPACE_ROLE_LABEL_DEFAULTS:
         return jsonify({"msg": "Unknown role"}), 400
 
     data = request.get_json(silent=True) or {}
@@ -269,36 +314,29 @@ def update_role_label(role: str):
 
     if not label:
         return jsonify({"msg": "顯示名稱不可為空白"}), 400
+    if len(label) > 80:
+        return jsonify({"msg": "顯示名稱過長"}), 400
 
-    record = RoleLabel.query.filter_by(role=role).first()
-    if record:
-        record.label = label
-    else:
-        record = RoleLabel(role=role, label=label)
-        db.session.add(record)
-
-    db.session.commit()
-    RoleLabel.clear_cache()
-
-    overrides, labels = _serialize_role_labels()
-    return jsonify({"labels": labels, "overrides": overrides})
+    overrides = workspace_role_label_overrides(current_workspace_id())
+    overrides[role] = label
+    _save_role_label_overrides(overrides)
+    return jsonify(_role_label_payload())
 
 
 @settings_bp.delete("/roles/<string:role>")
-@role_required("admin")
+@workspace_required("admin")
 def reset_role_label(role: str):
-    if role not in ROLE_LABEL_DEFAULTS:
+    if role not in WORKSPACE_ROLE_LABEL_DEFAULTS:
         return jsonify({"msg": "Unknown role"}), 400
 
-    record = RoleLabel.query.filter_by(role=role).first()
-    if record:
-        db.session.delete(record)
-        db.session.commit()
-        RoleLabel.clear_cache()
+    overrides = workspace_role_label_overrides(current_workspace_id())
+    if overrides.pop(role, None) is not None:
+        _save_role_label_overrides(overrides)
+    return jsonify(_role_label_payload())
 
-    overrides, labels = _serialize_role_labels()
-    return jsonify({"labels": labels, "overrides": overrides})
 
+# Email/LINE notification rules are still global (site_setting); until Phase 2
+# makes them per workspace, only the migrated legacy workspace may edit them.
 
 
 def _task_status_options() -> list[str]:
@@ -310,7 +348,7 @@ def _task_status_options() -> list[str]:
 
 
 @settings_bp.get("/notifications/email")
-@role_required("admin")
+@workspace_required("admin", legacy_only=True)
 def get_email_notification_settings():
     """Admin: read email-notification rules (LINE notifications are unaffected)."""
     from services.notifications import get_email_notification_settings as _get
@@ -323,7 +361,7 @@ def get_email_notification_settings():
 
 
 @settings_bp.put("/notifications/email")
-@role_required("admin")
+@workspace_required("admin", legacy_only=True)
 def update_email_notification_settings():
     """Admin: update email-notification rules."""
     from services.notifications import save_email_notification_settings as _save
@@ -353,7 +391,7 @@ def update_email_notification_settings():
 
 
 @settings_bp.get("/notifications/line")
-@role_required("admin")
+@workspace_required("admin", legacy_only=True)
 def get_line_notification_settings():
     """Admin: read LINE (Bot) notification rules."""
     from services.notifications import get_line_notification_settings as _get
@@ -369,7 +407,7 @@ def get_line_notification_settings():
 
 
 @settings_bp.put("/notifications/line")
-@role_required("admin")
+@workspace_required("admin", legacy_only=True)
 def update_line_notification_settings():
     """Admin: update LINE (Bot) notification rules."""
     from services.notifications import save_line_notification_settings as _save

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lixiang-shell-v1';
+const CACHE_NAME = 'taskgo-shell-v1';
 const APP_SHELL = [
   '/index.html',
   '/offline.html',
@@ -32,7 +32,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
       .then((names) => Promise.all(names
-        .filter((name) => name.startsWith('lixiang-shell-') && name !== CACHE_NAME)
+        .filter((name) => (name.startsWith('lixiang-shell-') || name.startsWith('taskgo-shell-')) && name !== CACHE_NAME)
         .map((name) => caches.delete(name))))
       .then(() => self.clients.claim()),
   );

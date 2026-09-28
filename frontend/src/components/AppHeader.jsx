@@ -4,13 +4,14 @@ import { NavLink, useLocation } from 'react-router-dom';
 import brandFallback from '../assets/brand-logo.svg';
 import GlobalSearch from './GlobalSearch.jsx';
 import SidebarOwnerOrb from './SidebarOwnerOrb.jsx';
+import WorkspaceSwitcher from './WorkspaceSwitcher.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useBranding } from '../context/BrandingContext.jsx';
 import { useRoleLabels } from '../context/RoleLabelContext.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 
 const AppHeader = ({ title, subtitle, actions = null, children }) => {
-  const { user, logout } = useAuth();
+  const { user, logout, hasModule } = useAuth();
   const { branding } = useBranding();
   const { labels } = useRoleLabels();
   const { preference, setPreference } = useTheme();
@@ -19,7 +20,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
   const isAdmin = user?.role === 'admin';
   const brandName = branding.name || 'TaskGo';
   const logoSrc = branding.logoUrl || brandFallback;
-  const roleLabel = labels[user?.role] || user?.role || '';
+  const roleLabel = user?.is_owner ? '擁有者' : labels[user?.role] || user?.role || '';
 
   const navGroups = useMemo(
     () => [
@@ -28,6 +29,21 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
         label: '\u73fe\u5834\u4f5c\u696d',
         hint: '\u4efb\u52d9\u8207\u6392\u7a0b',
         items: [
+          {
+            to: '/today',
+            label: '今日工作',
+            desc: '今天要做的工作、接單、工時與完工回報。',
+            tag: 'Today',
+            exact: true,
+          },
+          {
+            to: '/dispatch/new',
+            label: '新增派工',
+            desc: '建立工作並指派現場人員。',
+            tag: 'Dispatch',
+            managerOnly: true,
+            exact: true,
+          },
           {
             to: '/app',
             label: '\u71df\u904b\u5de5\u4f5c\u53f0',
@@ -61,6 +77,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
       {
         id: 'crm',
         managerOnly: true,
+        module: 'crm',
         label: 'CRM / \u696d\u52d9',
         hint: '\u5ba2\u6236\u8207\u5831\u50f9',
         items: [
@@ -119,6 +136,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
             label: '\u5831\u8868\u4e2d\u5fc3',
             desc: '\u6aa2\u8996\u71df\u904b\u6578\u64da\u8207\u4efb\u52d9\u7d71\u8a08\u5831\u8868\u3002',
             tag: 'Analytics',
+            module: 'reports',
             exact: true,
           },
           {
@@ -127,6 +145,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
             desc: '\u5efa\u7acb\u8017\u6750\u4e3b\u6a94\u3001\u8a18\u9304\u9032\u8ca8\u8207\u5165\u5eab\u6210\u672c\u3002',
             tag: 'Materials',
             managerOnly: true,
+            module: 'materials',
             exact: true,
           },
           {
@@ -135,6 +154,7 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
             desc: '\u67e5\u770b\u6bcf\u6708\u9032\u8ca8\u3001\u8017\u7528\u3001\u5eab\u5b58\u8207\u7570\u52d5\u5e33\u3002',
             tag: 'Materials',
             managerOnly: true,
+            module: 'materials',
             exact: true,
           },
         ],
@@ -149,6 +169,14 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
             label: '\u500b\u4eba\u8a2d\u5b9a',
             desc: '\u8abf\u6574\u5e33\u865f\u8cc7\u8a0a\u3001\u901a\u77e5\u8207\u767b\u5165\u8a2d\u5b9a\u3002',
             tag: 'Account',
+            exact: true,
+          },
+          {
+            to: '/team',
+            label: '成員與邀請',
+            desc: '邀請成員、調整角色與公司資料。',
+            tag: 'Team',
+            adminOnly: true,
             exact: true,
           },
           {
@@ -170,14 +198,18 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
       navGroups
         .map((group) => ({
           ...group,
-          items: group.managerOnly && user?.role === 'worker' ? [] : group.items.filter((item) => {
-            if (item.adminOnly && !isAdmin) return false;
-            if (item.managerOnly && user?.role === 'worker') return false;
-            return true;
-          }),
+          items: (group.managerOnly && user?.role === 'worker') || (group.module && !hasModule(group.module))
+            ? []
+            : group.items.filter((item) => {
+              if (item.adminOnly && !isAdmin) return false;
+              if (item.managerOnly && user?.role === 'worker') return false;
+              // Modules not yet isolated per company stay hidden (and closed server-side).
+              if (item.module && !hasModule(item.module)) return false;
+              return true;
+            }),
         }))
         .filter((group) => group.items.length > 0),
-    [isAdmin, navGroups, user?.role],
+    [hasModule, isAdmin, navGroups, user?.role],
   );
 
   const isItemActive = (item) => (item.exact ? location.pathname === item.to : location.pathname.startsWith(item.to));
@@ -212,9 +244,10 @@ const AppHeader = ({ title, subtitle, actions = null, children }) => {
           </div>
           <div className="app-sidebar__brand-meta">
             <strong>{brandName}</strong>
-            <span>{'\u71df\u904b\u7cfb\u7d71'}</span>
+            <span>TaskGo</span>
           </div>
         </div>
+        <WorkspaceSwitcher />
 
         <nav className="app-sidebar__nav">
           <GlobalSearch />
