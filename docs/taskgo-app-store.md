@@ -1,6 +1,13 @@
 # TaskGo iOS：App Store 上架審查（2026-09-29）
 
-> **現在還不能送審，也不能宣稱程式碼已符合全部上架條件。** 公司隔離、資料庫遷移與原生檢查仍在驗收。以下本機測試不代表 iOS 模擬器或實機通過；尚未驗證 TaskGo 的 Codemagic 成功建置、TestFlight 安裝或 Apple 審查結果。
+> **現在還不能送審，也不能宣稱已符合全部上架條件。** Codemagic 模擬器建置及正式簽署上傳已成功；正式後端遷移、畫面驗收、TestFlight 實機操作與 Apple 審查仍未完成。
+
+## 雲端建置紀錄（2026-09-29）
+
+- 固定來源：`and910805/task` 的 `d14a97e3b6af4c2ccbcc4672f506d32da23ec814`；原生包裝：`and910805/kuanlin-mobile-apps` 的 `5f21e5bec1b2ba3816532981db827f29d470b580`。兩者皆推送至獨立 `codex/taskgo-ios-release` 分支，未合併正式分支或執行正式資料遷移。
+- [模擬器建置](https://codemagic.io/app/6ab3b6a61cfcfc47b314f503/build/6abaa0fc083ff0a9a53a2835)：finished，2m13s；固定來源重建、同步、檢查、編譯、安裝啟動和 PNG 截圖命令成功。瀏覽器阻擋 artifacts ZIP 下載，截圖尚未目視驗收，不推定畫面正確。
+- [簽署建置](https://codemagic.io/app/6ab3b6a61cfcfc47b314f503/build/6abaa2085a3a7169f3d38767)：finished，2m53s；TaskGo 1.0 (9)、bundle `online.kuanlin.taskgo`，產出 App.ipa，Apple 回傳 `UPLOAD SUCCEEDED with no errors`。
+- 未送 App Review、未自動分派 TestFlight 測試者、未驗證實機推播及正式後端相容性。下方歷史準備清單不得取代以上建置證據與剩餘驗收。
 
 ## 目前驗證狀態（2026-09-29）
 
