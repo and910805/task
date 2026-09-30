@@ -1,0 +1,24 @@
+.stamp-dialog { width: min(960px, calc(100vw - 24px)); max-width: none; height: min(94dvh, 1100px); max-height: 94dvh; padding: 0; border: 1px solid #cbd5d1; border-radius: 8px; background: #f4f6f5; color: #202822; }
+.stamp-dialog[open] { display: flex; flex-direction: column; }
+.stamp-dialog::backdrop { background: #0008; }
+.stamp-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid #d7ded9; background: white; }
+.stamp-toolbar h2 { flex: 1; min-width: 0; margin: 0; font-size: 18px; overflow-wrap: anywhere; }
+.stamp-toolbar h2 small { display: block; font-size: 13px; font-weight: 400; margin-top: 4px; }
+.stamp-toolbar button { display: inline-flex; gap: 6px; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; padding: 8px; border: 1px solid #bbc8c0; border-radius: 4px; background: white; color: #20382c; }
+.stamp-toolbar button:disabled { opacity: .45; cursor: not-allowed; }
+.stamp-toolbar fieldset { display: flex; gap: 12px; border: 0; margin: 0; padding: 0; }
+.stamp-toolbar label { display: flex; flex-direction: row; align-items: center; gap: 5px; font-size: 14px; color: #202822; }
+.stamp-toolbar select { min-height: 44px; }
+.stamp-status { margin-right: auto; font-size: 13px; }
+.stamp-warning { box-sizing: border-box; flex-shrink: 0; height: 44px; overflow-y: auto; padding: 8px 14px; margin: 0; color: #9c2727; background: #fff5f2; font-size: 14px; }
+.stamp-warning:empty { background: #f4f6f5; }
+.stamp-dialog .stamp-toolbar button:disabled { background: #e4e8e5; color: #58635b; opacity: 1; }
+.stamp-scroll { overflow: auto; flex: 1; min-height: 0; padding: 16px; }
+.stamp-sheet { position: relative; width: min(100%, 750px); margin: auto; background: white; box-shadow: 0 1px 5px #0002; }
+.stamp-page { display: block; width: 100%; height: 100%; }
+.stamp-sheet .stamp-handle { position: absolute; transform: translate(-50%, -50%); padding: 0; margin: 0; border: 1px dashed #217747; background: transparent; border-radius: 0; cursor: move; touch-action: none; min-width: 0; min-height: 0; }
+.stamp-sheet .stamp-handle:disabled { opacity: 1; border-color: transparent; cursor: default; }
+.stamp-sheet .stamp-handle.is-invalid { outline: 2px solid #be2828; }
+.stamp-handle img { width: 100%; height: 100%; object-fit: fill; display: block; pointer-events: none; }
+.stamp-dialog :focus-visible { outline: 3px solid #237448; outline-offset: 2px; }
+@media (max-width: 520px) { .stamp-scroll { padding: 6px; } .stamp-toolbar { gap: 6px; padding: 8px; } .stamp-status { width: 100%; } .stamp-warning { height: 60px; } }

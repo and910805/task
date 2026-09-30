@@ -384,3 +384,12 @@
 - 平台品牌為 TaskGo；「立翔水電行」是遷移而來的一個工作區（`workspace.is_legacy`）。設計、遷移與回滾見 `docs/taskgo-multitenancy.md`，iOS/上架見 `docs/taskgo-app-store.md`。
 - 授權以「工作區成員資格 + 工作區內角色」為準（`backend/tenancy.py`），`user.role` 只為回滾保留。前端以 `X-Workspace-Id` 指定公司，伺服器每次驗證。
 - 新增 API 必須標註 `workspace_required` / `account_required` / `public_endpoint`，查詢一律加 `workspace_id` 條件；`tests/test_workspace_isolation.py` 會檢查漏標的路由。
+
+### PDF 印章預覽（2026-09-30）
+
+- 報價／請款列表的「印章預覽」支援自動、手動拖曳、頁碼、恢復自動與儲存並下載；只預覽已儲存的單據內容。
+- `GET /api/crm/<quotes|invoices>/<id>/stamp-preview?page=1` 回傳無章的 PDF 頁面圖片、原尺寸印章及實際表格座標；`PUT .../stamp-position` 儲存 `mode=auto` 或 `mode=manual` 加 `page/x/y/fingerprint`。座標單位是 PDF points，原點在左下。
+- 設定存於既有 `workspace_setting` 的 `pdf_stamp_quotes_<id>`／`pdf_stamp_invoices_<id>`，不新增資料庫欄位。複製／轉請款預設重新自動排版，不沿用舊座標。
+- 後端驗證工作區、角色、表格邊界與文字／非零金額碰撞；已轉請款的報價與已簽名的請款禁止改章。手動位置指紋失效時下載回傳 409，須重新預覽確認或恢復自動，不能靜默忽略。
+- PDFium 預覽使用 `pypdfium2` 並以程序內鎖串行化渲染；部署需安裝更新後的 `backend/requirements.txt`。此功能依賴多租戶版本，不可只把路由檔案覆蓋到未遷移的舊版服務。
+- 驗證：`tests/test_pdf_stamp_editor.py`、`tests/test_crm_pdf_stamp.py`，包含跨工作區、無效座標、多頁、舊版面、簽名鎖定與下載座標一致性。

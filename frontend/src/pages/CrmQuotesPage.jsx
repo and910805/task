@@ -4,6 +4,8 @@ import api, { resolveBackendUrl } from '../api/client.js';
 import { useCallback, useRef } from 'react';
 import AppHeader from '../components/AppHeader.jsx';
 import SignaturePad from '../components/task/SignaturePad.jsx';
+import StampPreview from '../components/StampPreview.jsx';
+import { Stamp } from 'lucide-react';
 import { useBranding } from '../context/BrandingContext.jsx';
 
 let lineItemKeySeed = 1;
@@ -127,6 +129,7 @@ const withAuthToken = (rawUrl) => {
 const CrmQuotesPage = () => {
   const { branding } = useBranding();
   const [activeTab, setActiveTab] = useState('manage');
+  const [stampDocument, setStampDocument] = useState(null);
   const [customers, setCustomers] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [catalogItems, setCatalogItems] = useState([]);
@@ -1034,6 +1037,7 @@ const CrmQuotesPage = () => {
 
   return (
     <div className="page">
+      {stampDocument && <StampPreview key={`${stampDocument.kind}-${stampDocument.id}`} document={stampDocument} onClose={() => setStampDocument(null)} />}
       <AppHeader title="報價單" subtitle="可從價目資料庫帶入品項，並查看客戶歷史施工紀錄。" />
 
       {error && <p className="error-text">{error}</p>}
@@ -1632,6 +1636,10 @@ const CrmQuotesPage = () => {
                     >
                       {downloadingQuotePdfId === quote.id ? 'PDF產生中...' : 'PDF下載'}
                     </button>
+                    <button type="button" className="secondary-btn" disabled={hasActiveInvoice}
+                      onClick={() => setStampDocument({ kind: 'quotes', id: quote.id, label: quote.quote_no })}>
+                      <Stamp size={16} /> 印章預覽
+                    </button>
                     {latestContract ? (
                       <button
                         type="button"
@@ -1832,6 +1840,10 @@ const CrmQuotesPage = () => {
                       disabled={downloadingInvoicePdfId === invoice.id}
                     >
                       {downloadingInvoicePdfId === invoice.id ? 'PDF產生中...' : 'PDF下載'}
+                    </button>
+                    <button type="button" className="secondary-btn" disabled={Boolean(invoice.customer_signed_at)}
+                      onClick={() => setStampDocument({ kind: 'invoices', id: invoice.id, label: invoice.invoice_no })}>
+                      <Stamp size={16} /> 印章預覽
                     </button>
                     <button type="button" className="secondary-btn" onClick={() => openInvoicePaymentPanel(invoice)}>
                       {invoice.customer_signed_at ? '查看簽名' : '客戶簽名'}

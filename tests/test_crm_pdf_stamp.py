@@ -1,8 +1,13 @@
 import math
 import sys
 import unittest
+from datetime import date
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from flask import Flask
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
@@ -67,13 +72,71 @@ class QuotePdfStampPlacementTest(unittest.TestCase):
 
     def test_full_last_page_gets_extra_blank_rows_for_stamp(self):
         self.assertEqual(crm._quote_pdf_item_row_count(20, 20), 40)
-        self.assertEqual(crm._quote_pdf_item_row_count(37, 20), 60)
+        self.assertEqual(crm._quote_pdf_item_row_count(38, 20), 60)
         self.assertEqual(crm._quote_pdf_item_row_count(40, 20), 60)
 
     def test_partial_last_page_keeps_current_page_when_stamp_rows_fit(self):
         self.assertEqual(crm._quote_pdf_item_row_count(16, 20), 20)
         self.assertEqual(crm._quote_pdf_item_row_count(15, 20), 20)
         self.assertEqual(crm._quote_pdf_item_row_count(21, 20), 40)
+
+    def test_seventeen_rows_keep_full_size_stamp_in_three_blank_rows(self):
+        for count, expected in ((17, 20), (37, 40)):
+            self.assertEqual(crm._quote_pdf_item_row_count(count, 20), expected)
+            first, last = crm._quote_pdf_stamp_row_range(count, expected, 20)
+            self.assertEqual((first, last), (count, expected - 1))
+            heights = crm._quote_pdf_row_heights(count, expected, 20)
+            self.assertAlmostEqual(sum(heights[first + 1:last + 2]), 44 * mm)
+            self.assertEqual(heights[count], 9 * mm)
+
+    def test_sixteen_items_with_tax_render_one_page_with_stamp(self):
+        quote = SimpleNamespace(
+            quote_no="test-sixteen-with-tax", recipient_name="Customer",
+            site_address="", issue_date=date(2026, 9, 30),
+            expiry_date=date(2026, 10, 9), note=None,
+            subtotal=16000, tax_rate=5, tax_amount=800, total_amount=16800,
+            items=[SimpleNamespace(
+                id=i, sort_order=i, description="Electrical installation",
+                unit="set", quantity=1, unit_price=1000, amount=1000, note=None,
+            ) for i in range(16)],
+        )
+        recorded = {}
+        original_factory = crm._make_pdf_stamp_canvasmaker
+
+        def capture_factory(doc, placement):
+            recorded["placement"] = placement
+            base = original_factory(doc, placement)
+
+            class CaptureCanvas(base):
+                def save(self):
+                    recorded["pages"] = len(self._saved_page_states)
+                    super().save()
+
+            return CaptureCanvas
+
+        with (
+            Flask(__name__).app_context(),
+            patch.object(crm, "current_workspace_id", return_value=None),
+            patch.object(crm, "_crm_brand_name", return_value="TaskGo"),
+            patch.object(crm, "_require_embedded_pdf_font"),
+            patch.object(crm, "PDF_FONT_NAME", "Helvetica"),
+            patch.object(crm, "_resolve_pdf_stamp_path", return_value=str(ROOT / "data" / crm.PDF_STAMP_DEFAULT_FILENAME)),
+            patch.object(crm, "_resolve_pdf_stamp_rotation_deg", return_value=90),
+            patch.object(crm, "_make_pdf_stamp_canvasmaker", side_effect=capture_factory),
+        ):
+            result = crm._build_quote_template_pdf(quote, None, None)
+
+        self.assertTrue(result.getvalue().startswith(b"%PDF"))
+        self.assertEqual(recorded["pages"], 1)
+        self.assertEqual(recorded["placement"]["target_page"], 1)
+        self.assertAlmostEqual(recorded["placement"]["stamp_w"], crm.PDF_STAMP_WIDTH_MM * mm)
+
+    def test_zero_amount_wrapped_row_is_not_shortened_for_stamp(self):
+        heights = crm._quote_pdf_row_heights(
+            17, 20, 20, trailing_stamp_safe_rows=1,
+            item_heights=[9 * mm] * 16 + [20 * mm],
+        )
+        self.assertEqual(heights[17], 20 * mm)
 
     def test_trailing_zero_amount_row_can_prevent_an_extra_page(self):
         self.assertEqual(
