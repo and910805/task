@@ -376,3 +376,12 @@
 ### LINE 相關環境變數
 - `LINE_CHANNEL_ACCESS_TOKEN`
 - `LINE_CHANNEL_SECRET`
+
+### PDF 印章預覽（2026-09-30）
+
+- 報價／請款列表的「印章預覽」支援自動、手動拖曳、頁碼、恢復自動與儲存並下載；只預覽已儲存的單據內容。
+- `GET /api/crm/<quotes|invoices>/<id>/stamp-preview?page=1` 回傳無章的 PDF 頁面圖片、原尺寸印章及實際表格座標；`PUT .../stamp-position` 儲存 `mode=auto` 或 `mode=manual` 加 `page/x/y/fingerprint`。座標單位是 PDF points，原點在左下。
+- 正式站單公司版本使用既有 `site_setting` 的 `pdf_stamp_quotes_<id>`／`pdf_stamp_invoices_<id>`，不新增資料表或欄位；不要混入多公司版本的資料庫遷移。複製／轉請款預設重新自動排版。
+- 後端驗證登入角色、表格邊界與文字／非零金額碰撞；已轉請款的報價與已簽名的請款禁止改章。手動位置失效時下載回傳 409，須重新預覽確認或恢復自動。
+- PDFium 預覽使用 `pypdfium2` 並以程序內鎖串行化渲染；部署需安裝更新後的 `backend/requirements.txt`。
+- 驗證：`tests/test_pdf_stamp_editor.py`、`tests/test_crm_pdf_stamp.py`，包含權限、無效座標、多頁、舊版面、簽名鎖定與下載座標一致性。

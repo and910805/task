@@ -6,6 +6,7 @@ from io import BytesIO
 from collections import OrderedDict
 from copy import copy
 import glob
+import base64
 import hashlib
 import json
 import math
@@ -16,7 +17,7 @@ from types import SimpleNamespace
 import unicodedata
 from xml.sax.saxutils import escape
 
-from flask import Blueprint, current_app, jsonify, request, send_file
+from flask import Blueprint, abort, current_app, jsonify, request, send_file
 from flask_jwt_extended import jwt_required
 from openpyxl import load_workbook
 from sqlalchemy import func, inspect
@@ -45,6 +46,7 @@ from models import (
 )
 from utils import get_current_user_id
 from services.attachments import replace_signature_file
+from services.pdf_stamp_layout import StampLayoutTable, StampLayoutError, fingerprint, validate_position, render_page
 from services.notifications import send_email_async
 from rate_limit import rate_limit
 
@@ -426,7 +428,7 @@ def _quote_pdf_item_row_count(
         - last_page_item_count
         + min(trailing_stamp_safe_rows, last_page_item_count)
     )
-    if usable_stamp_rows < reserved_blank_rows:
+    if usable_stamp_rows < min(reserved_blank_rows, 3):
         row_count += rows_per_page
     return row_count
 
@@ -537,8 +539,14 @@ def _quote_pdf_row_heights(
         reserved_rows=reserved_blank_rows,
         trailing_stamp_safe_rows=trailing_stamp_safe_rows,
     )
+    # Keep the physical stamp area even when only three safe rows remain.
+    reserved_slot_count = last_reserved_slot - first_reserved_slot + 1
+    stamp_row_height = (
+        reserved_blank_rows * QUOTE_PDF_STAMP_ROW_HEIGHT_MM * mm
+        / max(reserved_slot_count, 1)
+    )
     for item_slot in range(first_reserved_slot, last_reserved_slot + 1):
-        row_heights[item_slot + 1] = QUOTE_PDF_STAMP_ROW_HEIGHT_MM * mm
+        row_heights[item_slot + 1] = max(row_heights[item_slot + 1], stamp_row_height)
 
     dynamic_extra = sum(
         max(0.0, row_heights[item_slot + 1] - (QUOTE_PDF_BASE_ROW_HEIGHT_MM * mm))
@@ -558,12 +566,13 @@ def _quote_pdf_row_heights(
     return row_heights
 
 
-def _quote_pdf_item_heights(rows: list[list[object]], col_widths: list[float], item_count: int) -> list[float]:
+def _quote_pdf_item_heights(rows: list[list[object]], col_widths: list[float], item_count: int,
+                            *, minimum_mm: float = QUOTE_PDF_BASE_ROW_HEIGHT_MM) -> list[float]:
     item_heights: list[float] = []
     horizontal_padding = 12.0
     vertical_padding = 8.0
     for row_index in range(1, min(item_count, len(rows) - 1) + 1):
-        required_height = QUOTE_PDF_BASE_ROW_HEIGHT_MM * mm
+        required_height = minimum_mm * mm
         for col_index in (1, 2, 7):
             value = rows[row_index][col_index]
             if not hasattr(value, "wrap"):
@@ -796,6 +805,7 @@ def _make_pdf_stamp_canvasmaker(doc, placement=None):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self._saved_page_states = []
+            self.stamp_layout = getattr(doc, "stamp_layout", None)
 
         def showPage(self):
             self._saved_page_states.append(dict(self.__dict__))
@@ -803,14 +813,30 @@ def _make_pdf_stamp_canvasmaker(doc, placement=None):
 
         def save(self):
             total_pages = len(self._saved_page_states)
+            effective_placement = placement
+            if self.stamp_layout is not None:
+                self.stamp_layout["pages"] = total_pages
+                labels = getattr(doc, "stamp_labels", None)
+                if labels and self.stamp_layout.get("stamp"):
+                    stamp_rows = [r for r in self.stamp_layout["rows"]
+                                  if labels[0] <= int(r["cells"][0]["text"]) <= labels[1]]
+                    automatic = self.stamp_layout["automatic"]
+                    if stamp_rows and len({r["page"] for r in stamp_rows}) == 1:
+                        first, last = stamp_rows[0], stamp_rows[-1]
+                        automatic.update(center_x=(first["cells"][5]["box"][0] + first["cells"][7]["box"][2]) / 2,
+                                         center_y=(first["cells"][0]["box"][3] + last["cells"][0]["box"][1]) / 2,
+                                         target_page=first["page"])
+                manual = getattr(doc, "manual_stamp", None)
+                if manual is not None:
+                    effective_placement = validate_position(manual, self.stamp_layout)
             for page_index, page_state in enumerate(self._saved_page_states, start=1):
                 self.__dict__.update(page_state)
                 target_page = None
-                if isinstance(placement, dict):
-                    target_page = placement.get("target_page")
+                if isinstance(effective_placement, dict):
+                    target_page = effective_placement.get("target_page")
                 should_draw = page_index == total_pages if target_page is None else page_index == int(target_page)
                 if should_draw:
-                    _draw_pdf_stamp(self, doc, placement)
+                    _draw_pdf_stamp(self, doc, effective_placement)
                 super().showPage()
             super().save()
 
@@ -1778,6 +1804,9 @@ def _build_quote_template_pdf(
     *,
     document_label: str = "\u5831\u50f9\u55ae",
     document_title_prefix: str = "quote",
+    stamp_layout: dict | None = None,
+    manual_stamp: dict | None = None,
+    hide_stamp: bool = False,
 ):
     _require_embedded_pdf_font()
     recipient = _resolve_quote_recipient_display(quote, customer, contact)
@@ -1963,7 +1992,24 @@ def _build_quote_template_pdf(
         trailing_stamp_safe_rows=trailing_stamp_safe_rows,
         item_heights=item_heights,
     )
-    table = Table(
+    # Fit a single-page table by consuming only spare row padding, never stamp space or text.
+    if item_row_count == item_rows_per_page and not quote.note and signature_image_path is None:
+        header_height = sum(_flowable_render_height(f, float(doc.width), float(doc.height)) for f in story)
+        footer_height = max(body_style.leading, signer_style.leading) + mm
+        excess = max(0.0, header_height + sum(table_row_heights) + footer_height + 13 - doc.height)
+        first_reserved, last_reserved = _quote_pdf_stamp_row_range(
+            len(display_items), item_row_count, item_rows_per_page,
+            trailing_stamp_safe_rows=trailing_stamp_safe_rows,
+        )
+        minimum_heights = _quote_pdf_item_heights(rows, col_widths, len(display_items), minimum_mm=8)
+        capacities = {i + 1: max(0.0, table_row_heights[i + 1] - height)
+                      for i, height in enumerate(minimum_heights)
+                      if not first_reserved <= i <= last_reserved}
+        total_capacity = sum(capacities.values())
+        if excess > 0 and total_capacity >= excess:
+            for row_index, capacity in capacities.items():
+                table_row_heights[row_index] -= excess * capacity / total_capacity
+    table = StampLayoutTable(
         rows,
         colWidths=col_widths,
         rowHeights=table_row_heights,
@@ -2056,6 +2102,21 @@ def _build_quote_template_pdf(
         except Exception:
             stamp_placement = None
     if stamp_placement is None:
+        stamp_placement = {"disabled": True}
+    layout = stamp_layout if stamp_layout is not None else {}
+    layout.update(rows=[], pages=0, stamp=None, automatic=stamp_placement)
+    if stamp_path:
+        src_w, src_h = ImageReader(stamp_path).getSize()
+        width = PDF_STAMP_WIDTH_MM * mm
+        height = width * src_h / src_w
+        half_w, half_h = _rotated_rect_half_extents(width, height, _resolve_pdf_stamp_rotation_deg())
+        layout["stamp"] = {"width": 2 * half_w, "height": 2 * half_h,
+                           "rotation": _resolve_pdf_stamp_rotation_deg(),
+                           "image_hash": hashlib.sha256(Path(stamp_path).read_bytes()).hexdigest()}
+    doc.stamp_layout = layout
+    doc.manual_stamp = manual_stamp
+    doc.stamp_labels = (first_stamp_row, last_stamp_row)
+    if hide_stamp:
         stamp_placement = {"disabled": True}
     story.append(table)
 
@@ -2251,7 +2312,7 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
     return buffer
 
 
-def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, contact: Contact | None):
+def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, contact: Contact | None, **layout_options):
     quote_like = SimpleNamespace(
         quote_no=invoice.invoice_no,
         recipient_name=_resolve_invoice_recipient_display(invoice, customer, contact),
@@ -2286,6 +2347,7 @@ def _build_invoice_template_pdf(invoice: Invoice, customer: Customer | None, con
         contact,
         document_label="\u8acb\u6b3e\u55ae",
         document_title_prefix="invoice",
+        **layout_options,
     )
 
 
@@ -3495,6 +3557,9 @@ def delete_quote(quote_id: int):
     customer = quote.customer
     contact = quote.contact
     quote_label = quote.quote_no
+    stamp_setting = SiteSetting.get_record(_stamp_setting_key("quotes", quote.id))
+    if stamp_setting is not None:
+        db.session.delete(stamp_setting)
     db.session.delete(quote)
     _append_audit_log(
         action="quote_delete",
@@ -4457,6 +4522,99 @@ def _build_contract_pdf(contract: Contract) -> BytesIO:
     return buffer
 
 
+def _stamp_setting_key(kind, document_id):
+    return f"pdf_stamp_{kind}_{document_id}"
+
+
+def _saved_stamp(kind, document_id):
+    raw = SiteSetting.get_value(_stamp_setting_key(kind, document_id))
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+        if isinstance(value, dict):
+            return value
+    except (ValueError, TypeError):
+        pass
+    raise StampLayoutError("印章設定無效，請在預覽中恢復自動排版。")
+
+
+def _stamp_document(kind, document_id):
+    model = {"quotes": Quote, "invoices": Invoice}.get(kind)
+    if model is None:
+        abort(404)
+    document = model.query.options(selectinload(model.items)).get_or_404(document_id)
+    customer = db.session.get(Customer, document.customer_id)
+    contact = db.session.get(Contact, document.contact_id) if document.contact_id else None
+    builder = _build_quote_template_pdf if kind == "quotes" else _build_invoice_template_pdf
+    return document, customer, contact, builder
+
+
+@crm_bp.get("/<kind>/<int:document_id>/stamp-preview")
+@role_required(*READ_ROLES)
+@rate_limit("stamp-preview", limit=30, window_seconds=60)
+def stamp_preview(kind, document_id):
+    document, customer, contact, builder = _stamp_document(kind, document_id)
+    try:
+        page = int(request.args.get("page", "1"))
+        layout = {}
+        pdf = builder(document, customer, contact, stamp_layout=layout, hide_stamp=True)
+        image = render_page(pdf.getvalue(), page)
+        saved = _saved_stamp(kind, document_id)
+        warning = None
+        if saved is not None:
+            try:
+                validate_position(saved, layout)
+            except StampLayoutError as exc:
+                warning = str(exc)
+        stamp_image = None
+        stamp_path = _resolve_pdf_stamp_path()
+        if stamp_path:
+            from PIL import Image as PILImage
+            with PILImage.open(stamp_path) as source:
+                rotated = source.convert("RGBA").rotate(_resolve_pdf_stamp_rotation_deg(), expand=True)
+                output = BytesIO()
+                rotated.save(output, format="PNG")
+                stamp_image = base64.b64encode(output.getvalue()).decode("ascii")
+        response = jsonify(
+            page=page, pages=layout["pages"], width=A4[0], height=A4[1],
+            image=image, stamp_image=stamp_image, stamp=layout["stamp"],
+            automatic=layout["automatic"], saved=saved, warning=warning,
+            fingerprint=fingerprint(layout), rows=[r for r in layout["rows"] if r["page"] == page],
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    except (ValueError, RuntimeError) as exc:
+        return jsonify(msg=str(exc)), 400
+
+
+@crm_bp.put("/<kind>/<int:document_id>/stamp-position")
+@role_required(*WRITE_ROLES)
+@rate_limit("stamp-save", limit=30, window_seconds=60)
+def save_stamp_position(kind, document_id):
+    document, customer, contact, builder = _stamp_document(kind, document_id)
+    if kind == "quotes" and _active_invoice_for_quote(document.id) is not None:
+        return jsonify(msg="此報價單已轉成請款單，請先取消請款單再調整。"), 409
+    if kind == "invoices" and document.customer_signed_at:
+        return jsonify(msg="已簽名的請款單不能變更印章位置。"), 409
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or data.get("mode") not in ("auto", "manual"):
+        return jsonify(msg="請選擇自動或手動模式。"), 400
+    key = _stamp_setting_key(kind, document_id)
+    if data["mode"] == "auto":
+        SiteSetting.delete_value(key)
+    else:
+        try:
+            layout = {}
+            builder(document, customer, contact, stamp_layout=layout, hide_stamp=True)
+            validate_position(data, layout)
+        except StampLayoutError as exc:
+            return jsonify(msg=str(exc)), 409
+        value = {k: data[k] for k in ("page", "x", "y", "fingerprint")}
+        SiteSetting.set_value(key, json.dumps(value))
+    return jsonify(msg="印章位置已儲存。")
+
+
 @crm_bp.get("/quotes/<int:quote_id>/pdf")
 @role_required(*READ_ROLES)
 def quote_pdf(quote_id: int):
@@ -4464,15 +4622,16 @@ def quote_pdf(quote_id: int):
     customer = Customer.query.get(quote.customer_id)
     contact = Contact.query.get(quote.contact_id) if quote.contact_id else None
     cache_key = _build_download_cache_key(
-        "quote-pdf-v7",
+        "quote-pdf-v9",
         quote.id,
         quote.updated_at,
         customer.updated_at if customer else None,
         contact.updated_at if contact else None,
         _line_items_cache_token(quote.items),
+        SiteSetting.get_value(_stamp_setting_key("quotes", quote_id)),
     )
     cached = _get_cached_download(cache_key)
-    if cached is not None:
+    if cached is not None and not SiteSetting.get_value(_stamp_setting_key("quotes", quote_id)):
         content, cached_filename, cached_mimetype = cached
         response = send_file(
             BytesIO(content),
@@ -4486,7 +4645,9 @@ def quote_pdf(quote_id: int):
         return response
 
     try:
-        buffer = _build_quote_template_pdf(quote, customer, contact)
+        buffer = _build_quote_template_pdf(quote, customer, contact, manual_stamp=_saved_stamp("quotes", quote_id))
+    except StampLayoutError as exc:
+        return jsonify(msg=str(exc)), 409
     except RuntimeError as exc:
         return jsonify(
             {
@@ -4553,7 +4714,8 @@ def invoice_pdf(invoice_id: int):
     customer = Customer.query.get(invoice.customer_id)
     contact = Contact.query.get(invoice.contact_id) if invoice.contact_id else None
     cache_key = _build_download_cache_key(
-        "invoice-pdf-v3",
+        "invoice-pdf-v5",
+        SiteSetting.get_value(_stamp_setting_key("invoices", invoice_id)),
         invoice.id,
         invoice.updated_at,
         customer.updated_at if customer else None,
@@ -4561,7 +4723,7 @@ def invoice_pdf(invoice_id: int):
         _line_items_cache_token(invoice.items),
     )
     cached = _get_cached_download(cache_key)
-    if cached is not None:
+    if cached is not None and not SiteSetting.get_value(_stamp_setting_key("invoices", invoice_id)):
         content, cached_filename, cached_mimetype = cached
         return send_file(
             BytesIO(content),
@@ -4571,7 +4733,9 @@ def invoice_pdf(invoice_id: int):
         )
 
     try:
-        buffer = _build_invoice_template_pdf(invoice, customer, contact)
+        buffer = _build_invoice_template_pdf(invoice, customer, contact, manual_stamp=_saved_stamp("invoices", invoice_id))
+    except StampLayoutError as exc:
+        return jsonify(msg=str(exc)), 409
     except RuntimeError as exc:
         return jsonify(
             {
