@@ -1807,7 +1807,9 @@ def _build_quote_template_pdf(
     stamp_layout: dict | None = None,
     manual_stamp: dict | None = None,
     hide_stamp: bool = False,
+    compact: bool = False,
 ):
+    compact = compact or bool(manual_stamp and manual_stamp.get("compact", False))
     _require_embedded_pdf_font()
     recipient = _resolve_quote_recipient_display(quote, customer, contact)
     site_address = (quote.site_address or "").strip()
@@ -1940,6 +1942,8 @@ def _build_quote_template_pdf(
         item_rows_per_page,
         trailing_stamp_safe_rows=trailing_stamp_safe_rows,
     )
+    if compact:
+        item_row_count = max(item_rows_per_page, math.ceil(len(display_items) / item_rows_per_page) * item_rows_per_page)
     for idx in range(item_row_count):
         item = display_items[idx] if idx < len(display_items) else None
         if item is None:
@@ -1991,6 +1995,7 @@ def _build_quote_template_pdf(
         item_rows_per_page,
         trailing_stamp_safe_rows=trailing_stamp_safe_rows,
         item_heights=item_heights,
+        reserved_blank_rows=QUOTE_PDF_STAMP_RESERVED_ROWS,
     )
     # Fit a single-page table by consuming only spare row padding, never stamp space or text.
     if item_row_count == item_rows_per_page and not quote.note and signature_image_path is None:
@@ -2006,6 +2011,12 @@ def _build_quote_template_pdf(
                       for i, height in enumerate(minimum_heights)
                       if not first_reserved <= i <= last_reserved}
         total_capacity = sum(capacities.values())
+        if compact and excess > total_capacity:
+            table_row_heights = _quote_pdf_row_heights(
+                len(display_items), item_row_count, item_rows_per_page,
+                reserved_blank_rows=0, item_heights=item_heights,
+            )
+            excess = max(0.0, header_height + sum(table_row_heights) + footer_height + 13 - doc.height)
         if excess > 0 and total_capacity >= excess:
             for row_index, capacity in capacities.items():
                 table_row_heights[row_index] -= excess * capacity / total_capacity
@@ -2056,7 +2067,7 @@ def _build_quote_template_pdf(
     )
     first_stamp_row = first_stamp_slot + 1
     last_stamp_row = last_stamp_slot + 1
-    if first_stamp_row <= last_stamp_row:
+    if first_stamp_row <= last_stamp_row and not compact:
         table.setStyle(
             TableStyle(
                 [("NOSPLIT", (0, first_stamp_row), (-1, last_stamp_row))]
@@ -4557,10 +4568,16 @@ def stamp_preview(kind, document_id):
     document, customer, contact, builder = _stamp_document(kind, document_id)
     try:
         page = int(request.args.get("page", "1"))
-        layout = {}
-        pdf = builder(document, customer, contact, stamp_layout=layout, hide_stamp=True)
-        image = render_page(pdf.getvalue(), page)
         saved = _saved_stamp(kind, document_id)
+        compact_arg = request.args.get("compact")
+        if compact_arg not in (None, "0", "1"):
+            raise StampLayoutError("排版選項無效。")
+        compact = compact_arg == "1" if compact_arg is not None else bool(saved and saved.get("compact", False))
+        layout = {}
+        pdf = builder(document, customer, contact, stamp_layout=layout, hide_stamp=True, compact=compact)
+        if compact and page > layout["pages"]:
+            page = layout["pages"]
+        image = render_page(pdf.getvalue(), page)
         warning = None
         if saved is not None:
             try:
@@ -4577,7 +4594,7 @@ def stamp_preview(kind, document_id):
                 rotated.save(output, format="PNG")
                 stamp_image = base64.b64encode(output.getvalue()).decode("ascii")
         response = jsonify(
-            page=page, pages=layout["pages"], width=A4[0], height=A4[1],
+            page=page, pages=layout["pages"], compact=compact, width=A4[0], height=A4[1],
             image=image, stamp_image=stamp_image, stamp=layout["stamp"],
             automatic=layout["automatic"], saved=saved, warning=warning,
             fingerprint=fingerprint(layout), rows=[r for r in layout["rows"] if r["page"] == page],
@@ -4600,17 +4617,20 @@ def save_stamp_position(kind, document_id):
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or data.get("mode") not in ("auto", "manual"):
         return jsonify(msg="請選擇自動或手動模式。"), 400
+    if type(data.get("compact", False)) is not bool or (data.get("compact") and data["mode"] != "manual"):
+        return jsonify(msg="移除空白頁時請使用手動印章位置。"), 400
     key = _stamp_setting_key(kind, document_id)
     if data["mode"] == "auto":
         SiteSetting.delete_value(key)
     else:
         try:
             layout = {}
-            builder(document, customer, contact, stamp_layout=layout, hide_stamp=True)
+            builder(document, customer, contact, stamp_layout=layout, hide_stamp=True, compact=data.get("compact", False))
             validate_position(data, layout)
         except StampLayoutError as exc:
             return jsonify(msg=str(exc)), 409
         value = {k: data[k] for k in ("page", "x", "y", "fingerprint")}
+        value["compact"] = data.get("compact", False)
         SiteSetting.set_value(key, json.dumps(value))
     return jsonify(msg="印章位置已儲存。")
 

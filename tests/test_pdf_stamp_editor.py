@@ -186,3 +186,41 @@ class StampEditorTest(unittest.TestCase):
         response = self.put(position)
         self.assertEqual(response.status_code, 200, response.get_json())
         self.assertEqual(self.client.get(self.base + "/pdf", headers=self.headers(self.owner)).status_code, 200)
+
+    def test_compact_reflows_totals_and_preserves_items(self):
+        from extensions import db
+        from models import QuoteItem
+        import pypdfium2 as pdfium
+        with self.app.app_context():
+            items = QuoteItem.query.filter_by(quote_id=self.quote_id).order_by(QuoteItem.sort_order).all()
+            for item in items[:5]:
+                item.unit_price = item.amount = 0
+            db.session.add_all([QuoteItem(quote_id=self.quote_id, description='Retained final item',
+                                         quantity=1, unit_price=100, amount=100, sort_order=i) for i in (16, 17)])
+            db.session.commit()
+        original = self.preview()
+        self.assertGreater(original['pages'], 1)
+        response = self.client.get(self.base + '/stamp-preview', query_string={'compact': '1', 'page': 2},
+                                   headers=self.headers(self.owner))
+        compact = response.get_json()
+        self.assertEqual(response.status_code, 200, compact)
+        self.assertEqual(compact['pages'], 1)
+        self.assertEqual(compact['page'], 1)
+        rows = compact['rows'][:5]
+        position = {'mode': 'manual', 'compact': True, 'page': 1, 'fingerprint': compact['fingerprint'],
+                    'x': (rows[0]['cells'][5]['box'][0] + rows[0]['cells'][7]['box'][2]) / 2,
+                    'y': (rows[0]['cells'][0]['box'][3] + rows[-1]['cells'][0]['box'][1]) / 2}
+        self.assertEqual(self.put({**position, 'fingerprint': original['fingerprint']}).status_code, 409)
+        response = self.put(position)
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertTrue(self.preview()['saved']['compact'])
+        self.assertEqual(self.preview()['pages'], 1)
+        response = self.client.get(self.base + '/pdf', headers=self.headers(self.owner))
+        self.assertEqual(response.status_code, 200)
+        with pdfium.PdfDocument(response.data) as pdf:
+            self.assertEqual(len(pdf), 1)
+        with self.app.app_context():
+            self.assertEqual(QuoteItem.query.filter_by(quote_id=self.quote_id).count(), 18)
+        self.assertEqual(self.put({'mode': 'auto', 'compact': True}).status_code, 400)
+        self.assertEqual(self.put({'mode': 'auto'}).status_code, 200)
+        self.assertGreater(self.preview()['pages'], 1)

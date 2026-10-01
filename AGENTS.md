@@ -379,6 +379,8 @@
 
 ### PDF 印章預覽（2026-09-30）
 
+- 2026-10-01：預覽新增移到第一頁與「移除蓋章預留空白頁」。手動設定儲存 `compact` 布林值；預覽 query `compact=0|1` 可試排。僅重新計算補空白格，不裁掉實際 PDF 頁面，所有品項、總計、備註與簽名均保留；不足一頁時仍正常分頁。恢復自動會清除精簡設定。
+
 - 報價／請款列表的「印章預覽」支援自動、手動拖曳、頁碼、恢復自動與儲存並下載；只預覽已儲存的單據內容。
 - `GET /api/crm/<quotes|invoices>/<id>/stamp-preview?page=1` 回傳無章的 PDF 頁面圖片、原尺寸印章及實際表格座標；`PUT .../stamp-position` 儲存 `mode=auto` 或 `mode=manual` 加 `page/x/y/fingerprint`。座標單位是 PDF points，原點在左下。
 - 正式站單公司版本使用既有 `site_setting` 的 `pdf_stamp_quotes_<id>`／`pdf_stamp_invoices_<id>`，不新增資料表或欄位；不要混入多公司版本的資料庫遷移。複製／轉請款預設重新自動排版。

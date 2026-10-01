@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Download, RotateCcw, Save, X } from 'lucide-react';
+import { ArrowUpToLine, Download, RotateCcw, Save, X } from 'lucide-react';
 import api from '../api/client.js';
 import './StampPreview.css';
 
@@ -14,6 +14,7 @@ export default function StampPreview({ document, onClose }) {
   const [data, setData] = useState(null);
   const [position, setPosition] = useState(null);
   const [mode, setMode] = useState('auto');
+  const [compact, setCompact] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -30,11 +31,18 @@ export default function StampPreview({ document, onClose }) {
     const controller = new AbortController();
     setLoading(true);
     setError('');
-    api.get(`${base}/stamp-preview`, { params: { page }, signal: controller.signal, timeout: 60000 })
+    api.get(`${base}/stamp-preview`, { params: { page, ...(compact === null ? {} : { compact: compact ? '1' : '0' }) }, signal: controller.signal, timeout: 60000 })
       .then(({ data: next }) => {
         setData(next);
+        if (next.page !== page) {
+          setPage(next.page);
+          setPosition((old) => old && (old.page > next.pages && !next.automatic.disabled
+            ? { page: next.automatic.target_page, x: next.automatic.center_x, y: next.automatic.center_y }
+            : { ...old, page: Math.min(old.page, next.pages) }));
+        }
         if (!initialized.current) {
           initialized.current = true;
+          setCompact(next.compact);
           setMode(next.saved ? 'manual' : 'auto');
           const saved = next.saved && { ...next.saved, page: Math.min(next.pages, Math.max(1, next.saved.page)) };
           setPosition(saved || { page: next.automatic.target_page || 1,
@@ -47,7 +55,7 @@ export default function StampPreview({ document, onClose }) {
       .catch((e) => { if (!controller.signal.aborted) setError(e.response?.data?.msg || '預覽載入失敗，請稍後重試。'); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [base, page]);
+  }, [base, page, compact]);
 
   const automatic = data?.automatic;
   const active = mode === 'manual' ? position : automatic && !automatic.disabled
@@ -80,7 +88,7 @@ export default function StampPreview({ document, onClose }) {
     setSaving(true); setError(''); setMessage('');
     try {
       await api.put(`${base}/stamp-position`, mode === 'auto' ? { mode } :
-        { ...position, mode, fingerprint: data.fingerprint });
+        { ...position, mode, compact: Boolean(compact), fingerprint: data.fingerprint });
       setMessage('已儲存');
       if (download) {
         const response = await api.get(`${base}/pdf`, { responseType: 'blob', timeout: 60000 });
@@ -104,7 +112,7 @@ export default function StampPreview({ document, onClose }) {
     </header>
     <div className="stamp-toolbar">
       <fieldset disabled={loading || saving || !stamp}>
-        <label><input type="radio" name="stamp-mode" checked={mode === 'auto'} onChange={() => setMode('auto')} />自動</label>
+        <label><input type="radio" name="stamp-mode" checked={mode === 'auto'} onChange={() => { setMode('auto'); setCompact(false); setMessage(''); }} />自動</label>
         <label><input type="radio" name="stamp-mode" checked={mode === 'manual'} onChange={() => {
           setMode('manual'); setPosition({ page, x: active?.x || data.width * 0.75, y: active?.y || data.height * 0.2 });
         }} />手動</label>
@@ -113,7 +121,14 @@ export default function StampPreview({ document, onClose }) {
         const next = Number(e.target.value); setPage(next);
         if (mode === 'manual') setPosition((old) => ({ ...old, page: next }));
       }}>{Array.from({ length: data?.pages || 1 }, (_, i) => <option key={i} value={i + 1}>{i + 1}</option>)}</select></label>
-      <button type="button" title="恢復自動" aria-label="恢復自動" disabled={loading || saving} onClick={() => { setMode('auto'); setMessage(''); }}><RotateCcw size={18} /></button>
+      <span>共 {data?.pages || 1} 頁</span>
+      <button type="button" title="印章移到第一頁" aria-label="印章移到第一頁" disabled={loading || saving || !stamp} onClick={() => {
+        setMode('manual'); setPage(1); setPosition({ page: 1, x: active?.x || data.width * 0.75, y: active?.y || data.height * 0.2 }); setMessage('');
+      }}><ArrowUpToLine size={18} /></button>
+      <label><input type="checkbox" checked={Boolean(compact)} disabled={loading || saving || !stamp} onChange={(e) => {
+        setCompact(e.target.checked); setMode('manual'); setPosition({ ...active, page }); setMessage('');
+      }} />移除蓋章預留空白頁</label>
+      <button type="button" title="恢復自動" aria-label="恢復自動" disabled={loading || saving} onClick={() => { setMode('auto'); setCompact(false); setMessage(''); }}><RotateCcw size={18} /></button>
       <span className="stamp-status" role="status">{loading ? '載入中…' : saving ? '儲存中…' : message}</span>
       <button type="button" disabled={disabled} onClick={() => save(false)}><Save size={18} />儲存</button>
       <button type="button" disabled={disabled} onClick={() => save(true)}><Download size={18} />儲存並下載</button>
