@@ -175,6 +175,10 @@ class StampEditorTest(unittest.TestCase):
             db.session.commit()
         first = self.preview()
         self.assertGreater(first["pages"], 1)
+        self.assertEqual(first["page"], first["automatic"]["target_page"])
+        explicit = self.client.get(self.base + "/stamp-preview", query_string={"page": 1},
+                                   headers=self.headers(self.owner)).get_json()
+        self.assertEqual(explicit["page"], 1)
         response = self.client.get(self.base + "/stamp-preview", query_string={"page": first["pages"]},
                                    headers=self.headers(self.owner))
         self.assertEqual(response.status_code, 200)
@@ -185,6 +189,7 @@ class StampEditorTest(unittest.TestCase):
                     "fingerprint": last["fingerprint"]}
         response = self.put(position)
         self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(self.preview()["page"], position["page"])
         self.assertEqual(self.client.get(self.base + "/pdf", headers=self.headers(self.owner)).status_code, 200)
 
     def test_compact_reflows_totals_and_preserves_items(self):

@@ -10,16 +10,20 @@ export default function StampPreview({ document, onClose }) {
   const surface = useRef(null);
   const dragOffset = useRef({ x: 0, y: 0 });
   const initialized = useRef(false);
-  const [page, setPage] = useState(1);
+  const [requestedPage, setPage] = useState(null);
   const [data, setData] = useState(null);
   const [position, setPosition] = useState(null);
   const [mode, setMode] = useState('auto');
-  const [compact, setCompact] = useState(null);
+  const [requestedCompact, setCompact] = useState(null);
+  const [retry, setRetry] = useState(0);
+  const [slow, setSlow] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const base = `crm/${document.kind}/${document.id}`;
+  const page = data?.page || requestedPage || 1;
+  const compact = requestedCompact ?? data?.compact ?? false;
 
   useEffect(() => {
     const element = dialog.current;
@@ -30,32 +34,35 @@ export default function StampPreview({ document, onClose }) {
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
+    setSlow(false);
     setError('');
-    api.get(`${base}/stamp-preview`, { params: { page, ...(compact === null ? {} : { compact: compact ? '1' : '0' }) }, signal: controller.signal, timeout: 60000 })
+    const slowTimer = window.setTimeout(() => setSlow(true), 8000);
+    api.get(`${base}/stamp-preview`, { params: {
+      ...(requestedPage === null ? {} : { page: requestedPage }),
+      ...(requestedCompact === null ? {} : { compact: requestedCompact ? '1' : '0' }),
+    }, signal: controller.signal, timeout: 30000, readRetries: 0 })
       .then(({ data: next }) => {
+        if (controller.signal.aborted) return;
         setData(next);
-        if (next.page !== page) {
-          setPage(next.page);
+        if (initialized.current) {
           setPosition((old) => old && (old.page > next.pages && !next.automatic.disabled
             ? { page: next.automatic.target_page, x: next.automatic.center_x, y: next.automatic.center_y }
             : { ...old, page: Math.min(old.page, next.pages) }));
         }
         if (!initialized.current) {
           initialized.current = true;
-          setCompact(next.compact);
           setMode(next.saved ? 'manual' : 'auto');
           const saved = next.saved && { ...next.saved, page: Math.min(next.pages, Math.max(1, next.saved.page)) };
           setPosition(saved || { page: next.automatic.target_page || 1,
             x: next.automatic.center_x || next.width * 0.75,
             y: next.automatic.center_y || next.height * 0.2 });
-          const target = Math.min(next.pages, Math.max(1, next.saved?.page || next.automatic.target_page || 1));
-          if (target !== page) setPage(target);
         }
       })
-      .catch((e) => { if (!controller.signal.aborted) setError(e.response?.data?.msg || '預覽載入失敗，請稍後重試。'); })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
-    return () => controller.abort();
-  }, [base, page, compact]);
+      .catch((e) => { if (!controller.signal.aborted) setError(
+        e.response?.status === 401 ? '登入已過期，請重新登入。' : e.networkMessage || e.response?.data?.msg || '預覽載入失敗，請重試。'); })
+      .finally(() => { window.clearTimeout(slowTimer); if (!controller.signal.aborted) setLoading(false); });
+    return () => { controller.abort(); window.clearTimeout(slowTimer); };
+  }, [base, requestedPage, requestedCompact, retry]);
 
   const automatic = data?.automatic;
   const active = mode === 'manual' ? position : automatic && !automatic.disabled
@@ -91,11 +98,12 @@ export default function StampPreview({ document, onClose }) {
         { ...position, mode, compact: Boolean(compact), fingerprint: data.fingerprint });
       setMessage('已儲存');
       if (download) {
-        const response = await api.get(`${base}/pdf`, { responseType: 'blob', timeout: 60000 });
+        const response = await api.get(`${base}/pdf`, { responseType: 'blob', timeout: 60000, readRetries: 0 });
         const url = URL.createObjectURL(response.data);
         const link = window.document.createElement('a');
-        link.href = url; link.download = `${document.label}.pdf`; link.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        link.href = url; link.download = `${document.label}.pdf`;
+        dialog.current.appendChild(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
       }
     } catch (e) {
       let detail = e.response?.data;
@@ -104,7 +112,7 @@ export default function StampPreview({ document, onClose }) {
     } finally { setSaving(false); }
   }
 
-  const disabled = loading || saving || !data || (mode === 'manual' && (!stamp || collision || active?.page !== page));
+  const disabled = loading || saving || !data || Boolean(error) || (mode === 'manual' && (!stamp || collision || active?.page !== page));
   return <dialog ref={dialog} className="stamp-dialog" onCancel={(e) => { if (saving) e.preventDefault(); else onClose(); }}>
     <header className="stamp-toolbar">
       <h2>印章位置 <small>{document.label}</small></h2>
@@ -121,7 +129,7 @@ export default function StampPreview({ document, onClose }) {
         const next = Number(e.target.value); setPage(next);
         if (mode === 'manual') setPosition((old) => ({ ...old, page: next }));
       }}>{Array.from({ length: data?.pages || 1 }, (_, i) => <option key={i} value={i + 1}>{i + 1}</option>)}</select></label>
-      <span>共 {data?.pages || 1} 頁</span>
+      <span>共 {data?.pages ?? '-'} 頁</span>
       <button type="button" title="印章移到第一頁" aria-label="印章移到第一頁" disabled={loading || saving || !stamp} onClick={() => {
         setMode('manual'); setPage(1); setPosition({ page: 1, x: active?.x || data.width * 0.75, y: active?.y || data.height * 0.2 }); setMessage('');
       }}><ArrowUpToLine size={18} /></button>
@@ -129,7 +137,8 @@ export default function StampPreview({ document, onClose }) {
         setCompact(e.target.checked); setMode('manual'); setPosition({ ...active, page }); setMessage('');
       }} />移除蓋章預留空白頁</label>
       <button type="button" title="恢復自動" aria-label="恢復自動" disabled={loading || saving} onClick={() => { setMode('auto'); setCompact(false); setMessage(''); }}><RotateCcw size={18} /></button>
-      <span className="stamp-status" role="status">{loading ? '載入中…' : saving ? '儲存中…' : message}</span>
+      <span className="stamp-status" role="status">{loading ? (slow ? '產生預覽較久，最長等待 30 秒…' : '載入中…') : saving ? '儲存中…' : message}</span>
+      {!loading && error && <button type="button" title="重新載入預覽" aria-label="重新載入預覽" disabled={saving} onClick={() => setRetry((value) => value + 1)}><RotateCcw size={18} /></button>}
       <button type="button" disabled={disabled} onClick={() => save(false)}><Save size={18} />儲存</button>
       <button type="button" disabled={disabled} onClick={() => save(true)}><Download size={18} />儲存並下載</button>
     </div>

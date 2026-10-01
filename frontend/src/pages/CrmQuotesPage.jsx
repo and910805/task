@@ -211,7 +211,7 @@ const CrmQuotesPage = () => {
   }, []);
 
   const loadPageData = useCallback(async () => {
-    const { data } = await api.get('crm/boot', { params: { limit: listLimit } });
+    const { data } = await api.get('crm/boot', { params: { limit: listLimit }, readRetries: 0 });
     setCustomers(Array.isArray(data?.customers) ? data.customers : []);
     setContacts(Array.isArray(data?.contacts) ? data.contacts : []);
     setCatalogItems(Array.isArray(data?.catalog_items) ? data.catalog_items : []);
@@ -731,7 +731,7 @@ const CrmQuotesPage = () => {
     setDownloadingContractPdfId(contractId);
     setError('');
     try {
-      const response = await api.get(`crm/contracts/${contractId}/pdf`, { responseType: 'blob', timeout: 60000 });
+      const response = await api.get(`crm/contracts/${contractId}/pdf`, { responseType: 'blob', timeout: 60000, readRetries: 0 });
       const filenameFromHeader = getFilenameFromDisposition(response.headers?.['content-disposition']);
       const blobUrl = URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
       const link = document.createElement('a');
@@ -762,7 +762,7 @@ const CrmQuotesPage = () => {
     if (!quoteId) return;
     setDownloadingQuotePdfId(quoteId);
     try {
-      const response = await api.get(`crm/quotes/${quoteId}/pdf`, { responseType: 'blob', timeout: 60000 });
+      const response = await api.get(`crm/quotes/${quoteId}/pdf`, { responseType: 'blob', timeout: 60000, readRetries: 0 });
       const data = response.data;
       const filenameFromHeader = getFilenameFromDisposition(response.headers?.['content-disposition']);
       const blobUrl = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }));
@@ -800,7 +800,7 @@ const CrmQuotesPage = () => {
     if (!invoiceId) return;
     setDownloadingInvoicePdfId(invoiceId);
     try {
-      const response = await api.get(`crm/invoices/${invoiceId}/pdf`, { responseType: 'blob', timeout: 60000 });
+      const response = await api.get(`crm/invoices/${invoiceId}/pdf`, { responseType: 'blob', timeout: 60000, readRetries: 0 });
       const data = response.data;
       const filenameFromHeader = getFilenameFromDisposition(response.headers?.['content-disposition']);
       const blobUrl = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }));

@@ -4567,7 +4567,8 @@ def _stamp_document(kind, document_id):
 def stamp_preview(kind, document_id):
     document, customer, contact, builder = _stamp_document(kind, document_id)
     try:
-        page = int(request.args.get("page", "1"))
+        page_arg = request.args.get("page")
+        page = int(page_arg) if page_arg is not None else None
         saved = _saved_stamp(kind, document_id)
         compact_arg = request.args.get("compact")
         if compact_arg not in (None, "0", "1"):
@@ -4575,6 +4576,8 @@ def stamp_preview(kind, document_id):
         compact = compact_arg == "1" if compact_arg is not None else bool(saved and saved.get("compact", False))
         layout = {}
         pdf = builder(document, customer, contact, stamp_layout=layout, hide_stamp=True, compact=compact)
+        if page is None:
+            page = min(layout["pages"], max(1, (saved or {}).get("page") or layout["automatic"].get("target_page") or 1))
         if compact and page > layout["pages"]:
             page = layout["pages"]
         image = render_page(pdf.getvalue(), page)

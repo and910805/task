@@ -88,6 +88,8 @@ api.interceptors.response.use(
     const shouldRetry =
       config &&
       !axios.isCancel(error) &&
+      !config.signal?.aborted &&
+      config.readRetries !== 0 &&
       !isOffline &&
       RETRYABLE_METHODS.has(method) &&
       retryCount < MAX_READ_RETRIES &&
